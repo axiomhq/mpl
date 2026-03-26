@@ -1,0 +1,157 @@
+COMMENT    = _{ "//" ~ (!"\n" ~ ANY)* }
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+
+plain_ident         = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHA | ASCII_DIGIT | "_")* }
+escaped_ident       = ${ "`" ~ escaped_ident_inner ~ "`" }
+escaped_ident_inner = @{ escaped_ident_char* }
+escaped_ident_char  =  {
+    !("`" | "\\") ~ ANY
+  | "\\" ~ ("`" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+  | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+}
+
+pipe_keyword = { "|" }
+
+ident = _{ plain_ident | escaped_ident }
+
+as = { "as" ~ metric_name }
+
+string       = ${ "\"" ~ string_inner ~ "\"" }
+string_inner = @{ string_char* }
+string_char  =  {
+    !("\"" | "\\") ~ ANY
+  | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+  | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+}
+number       =  { float | int }
+float        = @{ int ~ ("." ~ ASCII_DIGIT*) ~ (^"e" ~ int)? }
+int          =  { ("+" | "-")? ~ ASCII_DIGIT+ }
+bool         = @{ "true" | "false" }
+
+regex_replace_src =  { regex_inner }
+regex_replace_dst =  { regex_inner }
+regex_replace     = ${ "#s/" ~ regex_replace_src ~ "/" ~ regex_replace_dst ~ "/" }
+
+regex       = ${ "#/" ~ regex_inner ~ "/" }
+regex_inner = @{ regex_char* }
+regex_char  =  {
+    !("/" | "\\") ~ ANY
+  | "\\" ~ ANY
+}
+
+time_unit_ms     = @{ "ms" }
+time_unit_second = @{ "s" }
+time_unit_minute = @{ "m" }
+time_unit_hour   = @{ "h" }
+time_unit_day    = @{ "d" }
+time_unit_week   = @{ "w" }
+time_unit_month  = @{ "M" }
+time_unit_year   = @{ "y" }
+time_unit        = _{ time_unit_ms | time_unit_second | time_unit_minute | time_unit_hour | time_unit_day | time_unit_week | time_unit_month | time_unit_year }
+
+time_unit_digits            = { ASCII_DIGIT+ }
+time_relative               = { time_unit_digits ~ time_unit }
+time_relative_parameterized = { time_unit_digits ~ time_unit | param_ident }
+
+time_timestamp = { ASCII_DIGIT+ }
+
+// 2025-03-01T13:00:00Z
+time_rfc_3339 = @{ ASCII_DIGIT{4} ~ "-" ~ ASCII_DIGIT{2} ~ "-" ~ ASCII_DIGIT{2} ~ "T" ~ ASCII_DIGIT{2} ~ ":" ~ ASCII_DIGIT{2} ~ ":" ~ ASCII_DIGIT{2} ~ "Z"? }
+
+time_modifier_direction = { "+" | "-" }
+time_modifier           = { time_modifier_direction ~ time_relative }
+
+time = _{ time_relative | time_rfc_3339 | time_timestamp | time_modifier }
+
+time_range = { "[" ~ time ~ ".." ~ time? ~ "]" }
+
+dataset     = { ident | param_ident }
+metric_name = { ident }
+
+metric_id = { dataset ~ ":" ~ metric_name }
+
+tag = _{ ident }
+
+tags = { tag ~ ("," ~ tag)* }
+
+source = { metric_id ~ time_range? ~ as? }
+
+cmp    = @{ "==" | "!=" | "<=" | "<" | ">=" | ">" }
+cmp_re = @{ "==" | "!=" }
+value  =  { string | number | bool | param_ident }
+
+kw_is = { "is" }
+
+is_filter    = { kw_is ~ tag_type }
+value_filter = { cmp ~ value }
+regex_filter = { cmp_re ~ regex }
+
+kw_not = { "not" }
+
+kw_filter      =  { "filter" }
+kw_sample      =  { "sample" }
+kw_where       =  { "where" }
+filter_keyword = _{ kw_filter | kw_where }
+filter_atom    =  { (tag ~ (value_filter | regex_filter | is_filter)) }
+filter_clause  =  { filter_atom | ("(" ~ filter_or ~ ")") }
+filter_not     =  { (kw_not ~ filter_clause) | filter_clause }
+filter_and     =  { filter_not ~ ("and" ~ filter_not)* }
+filter_or      =  { filter_and ~ ("or" ~ filter_and)* }
+filter_expr    = _{ filter_keyword ~ filter_or }
+filter_rule    =  { pipe_keyword ~ filter_expr }
+sample_expr    =  { kw_sample ~ number }
+sample_rule    =  { pipe_keyword ~ sample_expr }
+
+map_fn = { func ~ ("(" ~ number ~ ")")? }
+
+map_calc_op = { "+" | "-" | "*" | "/" }
+map_eval    = { map_calc_op ~ number }
+
+map = { "map" ~ (map_eval | map_fn) }
+
+module = { ident }
+
+func = { (module ~ "::")* ~ ident }
+
+param_native_type =  { "dataset" | "duration" | "regex" }
+tag_type          =  { "string" | "int" | "float" | "bool" }
+param_type        =  { param_native_type | tag_type }
+param_ident       = ${ "$" ~ ident }
+param             =  { "param" ~ param_ident ~ ":" ~ param_type ~ ";" }
+param_value       =  { time_relative | string | float | int | bool | regex | ident }
+// used for parsing provided params
+
+align = { "align" ~ "to" ~ time_relative_parameterized ~ ("over" ~ time_relative_parameterized)? ~ "using" ~ func }
+
+group_by = { "group" ~ ("by" ~ tags)? ~ "using" ~ func }
+
+replace_tag        = { tag ~ "~" ~ regex_replace }
+replace_rename     = { tag ~ "=" ~ tag }
+replace_rename_tag = { tag ~ "=" ~ tag ~ "~" ~ regex_replace }
+replace            = { "replace" ~ (replace_rename_tag | replace_tag | replace_rename) }
+
+bucket_conversion              = { "rate" | "increase" }
+bucket_by_fn                   = { "histogram" | "interpolate_delta_histogram" }
+bucket_by_with_conversion_fn   = { "interpolate_cumulative_histogram" }
+bucket_spec                    = { "count" | "avg" | "sum" | "min" | "max" | number }
+bucket_specs                   = { bucket_spec ~ ("," ~ bucket_spec)* }
+bucket_fn_call_with_conversion = { bucket_by_with_conversion_fn ~ "(" ~ bucket_conversion ~ "," ~ bucket_specs ~ ")" }
+bucket_fn_call_simple          = { bucket_by_fn ~ "(" ~ bucket_specs ~ ")" }
+bucket_fn_call                 = { bucket_fn_call_with_conversion | bucket_fn_call_simple }
+bucket_by                      = { "bucket" ~ ("by" ~ tags)? ~ "to" ~ time_relative_parameterized ~ "using" ~ bucket_fn_call }
+join                           = { "join" ~ tags ~ "from" ~ metric_id ~ "by" ~ tags }
+pipe_rule                      = { pipe_keyword ~ (align | map | group_by | replace | bucket_by | join | as) }
+
+simple_query = { source ~ (sample_rule)? ~ (filter_rule)* ~ pipe_rule* }
+
+compute_op   = { "/" | "*" | "+" | "-" }
+compute_fn   = { func | compute_op }
+compute_rule = { pipe_keyword ~ "compute" ~ metric_name ~ "using" ~ compute_fn }
+
+compute_query = { "(" ~ query ~ "," ~ query ~ ","? ~ ")" ~ compute_rule ~ pipe_rule* }
+
+query = _{ simple_query | compute_query }
+
+directive = { "set" ~ ident ~ ("=" ~ (value | ident))? ~ ";" }
+
+file = _{ SOI ~ directive* ~ param* ~ query ~ EOI }

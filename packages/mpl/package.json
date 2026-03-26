@@ -1,0 +1,28 @@
+{
+  "name": "@axiomhq/mpl-lang",
+  "type": "module",
+  "collaborators": [
+    "Seoyoung Lee <seoyoung@axiom.co>",
+    "Arne Bahlo <arne@axiom.co>",
+    "Heinz Gies <heinz@axiom.co>",
+    "Samu <samu@axiom.co>"
+  ],
+  "description": "Axioms Metrics Processing Language",
+  "version": "0.1.0",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/axiomhq/mpl"
+  },
+  "files": [
+    "mpl_lang_bg.wasm",
+    "mpl_lang.js",
+    "mpl_lang.d.ts"
+  ],
+  "main": "mpl_lang.js",
+  "homepage": "https://axiom.co",
+  "types": "mpl_lang.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

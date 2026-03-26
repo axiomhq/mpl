@@ -1,0 +1,23 @@
+set export
+
+# shows help
+_default:
+    @echo "Run Metrics stack locally"
+    @echo
+    @just --list --unsorted
+    @echo
+    @echo "Execute recipes with just <recipe>"
+
+
+wasm-test:
+    # --no-opt: wasm-pack's bundled wasm-opt (v117) crashes on this binary, and even
+    # system wasm-opt (v126) increases gzipped size despite shrinking raw size, because
+    # our wasm-release profile (LTO + opt-level=z) already produces compression-friendly output.
+    wasm-pack build --target web --profile wasm-release --no-opt --features wasm
+    npx tsc --noEmit -t esnext mpl.d.ts
+
+# launch the MPL Playground in a dev server, requires wasm-pack and node/npm installed
+playground:
+  cd playground && npm i
+  cd playground && npm run build:mpl
+  cd playground && npm run dev

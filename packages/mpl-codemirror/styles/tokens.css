@@ -1,0 +1,114 @@
+/* MPL syntax highlighting */
+.mpl-keyword { color: #7c3aed; font-weight: 500; }
+.mpl-variable { color: #0550ae; }
+.mpl-string { color: #0a3069; }
+.mpl-number { color: #0550ae; }
+.mpl-bool { color: #cf222e; }
+.mpl-regexp { color: #116329; }
+.mpl-operator { color: #cf222e; }
+.mpl-punctuation { color: #cf222e; }
+.mpl-type { color: #0550ae; font-style: italic; }
+.mpl-comment { color: #6e7781; font-style: italic; }
+
+.dark-theme .mpl-keyword { color: #c678dd; }
+.dark-theme .mpl-variable { color: #e06c75; }
+.dark-theme .mpl-string { color: #98c379; }
+.dark-theme .mpl-number { color: #d19a66; }
+.dark-theme .mpl-bool { color: #d19a66; }
+.dark-theme .mpl-regexp { color: #56b6c2; }
+.dark-theme .mpl-operator { color: #56b6c2; }
+.dark-theme .mpl-punctuation { color: #abb2bf; }
+.dark-theme .mpl-type { color: #56b6c2; font-style: italic; }
+.dark-theme .mpl-comment { color: #5c6370; font-style: italic; }
+
+/* Signature help tooltip */
+.mpl-signature-help {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  padding: 6px 10px;
+  max-width: 500px;
+}
+
+.mpl-signature-sig {
+  white-space: nowrap;
+}
+
+.mpl-signature-fn {
+  color: #7c3aed;
+  font-weight: 600;
+}
+
+.mpl-signature-param {
+  color: var(--text-color);
+}
+
+.mpl-signature-param.active {
+  font-weight: 700;
+  text-decoration: underline;
+  color: #0550ae;
+}
+
+.mpl-signature-doc {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--label-text);
+  white-space: pre-wrap;
+}
+
+.dark-theme .mpl-signature-fn {
+  color: #c678dd;
+}
+
+.dark-theme .mpl-signature-param.active {
+  color: #61afef;
+}
+
+/* Hover tooltip */
+.mpl-hover-tooltip {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  padding: 6px 10px;
+  max-width: 500px;
+}
+
+.mpl-hover-sig {
+  white-space: nowrap;
+}
+
+.mpl-hover-fn {
+  color: #7c3aed;
+  font-weight: 600;
+}
+
+.mpl-hover-param {
+  color: var(--text-color);
+}
+
+.mpl-hover-keyword {
+  color: #7c3aed;
+  font-weight: 600;
+}
+
+.mpl-hover-doc {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--label-text);
+  white-space: pre-wrap;
+}
+
+.mpl-hover-syntax {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-color);
+  background: var(--toggle-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.dark-theme .mpl-hover-fn {
+  color: #c678dd;
+}
+
+.dark-theme .mpl-hover-keyword {
+  color: #c678dd;
+}

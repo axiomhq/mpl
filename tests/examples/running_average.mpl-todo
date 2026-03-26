@@ -1,0 +1,9 @@
+// avg_over_time(metric_a[5m]) / avg_over_time(metric_b[1h])
+
+(
+    test:metric_a
+    | align to 1m over 5m using avg, // emit every 1m running values over 5m
+    test:metric_a
+    | align to 1m over 1h using avg // emit every 1m running values over 5m
+)
+| compute avg_over_time using /

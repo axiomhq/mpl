@@ -1,0 +1,23 @@
+{
+  "name": "mpl-playground-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/web",
+    "../packages/mpl",
+    "../packages/mpl-codemirror"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w web",
+    "build:mpl": "./build-mpl-wasm.sh",
+    "build:codemirror": "npm run build -w @axiomhq/mpl-codemirror",
+    "build:web": "npm run build -w web",
+    "build": "npm run build:mpl && npm run build:codemirror && npm run build:web",
+    "clean": "rm -rf node_modules packages/*/node_modules ../packages/mpl-codemirror/node_modules ../packages/mpl-codemirror/dist ../../lib/mpl/pkg ../packages/mpl"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0"
+  }
+}

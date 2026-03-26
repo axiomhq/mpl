@@ -1,0 +1,249 @@
+/* MPL language support styles (from mpl-codemirror package) */
+@import "@axiomhq/mpl-codemirror/styles/tokens.css";
+
+:root {
+  --bg-color: #ffffff;
+  --text-color: #333;
+  --border-color: #ddd;
+  --header-bg: #ffffff;
+  --toggle-bg: #f0f0f0;
+  --toggle-active-bg: #ffffff;
+  --toggle-text: #666;
+  --toggle-active-text: #333;
+  --editor-border: #ddd;
+  --editor-border-focus: #4a90e2;
+  --label-bg: rgba(255, 255, 255, 0.9);
+  --label-text: #666;
+  --scrollbar-track: #f0f0f0;
+  --scrollbar-thumb: #c0c0c0;
+  --scrollbar-thumb-hover: #a0a0a0;
+}
+
+.dark-theme {
+  --bg-color: #1e1e1e;
+  --text-color: #e0e0e0;
+  --border-color: #404040;
+  --header-bg: #1e1e1e;
+  --toggle-bg: #2d2d2d;
+  --toggle-active-bg: #404040;
+  --toggle-text: #a0a0a0;
+  --toggle-active-text: #e0e0e0;
+  --editor-border: #404040;
+  --editor-border-focus: #4a90e2;
+  --label-bg: rgba(30, 30, 30, 0.9);
+  --label-text: #a0a0a0;
+  --scrollbar-track: #2d2d2d;
+  --scrollbar-thumb: #505050;
+  --scrollbar-thumb-hover: #606060;
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: var(--bg-color);
+  color: var(--text-color);
+  transition: background-color 0.2s ease, color 0.2s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+body > div {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Scrollbar styles */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 6px;
+  border: 2px solid var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+#header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 20px 10px 20px;
+  flex-shrink: 0;
+}
+
+#header-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+h1 {
+  margin: 0;
+}
+
+.example-picker {
+  display: flex;
+  align-items: center;
+}
+
+.example-picker select {
+  padding: 6px 12px;
+  font-size: 14px;
+  background: var(--toggle-bg);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 200px;
+}
+
+.example-picker select:hover {
+  background: var(--toggle-active-bg);
+}
+
+.example-picker select:focus {
+  outline: none;
+  border-color: var(--editor-border-focus);
+  box-shadow: 0 0 0 1px var(--editor-border-focus);
+}
+
+#controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.toggle-container {
+  display: inline-flex;
+  align-items: center;
+  background: var(--toggle-bg);
+  border-radius: 4px;
+  padding: 2px;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.2s ease, opacity 0.2s ease;
+}
+
+.toggle-container.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toggle-container.disabled .toggle-option {
+  cursor: not-allowed;
+}
+
+.toggle-option {
+  padding: 6px 12px;
+  font-size: 14px;
+  border-radius: 3px;
+  transition: all 0.2s ease;
+  color: var(--toggle-text);
+  font-weight: 500;
+}
+
+.toggle-option.active {
+  background: var(--toggle-active-bg);
+  color: var(--toggle-active-text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+#container {
+  display: flex;
+  gap: 20px;
+  flex: 1;
+  min-height: 0;
+  padding: 10px 20px 20px 20px;
+}
+
+.editor-wrapper {
+  flex: 1;
+  border: 2px solid var(--editor-border);
+  border-radius: 4px;
+  overflow: hidden;
+  transition: border-color 0.2s ease;
+  position: relative;
+}
+
+.editor-wrapper:has(.cm-editor.cm-focused) {
+  border-color: var(--editor-border-focus);
+  box-shadow: 0 0 0 1px var(--editor-border-focus);
+}
+
+.editor-container {
+  height: 100%;
+}
+
+.cm-editor {
+  height: 100%;
+}
+
+.editor-label {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: var(--label-bg);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--label-text);
+  pointer-events: none;
+  z-index: 10;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* Terminal styles */
+#terminal-container {
+  border: 2px solid var(--editor-border);
+  border-radius: 4px;
+  margin: 0 20px 20px 20px;
+  overflow: hidden;
+  position: relative;
+  height: 200px;
+  flex-shrink: 0;
+}
+
+.terminal-label {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: var(--label-bg);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--label-text);
+  pointer-events: none;
+  z-index: 10;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+#terminal {
+  height: 100%;
+  padding: 8px;
+}
+

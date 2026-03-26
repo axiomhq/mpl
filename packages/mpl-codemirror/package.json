@@ -1,0 +1,43 @@
+{
+  "name": "@axiomhq/mpl-codemirror",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/axiomhq/metrics.git"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./styles/tokens.css": "./styles/tokens.css"
+  },
+  "files": [
+    "dist",
+    "styles"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@codemirror/autocomplete": "^6",
+    "@codemirror/lint": "^6",
+    "@codemirror/state": "^6",
+    "@codemirror/view": "^6",
+    "@axiomhq/mpl": "file:../mpl",
+    "typescript": "^5.5.0",
+    "vitest": "^4.0.18"
+  },
+  "peerDependencies": {
+    "@codemirror/autocomplete": "^6",
+    "@codemirror/lint": "^6",
+    "@codemirror/state": "^6",
+    "@codemirror/view": "^6",
+    "@axiomhq/mpl": "*"
+  }
+}

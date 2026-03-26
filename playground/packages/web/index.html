@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MPL Playground</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="./main.ts"></script>
+</head>
+<body>
+  <!-- Alpine store wraps the entire app -->
+  <div x-data>
+    <!-- Header with controls -->
+      <div id="header">
+        <h1>MPL Playground</h1>
+        <div id="header-bottom">
+          <div class="example-picker">
+            <select
+              id="example-select"
+              x-model.number="$store.playground.selectedExampleIndex"
+              x-on:change="$store.playground.onExampleChange()"
+            >
+              <template x-for="(example, index) in $store.playground.examples" :key="index">
+                <option x-text="example" :value="index"></option>
+              </template>
+            </select>
+          </div>
+          <div id="controls">
+        <div class="toggle-container">
+          <div
+            class="toggle-option"
+            x-bind:class="{ 'active': $store.playground.theme === 'light' }"
+            x-on:click="$store.playground.theme = 'light'; $store.playground.onThemeChange()"
+          >
+            light
+          </div>
+          <div
+            class="toggle-option"
+            x-bind:class="{ 'active': $store.playground.theme === 'dark' }"
+            x-on:click="$store.playground.theme = 'dark'; $store.playground.onThemeChange()"
+          >
+            dark
+          </div>
+        </div>
+        <div class="toggle-container">
+          <div
+            class="toggle-option"
+            x-bind:class="{ 'active': $store.playground.editorMode === 'normie' }"
+            x-on:click="$store.playground.editorMode = 'normie'; $store.playground.onEditorModeChange()"
+          >
+            normie
+          </div>
+          <div
+            class="toggle-option"
+            x-bind:class="{ 'active': $store.playground.editorMode === 'vim' }"
+            x-on:click="$store.playground.editorMode = 'vim'; $store.playground.onEditorModeChange()"
+          >
+            vim
+          </div>
+        </div>
+        <div class="toggle-container">
+          <div
+            class="toggle-option"
+            x-bind:class="{ 'active': $store.playground.syntaxMode === 'color' }"
+            x-on:click="$store.playground.syntaxMode = 'color'; $store.playground.onSyntaxModeChange()"
+          >
+            color
+          </div>
+          <div
+            class="toggle-option"
+            x-bind:class="{ 'active': $store.playground.syntaxMode === 'plain' }"
+            x-on:click="$store.playground.syntaxMode = 'plain'; $store.playground.onSyntaxModeChange()"
+          >
+            plain
+          </div>
+        </div>
+        <div class="toggle-container" x-bind:class="{ 'disabled': $store.playground.formatDisabled }">
+          <div
+            class="toggle-option"
+            x-bind:class="{ 'active': $store.playground.format === 'json' }"
+            x-on:click="if (!$store.playground.formatDisabled) { $store.playground.format = 'json'; $store.playground.onFormatChange(); }"
+          >
+            JSON
+          </div>
+          <div
+            class="toggle-option"
+            x-bind:class="{ 'active': $store.playground.format === 'ron' }"
+            x-on:click="if (!$store.playground.formatDisabled) { $store.playground.format = 'ron'; $store.playground.onFormatChange(); }"
+          >
+            RON
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Editors container -->
+    <div id="container">
+      <!-- Code editor (MPL) -->
+      <div class="editor-wrapper">
+        <div class="editor-label">MPL</div>
+        <div
+          class="editor-container"
+          x-init="$store.playground.initCodeEditor($el)"
+        ></div>
+      </div>
+
+      <!-- AST editor (RON/JSON) -->
+      <div class="editor-wrapper">
+        <div class="editor-label" x-text="$store.playground.format.toUpperCase()"></div>
+        <div
+          class="editor-container"
+          x-init="$store.playground.initAstEditor($el)"
+        ></div>
+      </div>
+    </div>
+
+    <!-- Terminal container -->
+    <div id="terminal-container">
+      <div class="terminal-label">Output</div>
+      <div
+        id="terminal"
+        x-init="$store.playground.initTerminal($el)"
+      ></div>
+    </div>
+  </div>
+</body>
+</html>

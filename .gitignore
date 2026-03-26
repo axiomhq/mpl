@@ -1,0 +1,11 @@
+/target
+proptest-regressions
+temp
+.DS_Store
+node_modules/
+test-results/
+packages/mpl/*.js
+packages/mpl/*.wasm
+packages/mpl/*.wasm.zst
+packages/mpl/*.d.ts
+packages/mpl-codemirror/dist/
