@@ -1,6 +1,6 @@
 [package]
 name = "mpl-lang"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Seoyoung Lee <seoyoung@axiom.co>", "Arne Bahlo <arne@axiom.co>", "Heinz Gies <heinz@axiom.co>", "Samuel Cristobal <samu@messy.page>"]
 description = "Axioms Metrics Processing Language"
