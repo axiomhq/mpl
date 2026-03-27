@@ -19,7 +19,7 @@ mod stdlib;
 pub mod tags;
 pub mod time;
 pub mod types;
-mod visitor;
+pub mod visitor;
 
 #[cfg(test)]
 mod tests;
