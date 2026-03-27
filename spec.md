@@ -171,8 +171,6 @@ Data transformations are done using the `map` operator. The syntax for the map f
 
 Aggregation is a transformation that aggregates the data over a given time to a single value. This is done using the `align` operator. The operator also aligns the data to the given window.
 
-![Diagram illustrating the align operator in MPL. The diagram shows a timeline with data points distributed over time. Vertical dashed lines mark intervals; each interval is labeled with an aggregation function such as avg or sum. Arrows indicate how data points within each interval are grouped and processed by the aggregation function. The environment is clean and technical, focusing on explaining how the align operator aggregates data over specified time windows. No emotional tone is present. No additional text is present in the image.](img/align.png)
-
 The syntax for the align is as follows:
 
 ```mpl
@@ -189,8 +187,6 @@ Groupings are transformations that group several series using one or more tags a
 new identifier. A grouping will reduce the tags in a metric to the tags used in the grouping.
 
 The `group` operator performs grouping. Using `by <tags>,...` allows grouping by one or more tags.
-
-![Diagram showing the group operator in MPL. Multiple time series lines are displayed, each with different tag values. Colored arrows indicate how series with matching tag values are grouped together into a single aggregated series. The environment is clean and technical, focusing on explaining how grouping by tags combines related series. No emotional tone is present. No additional text is present in the image.](img/group-by.png)
 
 The syntax for the group is as follows:
 
@@ -213,8 +209,6 @@ If the `by` part is left out, the grouping combines all series together.
 
 Bucketing is a special case of grouping that combines the time and tag dimensions. This is used for
 histograms.
-
-![Diagram illustrating the bucketing operator in MPL. Multiple time series lines are shown, each representing data with different tag values. Vertical lines divide the timeline into intervals, and within each interval, data points are grouped and aggregated into buckets based on both time and tag dimensions. The environment is clean and technical, focusing on explaining how bucketing organizes and summarizes data for histograms. No emotional tone is present. No additional text is present in the image.](img/bucket.png)
 
 The syntax for the bucket is as follows:
 

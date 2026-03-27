@@ -198,7 +198,7 @@ impl Display for Aggregate {
             Aggregate::Map(Mapping {
                 function: MapFunction::Builtin(MapType::Rate),
                 arg: None,
-            }) => write!(f, "rate"),
+            }) => write!(f, "map rate"),
             Aggregate::Map(map) => write!(f, "map {map}"),
             Aggregate::Align(Align { function, time }) => {
                 write!(f, "align to {time} using {function}")
