@@ -21,7 +21,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: arduino/setup-protoc@v3
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy
@@ -30,7 +29,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: arduino/setup-protoc@v3
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: llvm-tools-preview
@@ -62,7 +60,7 @@ jobs:
         env:
           RUSTFLAGS: -D warnings
         run: |
-          cargo llvm-cov --locked --no-report nextest --profile ci --features playground
+          cargo llvm-cov --locked --no-report nextest --profile ci --no-default-features --features playground
           cargo llvm-cov report --locked --lcov --output-path lcov-wasm.txt
       - name: Upload coverage to Codecov
         if: github.event.pull_request.user.login != 'dependabot[bot]'
@@ -99,7 +97,7 @@ jobs:
       - name: Build wasm
         # --no-opt: wasm-pack's bundled wasm-opt crashes, and even system wasm-opt
         # increases gzipped size (our wasm-release profile already optimizes well).
-        run: wasm-pack build --scope axiomhq --target web --profile wasm-release --no-opt --features wasm
+        run: wasm-pack build --scope axiomhq --target web --profile wasm-release --no-opt --no-default-features --features wasm
       - run: npm install typescript
         working-directory: pkg
       - name: Run TypeScript compiler

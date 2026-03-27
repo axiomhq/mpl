@@ -242,7 +242,7 @@ pub enum Aggregate {
 
 /// Values for directives
 #[cfg_attr(feature = "wasm", tsify::declare)]
-#[cfg_attr(not(feature = "wasm"), derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum DirectiveValue {
     /// Directive with a ident value
@@ -338,7 +338,7 @@ impl std::fmt::Display for ParamType {
 
 /// Types for params.
 #[cfg_attr(feature = "wasm", tsify::declare)]
-#[cfg_attr(not(feature = "wasm"), derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub enum TagType {
     /// String
