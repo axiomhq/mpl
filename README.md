@@ -1,4 +1,4 @@
-# MPL [![CI](https://github.com/axiomhq/mpl/actions/workflows/ci.yaml/badge.svg)](https://github.com/axiomhq/mpl/actions/workflows/ci.yaml) [![codecov](https://codecov.io/github/axiomhq/mpl/graph/badge.svg?token=WCHISH068G)](https://codecov.io/github/axiomhq/mpl) [![docs.rs](https://img.shields.io/docsrs/mpl-lang)](https://docs.rs/mpl-lang)
+# MPL [![CI](https://github.com/axiomhq/mpl/actions/workflows/ci.yaml/badge.svg)](https://github.com/axiomhq/mpl/actions/workflows/ci.yaml) [![codecov](https://codecov.io/github/axiomhq/mpl/graph/badge.svg?token=WCHISH068G)](https://codecov.io/github/axiomhq/mpl) [![docs.rs](https://img.shields.io/docsrs/mpl-lang)](https://docs.rs/mpl-lang) [![Crates.io Version](https://img.shields.io/crates/v/mpl-lang)](https://crates.io/crates/mpl-lang) [![NPM Version](https://img.shields.io/npm/v/%40axiomhq%2Fmpl)](https://www.npmjs.com/package/@axiomhq/mpl)
 
 MPL is the language [Axiom](https://axiom.co) designed to query metrics. It takes a piped aproach that is inspired by [APL](https://axiom.co/docs/apl/introduction) and [OxQL](https://rfd.shared.oxide.computer/rfd/0463).
 
