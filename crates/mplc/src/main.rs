@@ -39,14 +39,41 @@ enum Command {
         /// Output format
         #[arg(short, long, value_enum, default_value = "ron")]
         format: Format,
+
+        /// Write output to a file
+        #[arg(short, long)]
+        output: Option<String>,
     },
+}
+
+/// Print `text` to stdout with syntax highlighting when possible.
+///
+/// Uses tree-sitter grammars via `arborium` for RON and JSON.
+/// Falls back to plain text for Debug format or if highlighting fails.
+fn highlight_and_print(text: &str, format: Format) {
+    let lang = match format {
+        Format::Json => "json",
+        Format::Ron => "ron",
+        Format::Debug => {
+            println!("{text}");
+            return;
+        }
+    };
+
+    let theme = arborium::theme::builtin::catppuccin_mocha().clone();
+    let mut hl = arborium::AnsiHighlighter::new(theme);
+
+    match hl.highlight(lang, text) {
+        Ok(colored) => print!("{colored}"),
+        Err(_) => println!("{text}"),
+    }
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
 
     match args.command {
-        Command::Parse { file, format } => {
+        Command::Parse { file, format, output } => {
             let content = fs::read_to_string(&file)
                 .into_diagnostic()
                 .map_err(|e| e.context(format!("Failed to read file '{file}'")))?;
@@ -55,7 +82,7 @@ fn main() -> Result<()> {
                 Report::new(e).with_source_code(NamedSource::new(&file, content.clone()))
             })?;
 
-            let output = match format {
+            let output_str = match format {
                 Format::Json => serde_json::to_string_pretty(&parsed_query)
                     .into_diagnostic()
                     .map_err(|e| e.context("Failed to serialize to JSON"))?,
@@ -67,7 +94,14 @@ fn main() -> Result<()> {
                 Format::Debug => format!("{parsed_query:?}"),
             };
 
-            println!("{output}");
+            match output {
+                Some(path) => {
+                    fs::write(&path, &output_str)
+                        .into_diagnostic()
+                        .map_err(|e| e.context(format!("Failed to write to '{path}'")))?;
+                }
+                None => highlight_and_print(&output_str, format),
+            }
         }
     }
 
