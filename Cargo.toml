@@ -43,6 +43,7 @@ bincode = { version = "2", optional = true, features = ["serde"] }
 strumbra = { version = "0.6", features = ["serde"] }
 ordered-float = "5"
 ron = { version = "0.12", optional = true }
+arborium = { version = "2", optional = true, default-features = false, features = ["lang-ron", "lang-json"] }
 pest = "2.8.6"
 pest_derive = "2.8.6"
 serde_regex = "1"
@@ -61,7 +62,7 @@ clock = ["chrono/clock"]
 # Include examples in the build
 examples = []
 # for CLI tools
-cli = ["dep:clap", "dep:ron"]
+cli = ["dep:clap", "dep:ron", "dep:arborium"]
 # for WASM bindings
 wasm = [
   "dep:wasm-bindgen",
