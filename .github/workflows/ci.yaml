@@ -100,6 +100,28 @@ jobs:
         run: wasm-pack build --scope axiomhq --target web --profile wasm-release --no-opt --no-default-features --features wasm
       - run: npm install typescript
         working-directory: pkg
-      - name: Run TypeScript compiler
+      - name: Check TypeScript types
         run: npx tsc --noEmit -t esnext mpl_lang.d.ts
         working-directory: pkg
+      - name: Test wasm build against sample queries
+        run: node tests/wasm/test-wasm.mjs
+  build-wasm-playground:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: wasm32-unknown-unknown
+      - run: cargo install --locked wasm-pack
+      - uses: actions/setup-node@v6
+      - name: Build wasm (playground)
+        # --no-opt: wasm-pack's bundled wasm-opt crashes, and even system wasm-opt
+        # increases gzipped size (our wasm-release profile already optimizes well).
+        run: wasm-pack build --scope axiomhq --target web --profile wasm-release --no-opt --no-default-features --features playground
+      - run: npm install typescript
+        working-directory: pkg
+      - name: Check TypeScript types (playground)
+        run: npx tsc --noEmit -t esnext mpl_lang.d.ts
+        working-directory: pkg
+      - name: Test playground build against sample queries
+        run: node tests/wasm/test-playground.mjs
