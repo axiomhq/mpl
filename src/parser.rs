@@ -423,6 +423,15 @@ fn parse_number(source: Pair<Rule>) -> Result<Number> {
     let res = match next.as_rule() {
         Rule::int => Ok(Number::Int(parse_int(&next)?)),
         Rule::float => Ok(Number::Float(next.as_str().parse()?)),
+        Rule::inf => match next.as_str() {
+            "inf" | "+inf" => Ok(Number::Float(f64::INFINITY)),
+            "-inf" => Ok(Number::Float(f64::NEG_INFINITY)),
+            _ => Err(ParseError::Unexpected {
+                span: pair_to_source_span(&next),
+                rule: next.as_rule(),
+                expected: vec![],
+            }),
+        },
         rule => Err(ParseError::Unexpected {
             span: pair_to_source_span(&next),
             rule,
