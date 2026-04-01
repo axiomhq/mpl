@@ -26,17 +26,14 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: playground/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: cargo install --locked wasm-pack
       - run: npm ci
-        working-directory: playground
       - run: npm run build:mpl
-        working-directory: playground
       - run: npm run build:web
-        working-directory: playground
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: playground/packages/web/dist
+          path: playground/dist
       - id: deployment
         uses: actions/deploy-pages@v4

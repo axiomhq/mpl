@@ -7,4 +7,4 @@ Make sure your system has the following:
 - wasm-pack: https://github.com/drager/wasm-pack
 - node and npm: https://nodejs.org/en/download
 
-Running `npm run dev` will compile the Rust `lib/mpl` crate into wasm, create a wrapper NPM package with the JavaScript glue and TypeScript definitions and copy it to `packages/mpl`.
+From the repo root, running `npm run dev` will compile the Rust `lib/mpl` crate into wasm, create a wrapper NPM package with the JavaScript glue and TypeScript definitions and copy it to `packages/mpl`.

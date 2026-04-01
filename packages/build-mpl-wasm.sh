@@ -3,7 +3,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MPL_LIB_DIR="$SCRIPT_DIR/.."
-DEST_PKG_DIR="$SCRIPT_DIR/../packages/mpl"
+DEST_PKG_DIR="$SCRIPT_DIR/mpl"
 
 cd "$MPL_LIB_DIR"
 # --no-opt: wasm-pack's bundled wasm-opt (v117) crashes on this binary, and even

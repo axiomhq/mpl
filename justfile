@@ -18,11 +18,11 @@ wasm-test:
 
 # launch the MPL Playground in a dev server, requires wasm-pack and node/npm installed
 playground:
-  cd playground && npm run build:mpl
-  cd playground && npm i
-  cd playground && npm run dev
+  npm install
+  npm run build:mpl
+  npm run dev
 
 # remove all generated files (Rust target, wasm-pack output, npm installs, and built packages)
 clean:
   cargo clean
-  cd playground && npm run clean
+  npm run clean
