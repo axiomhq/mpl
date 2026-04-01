@@ -6,4 +6,4 @@ set string_arg="Hello, World!";
 set int_arg=123;
 set float_arg=3.14;
 
-dataset:metric
+sample_dataset:metric

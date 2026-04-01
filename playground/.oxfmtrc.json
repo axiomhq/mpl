@@ -1,0 +1,6 @@
+{
+  "indentStyle": "space",
+  "indentWidth": 2,
+  "lineWidth": 120,
+  "ignorePatterns": ["dist", "node_modules", "public/datasets.json"]
+}

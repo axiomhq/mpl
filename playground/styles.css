@@ -1,6 +1,14 @@
 /* MPL language support styles (from mpl-codemirror package) */
 @import "@axiomhq/mpl-codemirror/styles/tokens.css";
 
+@font-face {
+  font-family: "Ioskeley Mono";
+  src: url("/fonts/IoskeleyMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   --bg-color: #ffffff;
   --text-color: #333;
@@ -37,17 +45,26 @@
   --scrollbar-thumb-hover: #606060;
 }
 
-html, body {
+html,
+body {
   height: 100%;
   margin: 0;
   overflow: hidden;
 }
 
+*,
+*::before,
+*::after {
+  font-family: inherit;
+}
+
 body {
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: "Ioskeley Mono", ui-monospace, monospace;
   background: var(--bg-color);
   color: var(--text-color);
-  transition: background-color 0.2s ease, color 0.2s ease;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
   display: flex;
   flex-direction: column;
 }
@@ -86,97 +103,155 @@ body > div {
 
 #header {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 20px 20px 10px 20px;
-  flex-shrink: 0;
-}
-
-#header-bottom {
-  display: flex;
-  justify-content: space-between;
   align-items: center;
-  width: 100%;
+  gap: 12px;
+  padding: 12px 20px;
+  flex-shrink: 0;
 }
 
 h1 {
   margin: 0;
+  font-weight: 600;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
 }
 
-.example-picker {
-  display: flex;
-  align-items: center;
-}
-
-.example-picker select {
+#example-select {
   padding: 6px 12px;
-  font-size: 14px;
+  font-size: 13px;
   background: var(--toggle-bg);
   color: var(--text-color);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
-  transition: all 0.2s ease;
-  min-width: 200px;
+  transition: all 0.15s ease;
+  min-width: 180px;
 }
 
-.example-picker select:hover {
+#example-select:hover {
   background: var(--toggle-active-bg);
 }
 
-.example-picker select:focus {
+#example-select:focus {
   outline: none;
   border-color: var(--editor-border-focus);
-  box-shadow: 0 0 0 1px var(--editor-border-focus);
 }
 
-#controls {
-  display: flex;
-  gap: 12px;
-  align-items: center;
+.header-spacer {
+  flex: 1;
 }
 
-.toggle-container {
+.icon-btn {
   display: inline-flex;
   align-items: center;
-  background: var(--toggle-bg);
-  border-radius: 4px;
-  padding: 2px;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-color);
   cursor: pointer;
-  user-select: none;
-  transition: background-color 0.2s ease, opacity 0.2s ease;
+  transition:
+    background 0.15s ease,
+    opacity 0.15s ease;
+  opacity: 0.6;
 }
 
-.toggle-container.disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.icon-btn:hover {
+  background: var(--toggle-bg);
+  opacity: 1;
 }
 
-.toggle-container.disabled .toggle-option {
-  cursor: not-allowed;
-}
-
-.toggle-option {
-  padding: 6px 12px;
-  font-size: 14px;
-  border-radius: 3px;
-  transition: all 0.2s ease;
+.label-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
   color: var(--toggle-text);
-  font-weight: 500;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
 }
 
-.toggle-option.active {
-  background: var(--toggle-active-bg);
+.label-btn:hover {
   color: var(--toggle-active-text);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.label-btn.active {
+  color: var(--toggle-active-text);
+}
+
+.toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--toggle-text);
+  cursor: pointer;
+}
+
+.toggle {
+  width: 28px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--toggle-bg);
+  border: 1px solid var(--border-color);
+  position: relative;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease;
+  box-sizing: border-box;
+}
+
+.toggle.on {
+  background: var(--toggle-text);
+  border-color: var(--toggle-text);
+}
+
+.toggle-knob {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-color);
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  transform: translateY(-50%);
+  transition:
+    left 0.2s ease,
+    background 0.2s ease;
+}
+
+.toggle.on .toggle-knob {
+  left: calc(100% - 12px);
+  background: var(--bg-color);
+}
+
+#panel-toolbars {
+  display: flex;
+  padding: 2px 20px;
+  /* 4px divider gap to match #container's divider */
+  gap: 4px;
+}
+
+.panel-toolbar {
+  flex: 1;
+  display: flex;
+  justify-content: flex-end;
 }
 
 #container {
   display: flex;
-  gap: 20px;
+  gap: 0;
   flex: 1;
   min-height: 0;
-  padding: 10px 20px 20px 20px;
+  overflow: hidden;
+  padding: 0 20px 20px 20px;
 }
 
 .editor-wrapper {
@@ -201,75 +276,149 @@ h1 {
   height: 100%;
 }
 
-.editor-label {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  background: var(--label-bg);
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--label-text);
-  pointer-events: none;
-  z-index: 10;
-  transition: background-color 0.2s ease, color 0.2s ease;
+.cm-editor,
+.cm-editor .cm-content,
+.cm-editor .cm-gutters,
+.cm-editor .cm-lineNumbers {
+  font-family: "Ioskeley Mono", ui-monospace, monospace;
+  font-size: 0.75rem;
 }
 
-/* Terminal styles */
-#terminal-container {
-  border: 2px solid var(--editor-border);
-  border-radius: 4px;
-  margin: 0 20px 20px 20px;
-  overflow: hidden;
-  position: relative;
-  height: 200px;
+.editor-vim-icon {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 10;
+  opacity: 0.3;
+  color: var(--text-color);
+}
+
+/* Draggable divider */
+#divider {
+  width: 4px;
+  cursor: col-resize;
+  background: var(--border-color);
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+#divider:hover,
+#divider.dragging {
+  background: var(--editor-border-focus);
+}
+
+/* Charts panel */
+#charts-panel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chart-label {
+  font-family: "Ioskeley Mono", ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--label-text);
+  padding: 2px 4px;
+  white-space: pre-wrap;
   flex-shrink: 0;
 }
 
-.terminal-label {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  background: var(--label-bg);
-  padding: 4px 8px;
+.chart-widget {
+  border: 1px solid var(--border-color);
   border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
+  overflow: visible;
+}
+
+.chart-widget > .uplot {
+  border-radius: 4px;
+}
+
+.chart-error {
+  padding: 6px 12px;
+  color: #dc2626;
+  font-family: "Ioskeley Mono", ui-monospace, monospace;
+  font-size: 11px;
+  border: 1px dashed #dc2626;
+  border-radius: 4px;
+  background: rgba(220, 38, 38, 0.05);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chart-empty {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--label-text);
+  font-size: 12px;
+  font-style: italic;
+  border: 1px dashed var(--border-color);
+  border-radius: 4px;
+}
+
+/* Tooltip */
+.step-tooltip {
+  position: fixed;
+  z-index: 10000;
+  background: var(--label-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-family: "Ioskeley Mono", ui-monospace, monospace;
+  font-size: 10px;
+  line-height: 1.4;
   pointer-events: none;
-  z-index: 10;
-  transition: background-color 0.2s ease, color 0.2s ease;
+  white-space: nowrap;
+  color: var(--text-color);
+  backdrop-filter: blur(4px);
 }
 
-#terminal {
-  height: 100%;
-  padding: 8px;
-}
-
-@media (max-width: 767px) {
-  #header-bottom {
-    flex-flow: column nowrap;
-    align-items: start;
-    gap: 20px;
+/* Responsive: stack editor above charts on small screens */
+@media (max-width: 768px) {
+  #header {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
   }
 
-  #controls {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    justify-content: space-between;
-    width: 100%;
+  #header h1 {
+    font-size: 15px;
+  }
+
+  #example-select {
+    min-width: 0;
+    flex: 1;
+  }
+
+  #panel-toolbars {
+    flex-direction: column;
+    padding: 2px 8px;
+    gap: 0;
   }
 
   #container {
-    flex-flow: column nowrap;
+    flex-direction: column;
+    padding: 0 8px 8px 8px;
   }
 
-  #terminal-container {
-    max-height: 120px;
+  .editor-wrapper {
+    flex: none;
+    height: 40vh;
   }
 
-  .example-picker, .example-picker select, .toggle-container, .toggle-option {
-    width: 100%;
+  #divider {
+    width: auto;
+    height: 4px;
+    cursor: row-resize;
+  }
+
+  #charts-panel {
+    flex: 1;
+    min-height: 0;
   }
 }

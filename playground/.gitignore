@@ -1,2 +1,4 @@
 node_modules
 dist
+# rebuild by vite
+public/examples/index.json
