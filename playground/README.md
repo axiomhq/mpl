@@ -3,6 +3,7 @@
 Try out MPL in the browser
 
 Make sure your system has the following:
+
 - rust toolchain: https://rustup.rs/
 - wasm-pack: https://github.com/drager/wasm-pack
 - node and npm: https://nodejs.org/en/download

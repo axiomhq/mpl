@@ -3,15 +3,15 @@
 //       max(
 //           ingest_pressure{
 //              time_window = "1m",
-//               service =~ "node-[a-f]"
+//               service =~ "axiomdb-[a-f]"
 //           }
-//        ) <bool 0.4
-//    )[7d:]
+//        ) <bool 100
+//    )[10m:]
 // )
 
-`test-with-minus.com`:ingest_pressure
+`com.app.test`:ingest_pressure
 | where time_window == "1m"
-| where service == #/node-[a-f]/
+| where service == #/axiomdb-[a-f]/
 | group using max
-| map is::lt(0.4)
-| align to 7d using avg
+| map is::lt(100)
+| align to 10m using avg

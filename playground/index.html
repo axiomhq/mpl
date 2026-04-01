@@ -1,128 +1,130 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MPL Playground</title>
-  <link rel="stylesheet" href="/styles.css">
-  <script type="module" src="./main.ts"></script>
-</head>
-<body>
-  <!-- Alpine store wraps the entire app -->
-  <div x-data>
-    <!-- Header with controls -->
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MPL Playground</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script type="module" src="./main.ts"></script>
+  </head>
+  <body>
+    <!-- Alpine store wraps the entire app -->
+    <div x-data>
+      <!-- Header -->
       <div id="header">
         <h1>MPL Playground</h1>
-        <div id="header-bottom">
-          <div class="example-picker">
-            <select
-              id="example-select"
-              x-model.number="$store.playground.selectedExampleIndex"
-              x-on:change="$store.playground.onExampleChange()"
+        <select
+          id="example-select"
+          x-model.number="$store.playground.selectedExampleIndex"
+          x-on:change="$store.playground.onExampleChange()"
+        >
+          <template x-for="(example, index) in $store.playground.examples" :key="index">
+            <option x-text="example" :value="index"></option>
+          </template>
+        </select>
+        <button
+          type="button"
+          class="icon-btn"
+          x-on:click="$store.playground.onExampleChange()"
+          title="Reload example"
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-label="Reload"
+          >
+            <polyline points="23 4 23 10 17 10" />
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+          </svg>
+        </button>
+        <div class="header-spacer"></div>
+        <button
+          type="button"
+          class="icon-btn"
+          x-on:click="$store.playground.cycleTheme()"
+          x-bind:title="'Theme: ' + $store.playground.theme"
+        >
+          <template x-if="$store.playground.theme === 'light'"
+            ><svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-label="Light theme"
             >
-              <template x-for="(example, index) in $store.playground.examples" :key="index">
-                <option x-text="example" :value="index"></option>
-              </template>
-            </select>
-          </div>
-          <div id="controls">
-        <div class="toggle-container">
-          <div
-            class="toggle-option"
-            x-bind:class="{ 'active': $store.playground.theme === 'light' }"
-            x-on:click="$store.playground.theme = 'light'; $store.playground.onThemeChange()"
-          >
-            light
-          </div>
-          <div
-            class="toggle-option"
-            x-bind:class="{ 'active': $store.playground.theme === 'dark' }"
-            x-on:click="$store.playground.theme = 'dark'; $store.playground.onThemeChange()"
-          >
-            dark
-          </div>
-        </div>
-        <div class="toggle-container">
-          <div
-            class="toggle-option"
-            x-bind:class="{ 'active': $store.playground.editorMode === 'normie' }"
-            x-on:click="$store.playground.editorMode = 'normie'; $store.playground.onEditorModeChange()"
-          >
-            normie
-          </div>
-          <div
-            class="toggle-option"
-            x-bind:class="{ 'active': $store.playground.editorMode === 'vim' }"
-            x-on:click="$store.playground.editorMode = 'vim'; $store.playground.onEditorModeChange()"
-          >
-            vim
-          </div>
-        </div>
-        <div class="toggle-container">
-          <div
-            class="toggle-option"
-            x-bind:class="{ 'active': $store.playground.syntaxMode === 'color' }"
-            x-on:click="$store.playground.syntaxMode = 'color'; $store.playground.onSyntaxModeChange()"
-          >
-            color
-          </div>
-          <div
-            class="toggle-option"
-            x-bind:class="{ 'active': $store.playground.syntaxMode === 'plain' }"
-            x-on:click="$store.playground.syntaxMode = 'plain'; $store.playground.onSyntaxModeChange()"
-          >
-            plain
-          </div>
-        </div>
-        <div class="toggle-container" x-bind:class="{ 'disabled': $store.playground.formatDisabled }">
-          <div
-            class="toggle-option"
-            x-bind:class="{ 'active': $store.playground.format === 'json' }"
-            x-on:click="if (!$store.playground.formatDisabled) { $store.playground.format = 'json'; $store.playground.onFormatChange(); }"
-          >
-            JSON
-          </div>
-          <div
-            class="toggle-option"
-            x-bind:class="{ 'active': $store.playground.format === 'ron' }"
-            x-on:click="if (!$store.playground.formatDisabled) { $store.playground.format = 'ron'; $store.playground.onFormatChange(); }"
-          >
-            RON
-          </div>
-        </div>
-      </div>
-    </div>
-    </div>
-
-    <!-- Editors container -->
-    <div id="container">
-      <!-- Code editor (MPL) -->
-      <div class="editor-wrapper">
-        <div class="editor-label">MPL</div>
-        <div
-          class="editor-container"
-          x-init="$store.playground.initCodeEditor($el)"
-        ></div>
+              <circle cx="12" cy="12" r="5" />
+              <line x1="12" y1="1" x2="12" y2="3" />
+              <line x1="12" y1="21" x2="12" y2="23" />
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+              <line x1="1" y1="12" x2="3" y2="12" />
+              <line x1="21" y1="12" x2="23" y2="12" />
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" /></svg
+          ></template>
+          <template x-if="$store.playground.theme === 'dark'"
+            ><svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-label="Dark theme"
+            >
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" /></svg
+          ></template>
+          <template x-if="$store.playground.theme === 'system'"
+            ><svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-label="System theme"
+            >
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+              <line x1="8" y1="21" x2="16" y2="21" />
+              <line x1="12" y1="17" x2="12" y2="21" /></svg
+          ></template>
+        </button>
+        <button
+          type="button"
+          class="icon-btn"
+          x-bind:class="{ 'active': $store.playground.editorMode === 'vim' }"
+          x-on:click="$store.playground.editorMode = $store.playground.editorMode === 'vim' ? 'normie' : 'vim'; $store.playground.onEditorModeChange()"
+          title="Toggle Vim mode"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-label="Vim">
+            <path
+              d="M24 11.986h-.027l-4.318-4.318 4.303-4.414V1.461l-.649-.648h-8.198l-.66.605v1.045L12.015.027V0L12 .014 11.986 0v.027l-1.29 1.291-.538-.539H2.035l-.638.692v1.885l.616.616h.72v5.31L.027 11.987H0L.014 12 0 12.014h.027l2.706 2.706v6.467l.907.523h2.322l1.857-1.904 4.166 4.166V24l.015-.014.014.014v-.028l2.51-2.509h.485c.111 0 .211-.07.25-.179l.146-.426c.028-.084.012-.172-.037-.239l1.462-1.462-.612 1.962c-.043.141.036.289.177.332.025.008.052.012.078.012h1.824c.106-.001.201-.064.243-.163l.165-.394c.025-.065.024-.138-.004-.203-.027-.065-.08-.116-.146-.142-.029-.012-.062-.019-.097-.02h-.075l.84-2.644h1.232l-1.016 3.221c-.043.141.036.289.176.332.025.008.052.012.079.012h2.002c.11 0 .207-.066.248-.17l.164-.428c.051-.138-.021-.29-.158-.341-.029-.011-.06-.017-.091-.017h-.145l1.131-3.673c.027-.082.012-.173-.039-.24l-.375-.504-.003-.005c-.051-.064-.127-.102-.209-.102h-1.436c-.071 0-.141.03-.19.081l-.4.439h-.624l-.042-.046 4.445-4.445H24L23.986 12l.014-.014zM9.838 21.139l1.579-4.509h-.501l.297-.304h1.659l-1.563 4.555h.623l-.079.258H9.838zm3.695-7.516l.15.151-.269.922-.225.226h-.969l-.181-.181.311-.871.288-.247h.895zM5.59 20.829H3.877l-.262-.15V3.091H2.379l-.1-.1V1.815l.143-.154h7.371l.213.214v1.108l-.142.173H8.785v8.688l8.807-8.688h-2.086l-.175-.188V1.805l.121-.111h7.49l.132.133v1.07L12.979 13.25h-.373c-.015-.001-.028 0-.042.001l-.02.003c-.045.01-.086.03-.119.06l-.343.295-.004.003c-.033.031-.059.069-.073.111l-.296.83-6.119 6.276zm14.768-3.952l.474-.519h1.334l.309.415-1.265 4.107h.493l-.08.209H19.84l1.124-3.564h-2.015l-1.077 3.391h.424l-.073.174h-1.605l1.107-3.548h-2.096l-1.062 3.339h.436l-.072.209H13.27l1.514-4.46H14.198l.091-.271h1.65l.519.537h.906l.491-.554h1.061l.489.535h.953z"
+            />
+          </svg>
+        </button>
       </div>
 
-      <!-- AST editor (RON/JSON) -->
-      <div class="editor-wrapper">
-        <div class="editor-label" x-text="$store.playground.format.toUpperCase()"></div>
-        <div
-          class="editor-container"
-          x-init="$store.playground.initAstEditor($el)"
-        ></div>
+      <div id="container">
+        <div class="editor-wrapper">
+          <div class="editor-container" x-init="$store.playground.initCodeEditor($el)"></div>
+        </div>
+        <div id="divider"></div>
+        <div id="charts-panel" x-init="$store.playground.chartsPanel = $el"></div>
       </div>
     </div>
-
-    <!-- Terminal container -->
-    <div id="terminal-container">
-      <div class="terminal-label">Output</div>
-      <div
-        id="terminal"
-        x-init="$store.playground.initTerminal($el)"
-      ></div>
-    </div>
-  </div>
-</body>
+  </body>
 </html>

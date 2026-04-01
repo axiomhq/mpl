@@ -60,16 +60,21 @@ pub enum CompileError {
     Group(#[from] GroupError),
 }
 
-/// Parses and typechecks an MPL query into a Query object.
+/// Parses an MPL query string into a Query AST
+#[allow(clippy::result_large_err)]
+pub fn parse(query: &str) -> Result<Query, ParseError> {
+    let mut parse = MPLParser::parse(Rule::file, query).map_err(ParseError::from)?;
+    parser::Parser::default().parse_query(&mut parse)
+}
+
+/// Parses and checks an MPL query into a Query object.
 #[allow(clippy::result_large_err)]
 pub fn compile(query: &str) -> Result<Query, CompileError> {
-    // stage 1: parse
-    let mut parse = MPLParser::parse(Rule::file, query).map_err(ParseError::from)?;
-    let mut query = parser::Parser::default().parse_query(&mut parse)?;
-    // stage 2: typecheck
+    let mut query = parse(query)?;
+    // typecheck
     let mut visitor = ParamTypecheckVisitor {};
     visitor.walk(&mut query)?;
-    // stage 3: group check
+    // group check
     let mut visitor = GroupCheckVisitor::default();
     visitor.walk(&mut query)?;
 

@@ -5,15 +5,14 @@
 //              time_window = "1m",
 //               service =~ "axiomdb-[a-f]"
 //           }
-//        ) <bool 0.4
-//    )[7d:]
+//        ) <bool 100
+//    )[5m:]
 // )
 
-`test-with-minus.com`:ingest_pressure as snot
+`com.app.test`:ingest_pressure
 | where time_window == "1m"
 | where service == #/axiomdb-[a-f]/
 | group using max
-| as cookie
-| map is::lt(0.4)
-| align to 7d using avg
+| map is::lt(100)
+| align to 5m using avg
 | as cake

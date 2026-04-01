@@ -341,7 +341,7 @@ fn parse_time_range(source: Pair<Rule>) -> Result<TimeRange> {
     Ok(TimeRange { start, end })
 }
 
-fn parse_source(source: Pair<Rule>, params: &Params) -> Result<(Source, Option<As>)> {
+pub(crate) fn parse_source(source: Pair<Rule>, params: &Params) -> Result<(Source, Option<As>)> {
     source.assert_type(Rule::source)?;
     let mut inner = source.into_inner();
 
@@ -777,7 +777,7 @@ fn parse_or(source: Pair<Rule>, params: &Params) -> Result<Filter> {
     }
 }
 
-fn parse_filter(source: Pair<Rule>, params: &Params) -> Result<Filter> {
+pub(crate) fn parse_filter(source: Pair<Rule>, params: &Params) -> Result<Filter> {
     source.assert_type(Rule::filter_rule)?;
     let mut inner = source.into_inner();
 
@@ -791,7 +791,7 @@ fn parse_filter(source: Pair<Rule>, params: &Params) -> Result<Filter> {
     Ok(res)
 }
 
-fn parse_sample(source: Pair<Rule>) -> Result<f64> {
+pub(crate) fn parse_sample(source: Pair<Rule>) -> Result<f64> {
     source.assert_type(Rule::sample_rule)?;
     let mut inner = source.into_inner();
 
@@ -982,7 +982,7 @@ impl Parser {
         self.parse_query_(directives, params, next)
     }
 
-    fn parse_directive(source: Pair<'_, Rule>) -> Result<(String, DirectiveValue)> {
+    pub(crate) fn parse_directive(source: Pair<'_, Rule>) -> Result<(String, DirectiveValue)> {
         let mut inner = source.into_inner();
         let directive = parse_ident(&inner.n()?)?;
         let value = if let Some(v) = inner.next() {
@@ -1001,7 +1001,7 @@ impl Parser {
         Ok((directive, value))
     }
 
-    fn parse_param(params: &Params, source: Pair<'_, Rule>) -> Result<Param> {
+    pub(crate) fn parse_param(params: &Params, source: Pair<'_, Rule>) -> Result<Param> {
         let mut inner = source.into_inner();
         let next = inner.n()?;
         let span = pair_to_source_span(&next);
@@ -1162,7 +1162,7 @@ impl Parser {
         })
     }
 
-    fn parse_pipe(&self, source: Pair<Rule>, params: &Params) -> Result<Aggregate> {
+    pub(crate) fn parse_pipe(&self, source: Pair<Rule>, params: &Params) -> Result<Aggregate> {
         source.assert_type(Rule::pipe_rule)?;
         let mut inner = source.into_inner();
 
@@ -1337,7 +1337,7 @@ impl Parser {
         })
     }
 
-    fn parse_compute_fn(&self, source: Pair<Rule>) -> Result<ComputeFunction> {
+    pub(crate) fn parse_compute_fn(&self, source: Pair<Rule>) -> Result<ComputeFunction> {
         source.assert_type(Rule::compute_fn)?;
         let span = pair_to_source_span(&source);
         let mut inner = source.into_inner();
