@@ -4,8 +4,8 @@ use crate::{
     Query,
     linker::ComputeFunction,
     query::{
-        Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter, GroupBy, Mapping,
-        Param, Source,
+        Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter, GroupBy, Join,
+        Mapping, Param, Source,
     },
     types::{Dataset, Metric, Parameterized},
 };
@@ -197,6 +197,18 @@ pub trait QueryVisitor {
     /// Leave a group by.
     fn leave_group_by(&mut self, group_by: &mut GroupBy) -> Result<(), Self::Error> {
         let _ = group_by;
+        Ok(())
+    }
+
+    /// Visit a join.
+    fn visit_join(&mut self, join: &mut Join) -> Result<VisitRes, Self::Error> {
+        let _ = join;
+        Ok(VisitRes::Walk)
+    }
+
+    /// Leave a join.
+    fn leave_join(&mut self, join: &mut Join) -> Result<(), Self::Error> {
+        let _ = join;
         Ok(())
     }
 
@@ -441,6 +453,7 @@ pub trait QueryWalker: QueryVisitor {
             Aggregate::GroupBy(group_by) => QueryWalker::walk_group_by(self, group_by)?,
             Aggregate::Bucket(bucket_by) => QueryWalker::walk_bucket_by(self, bucket_by)?,
             Aggregate::As(as_) => QueryWalker::walk_as(self, as_)?,
+            Aggregate::Join(join) => QueryWalker::walk_join(self, join)?,
         }
         QueryVisitor::leave_aggregate(self, aggregate)?;
         Ok(())
@@ -464,6 +477,13 @@ pub trait QueryWalker: QueryVisitor {
     fn walk_group_by(&mut self, group_by: &mut GroupBy) -> Result<(), Self::Error> {
         QueryVisitor::visit_group_by(self, group_by)?;
         QueryVisitor::leave_group_by(self, group_by)?;
+        Ok(())
+    }
+
+    /// Walk a join.
+    fn walk_join(&mut self, join: &mut Join) -> Result<(), Self::Error> {
+        QueryVisitor::visit_join(self, join)?;
+        QueryVisitor::leave_join(self, join)?;
         Ok(())
     }
 

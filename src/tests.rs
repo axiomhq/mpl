@@ -18,6 +18,17 @@ fn parse_group_by() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn parse_join() -> Result<(), Box<dyn std::error::Error>> {
+    let s = r"
+test:kube_pod_status_ready
+| group by pod using sum
+| join created_by_kind from test:kube_pod_info by pod
+    ";
+    super::compile(s)?;
+    Ok(())
+}
+
+#[test]
 fn parse_group_ts() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
 `dev.metrics`:http_requests_total[1747077736092..]

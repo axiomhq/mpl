@@ -13,9 +13,9 @@ use crate::{
         AlignFunction, ComputeFunction, Function, FunctionId, GroupFunction, Module, ModuleId,
     },
     query::{
-        Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter, GroupBy, Mapping,
-        MetricId, Param, ParamType, ParamValue, Params, Query, RelativeTime, Source, TagType, Time,
-        TimeRange, TimeUnit,
+        Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter, GroupBy, Join,
+        Mapping, MetricId, Param, ParamType, ParamValue, Params, Query, RelativeTime, Source,
+        TagType, Time, TimeRange, TimeUnit,
     },
     stdlib::STDLIB,
     tags::TagValue,
@@ -830,6 +830,32 @@ fn parse_bucket_by_fn(source: &Pair<'_, Rule>) -> Result<BucketType> {
     }
 }
 
+fn parse_join(source: Pair<Rule>, params: &Params) -> Result<Join> {
+    source.assert_type(Rule::join)?;
+    let span = pair_to_source_span(&source);
+    let mut inner = source.into_inner();
+
+    let tag = inner
+        .n()?
+        .into_inner()
+        .map(|field| parse_ident(&field))
+        .collect::<Result<_>>()?;
+    let from = parse_metric_id(inner.n()?, params)?;
+    let by = inner
+        .n()?
+        .into_inner()
+        .map(|field| parse_ident(&field))
+        .collect::<Result<_>>()?;
+
+    inner.assert_empty()?;
+    Ok(Join {
+        span,
+        tag,
+        from,
+        by,
+    })
+}
+
 fn parse_bucket_conversion(source: &Pair<'_, Rule>) -> Result<ConversionMethod> {
     source.assert_type(Rule::bucket_conversion)?;
     match source.as_str() {
@@ -1176,7 +1202,8 @@ impl Parser {
             Rule::align => Ok(Aggregate::Align(self.parse_align(next, params)?)),
             Rule::group_by => Ok(Aggregate::GroupBy(self.parse_group_by(next)?)),
             Rule::bucket_by => Ok(Aggregate::Bucket(parse_bucket_by(next, params)?)),
-            rule @ (Rule::join | Rule::replace) => Err(ParseError::NotSupported {
+            Rule::join => Ok(Aggregate::Join(parse_join(next, params)?)),
+            rule @ Rule::replace => Err(ParseError::NotSupported {
                 span: pair_to_source_span(&next),
                 rule,
             }),

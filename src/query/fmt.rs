@@ -4,8 +4,8 @@ use crate::{
     Query,
     linker::MapFunction,
     query::{
-        Aggregate, Align, As, BucketBy, Cmp, Filter, GroupBy, Mapping, MetricId, RelativeTime,
-        Source, Time, TimeRange, TimeUnit,
+        Aggregate, Align, As, BucketBy, Cmp, Filter, GroupBy, Join, Mapping, MetricId,
+        RelativeTime, Source, Time, TimeRange, TimeUnit,
     },
     types::{BucketType, MapType, Parameterized},
 };
@@ -61,13 +61,9 @@ impl Display for Query {
     }
 }
 
-impl Display for Source {
+impl Display for MetricId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Source {
-            metric_id: MetricId { dataset, metric },
-            time,
-        } = self;
-        match dataset {
+        match &self.dataset {
             Parameterized::Concrete(dataset) => escape_ident(f, dataset)?,
             Parameterized::Param { span: _, param } => {
                 write!(f, "$")?;
@@ -75,7 +71,15 @@ impl Display for Source {
             }
         }
         write!(f, ":")?;
-        escape_ident(f, metric)?;
+        escape_ident(f, &self.metric)?;
+        Ok(())
+    }
+}
+
+impl Display for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Source { metric_id, time } = self;
+        write!(f, "{metric_id}")?;
         if let Some(time) = time {
             write!(f, "{time}")?;
         }
@@ -220,6 +224,31 @@ impl Display for Aggregate {
                 }
                 write!(f, " using {function}",)
             }
+            Aggregate::Join(Join {
+                span: _,
+                tag,
+                from,
+                by,
+            }) => {
+                write!(f, "join ")?;
+                if let Some((field, rest)) = tag.split_first() {
+                    escape_ident(f, field)?;
+                    for tag in rest {
+                        write!(f, ", ")?;
+                        escape_ident(f, tag)?;
+                    }
+                }
+                write!(f, " from {from} by ")?;
+                if let Some((first, rest)) = by.split_first() {
+                    escape_ident(f, first)?;
+                    for tag in rest {
+                        write!(f, ", ")?;
+                        escape_ident(f, tag)?;
+                    }
+                }
+                Ok(())
+            }
+
             Aggregate::Bucket(BucketBy {
                 span: _,
                 function,

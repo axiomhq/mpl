@@ -205,6 +205,22 @@ pub struct GroupBy {
     pub tags: Vec<String>,
 }
 
+/// A Join operation
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct Join {
+    /// The location of the join clause
+    #[cfg_attr(feature = "wasm", tsify(type = "{ offset: number, length: number }"))]
+    pub span: SourceSpan,
+    /// Join tag
+    pub tag: Vec<String>,
+    /// From metric
+    pub from: MetricId,
+    /// By tag
+    pub by: Vec<String>,
+}
+
 /// A Bucketing function, applying both tag and time based aggregation
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
@@ -238,6 +254,8 @@ pub enum Aggregate {
     Bucket(BucketBy),
     /// Rename the metric
     As(As),
+    /// Enrich the data by tags from another metric
+    Join(Join),
 }
 
 /// Values for directives
