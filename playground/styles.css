@@ -247,3 +247,29 @@ h1 {
   padding: 8px;
 }
 
+@media (max-width: 767px) {
+  #header-bottom {
+    flex-flow: column nowrap;
+    align-items: start;
+    gap: 20px;
+  }
+
+  #controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  #container {
+    flex-flow: column nowrap;
+  }
+
+  #terminal-container {
+    max-height: 120px;
+  }
+
+  .example-picker, .example-picker select, .toggle-container, .toggle-option {
+    width: 100%;
+  }
+}
