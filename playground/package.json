@@ -4,8 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "run-s build:mpl build:wasm && vite",
+    "build": "run-s build:mpl build:wasm && vite build",
+    "build:mpl": "../packages/build-mpl-wasm.sh",
+    "build:wasm": "./build-wasm.sh",
     "fix": "run-s fix:*",
     "fix:fmt": "oxfmt --write .",
     "fix:lint": "oxlint --fix .",
@@ -20,6 +22,7 @@
   "dependencies": {
     "@axiomhq/mpl-codemirror": "*",
     "@axiomhq/mpl-lang": "*",
+    "@axiomhq/mpl-playground": "*",
     "@codemirror/autocomplete": "^6.18.0",
     "@codemirror/commands": "^6.7.0",
     "@codemirror/language": "^6.10.5",

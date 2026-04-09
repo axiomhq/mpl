@@ -1,10 +1,10 @@
 /**
  * Wasm integration test for --features playground build.
  *
- * Uses parse_steps() — only exported under --features playground — to verify:
- *   - tests/examples/*.mpl  → parse without error (or produce only
- *                             "not_supported" / "not_implemented" step errors,
- *                             mirroring the tolerance in tests/parse.rs)
+ * Uses Interpreter.run() to verify:
+ *   - tests/examples/*.mpl  → compile without error, except known
+ *                             unsupported/not implemented syntax
+ *                             mirrored from tests/parse.rs.
  *   - tests/errors/*.mpl    → throw a hard parse error
  *
  * Usage: node tests/wasm/test-playground.mjs [pkg-dir]
@@ -19,18 +19,20 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../..");
 const pkgDir = process.argv[2]
   ? resolve(process.argv[2])
-  : join(repoRoot, "pkg");
+  : join(repoRoot, "extra/mpl-playground/pkg");
 
-const mpl = await import(join(pkgDir, "mpl_lang.js"));
-const wasmBytes = readFileSync(join(pkgDir, "mpl_lang_bg.wasm"));
+const mpl = await import(join(pkgDir, "mpl_playground.js"));
+const wasmBytes = readFileSync(join(pkgDir, "mpl_playground_bg.wasm"));
 mpl.initSync({ module: wasmBytes });
 
-if (typeof mpl.parse_steps !== "function") {
+if (typeof mpl.Interpreter !== "function") {
   console.error(
-    "ERROR: parse_steps() not exported — was the build run with --features playground?"
+    "ERROR: Interpreter not exported — was mpl-playground built?"
   );
   process.exit(1);
 }
+
+const interpreter = new mpl.Interpreter([]);
 
 // ---------------------------------------------------------------------------
 
@@ -64,24 +66,18 @@ console.log(`\nExamples (must parse) — ${examplesDir}`);
 for (const { name, path } of mplFiles(examplesDir)) {
   const content = readFileSync(path, "utf8");
   try {
-    const result = mpl.parse_steps(content);
-    const errors = result.steps
-      .filter((s) => s.node?.Error)
-      .map((s) => s.node.Error);
-
-    if (errors.length === 0) {
-      console.log(`  PASS  ${name}`);
-      passed++;
-    } else if (errors.every(isAcceptableError)) {
-      console.log(`  PASS  ${name}  (parsed; feature not yet supported)`);
+    interpreter.run(content);
+    console.log(`  PASS  ${name}`);
+    passed++;
+  } catch (err) {
+    const msg = String(err).split("\n")[0];
+    if (isAcceptableError(msg)) {
+      console.log(`  PASS  ${name}  (feature not yet supported)`);
       passed++;
     } else {
-      console.error(`  FAIL  ${name}: ${errors[0]}`);
+      console.error(`  FAIL  ${name}: ${msg}`);
       failed++;
     }
-  } catch (err) {
-    console.error(`  FAIL  ${name}: ${String(err).split("\n")[0]}`);
-    failed++;
   }
 }
 
@@ -93,17 +89,11 @@ console.log(`\nErrors (must throw) — ${errorsDir}`);
 for (const { name, path } of mplFiles(errorsDir)) {
   const content = readFileSync(path, "utf8");
   try {
-    const result = mpl.parse_steps(content);
-    const hasStepError = result.steps.some((s) => s.node?.Error);
-    if (hasStepError) {
-      console.log(`  PASS  ${name}  (step error)`);
-      passed++;
-    } else {
-      console.error(
-        `  FAIL  ${name}: expected a parse error but parsed successfully`
-      );
-      failed++;
-    }
+    interpreter.run(content);
+    console.error(
+      `  FAIL  ${name}: expected a parse error but parsed successfully`
+    );
+    failed++;
   } catch (_err) {
     console.log(`  PASS  ${name}`);
     passed++;

@@ -13,13 +13,22 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import { EditorView } from "@codemirror/view";
 import { basicSetup } from "codemirror";
 import { vim } from "@replit/codemirror-vim";
-import { loadDatasetIndex } from "./datasets";
+import { datasets } from "./datasets";
 
 const completionConfig: MplCompletionConfig = {
-  datasets: async () => Object.keys(await loadDatasetIndex()),
-  metrics: async (dataset: string) => Object.keys((await loadDatasetIndex())[dataset] ?? {}),
-  tags: async (dataset: string, metric: string) =>
-    (await loadDatasetIndex())[dataset]?.[metric] ?? [],
+  datasets: async () => datasets.map((ds) => ds.name),
+  metrics: async (dataset: string) =>
+    datasets.find((ds) => ds.name === dataset)?.metrics.map((m) => m.name) ?? [],
+  tags: async (dataset: string, metric: string) => {
+    const series =
+      datasets.find((ds) => ds.name === dataset)?.metrics.find((m) => m.name === metric)?.series ??
+      [];
+    const tags = new Set<string>();
+    for (const s of series) {
+      for (const k of Object.keys(s.tags)) tags.add(k);
+    }
+    return [...tags].sort();
+  },
 };
 
 export interface EditorInstance {
