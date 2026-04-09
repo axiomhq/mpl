@@ -1,8 +1,8 @@
 // Renders one chart per pipeline step.
 
+import type { Series } from "@axiomhq/mpl-playground";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import type { Series } from "./datasets";
 
 const COLORS_LIGHT = [
   "#2563eb",

@@ -30,7 +30,7 @@ jobs:
       - run: cargo install --locked wasm-pack
       - run: npm ci
       - run: npm run build:mpl
-      - run: npm run build:web
+      - run: npm run build:playground
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
