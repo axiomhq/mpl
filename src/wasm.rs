@@ -4,6 +4,8 @@ use wasm_bindgen::prelude::*;
 
 mod completions;
 mod diagnostics;
+#[cfg(feature = "playground")]
+pub mod interpreter;
 mod lints;
 #[cfg(feature = "playground")]
 pub mod steps;

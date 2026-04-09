@@ -1,11 +1,35 @@
 // Alpine.js store — glues editor, pipeline, and UI together.
 
-import init, { parse_steps } from "@axiomhq/mpl-lang";
+import wasmInit, { Interpreter, RunOutput } from "@axiomhq/mpl-lang";
 import Alpine from "alpinejs";
 import { renderCharts, type ChartEntry } from "./charts";
-import { initDatasets } from "./datasets";
+import { datasets } from "./datasets";
 import { createEditor, type EditorInstance } from "./editor";
-import { interpret } from "./interpreter";
+
+const exampleModules = import.meta.glob("./examples/*.mpl", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+}) as Record<string, string>;
+
+const examples = Object.entries(exampleModules)
+  .map(([path, content]) => ({
+    name: path.split("/").pop()!,
+    content,
+  }))
+  .sort((a, b) => a.name.localeCompare(b.name));
+
+function loadSelectedExample(index: number) {
+  const example = examples[index];
+  if (!example) return;
+
+  editor.view.dispatch({
+    changes: { from: 0, to: editor.view.state.doc.length, insert: example.content },
+  });
+  editor.view.focus();
+}
+
+let editor: EditorInstance;
 
 type Theme = "light" | "dark" | "system";
 
@@ -16,71 +40,49 @@ function resolveTheme(theme: Theme): "dark" | "light" {
   return theme;
 }
 
-function updateCharts(panel: HTMLElement, doc: string) {
-  let result;
+await wasmInit();
+const interpreter = new Interpreter(datasets);
+
+function onEditorChange() {
+  const panel = document.getElementById("charts-panel");
+  if (!panel) return;
+
+  const doc = editor.view.state.doc.toString();
+  let steps: RunOutput;
+
   try {
-    result = parse_steps(doc);
+    steps = interpreter.run(doc);
   } catch (e) {
     renderCharts(panel, [{ label: doc.trim(), series: [], error: String(e) }]);
     return;
   }
 
-  const { steps: seriesSteps, errors } = interpret(result.steps);
-
-  const entries: ChartEntry[] = result.steps.map((step, i) => ({
-    label: step.canonical,
-    series: seriesSteps[i] ?? [],
-    error: errors[i],
-  }));
+  const entries: ChartEntry[] = steps.map((step) => {
+    if ("Err" in step.result) return { label: step.text, series: [], error: step.result.Err };
+    return { label: step.text, series: step.result.Ok };
+  });
 
   renderCharts(panel, entries);
-}
-
-async function loadExamples(): Promise<string[]> {
-  try {
-    const resp = await fetch("/examples/index.json");
-    if (!resp.ok) return [];
-    return await resp.json();
-  } catch {
-    return [];
-  }
 }
 
 const playgroundStore = {
   editorMode: (localStorage.getItem("mpl-editorMode") as "vim" | "normie") || "vim",
   theme: (localStorage.getItem("mpl-theme") as Theme) || "system",
   resolvedTheme: "light" as "dark" | "light",
-  editor: null as EditorInstance | null,
-  chartsPanel: null as HTMLElement | null,
-  isInitialized: false,
   selectedExampleIndex: 0,
-  examples: [] as string[],
+  examples,
 
-  async init() {
-    try {
-      this.resolvedTheme = resolveTheme(this.theme);
-      if (this.resolvedTheme === "dark") {
-        document.documentElement.classList.add("dark-theme");
-      }
-
-      window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-        if (this.theme === "system") this.onThemeChange();
-      });
-
-      this.setupDivider();
-      this.examples = await loadExamples();
-      await Promise.all([init(), initDatasets()]);
-      this.isInitialized = true;
-
-      await this.loadSelectedExample();
-
-      if (this.editor) {
-        this.onEditorChange();
-        this.editor.view.focus();
-      }
-    } catch (error) {
-      console.error("Failed to initialize:", error);
+  init() {
+    this.resolvedTheme = resolveTheme(this.theme);
+    if (this.resolvedTheme === "dark") {
+      document.documentElement.classList.add("dark-theme");
     }
+
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+      if (this.theme === "system") this.onThemeChange();
+    });
+
+    this.setupDivider();
   },
 
   setupDivider() {
@@ -123,23 +125,13 @@ const playgroundStore = {
   },
 
   initCodeEditor(el: HTMLElement) {
-    this.editor = createEditor(el, this.resolvedTheme, this.editorMode === "vim", () =>
-      this.onEditorChange(),
-    );
-
-    if (this.isInitialized) {
-      this.loadSelectedExample();
-    }
-  },
-
-  onEditorChange() {
-    if (!this.isInitialized || !this.editor || !this.chartsPanel) return;
-    updateCharts(this.chartsPanel, this.editor.view.state.doc.toString());
+    editor = createEditor(el, this.resolvedTheme, this.editorMode === "vim", onEditorChange);
+    loadSelectedExample(this.selectedExampleIndex);
   },
 
   onEditorModeChange() {
     localStorage.setItem("mpl-editorMode", this.editorMode);
-    this.editor?.setVimMode(this.editorMode === "vim");
+    editor.setVimMode(this.editorMode === "vim");
   },
 
   cycleTheme() {
@@ -158,32 +150,12 @@ const playgroundStore = {
       document.documentElement.classList.remove("dark-theme");
     }
 
-    this.editor?.setTheme(this.resolvedTheme);
-    this.onEditorChange();
+    editor.setTheme(this.resolvedTheme);
+    onEditorChange();
   },
 
-  async loadSelectedExample() {
-    const exampleFile = this.examples[this.selectedExampleIndex];
-    if (!exampleFile) return;
-
-    try {
-      const response = await fetch(`/examples/${exampleFile}`);
-      if (!response.ok) throw new Error(`Failed to load example: ${response.statusText}`);
-      const content = await response.text();
-
-      if (this.editor) {
-        this.editor.view.dispatch({
-          changes: { from: 0, to: this.editor.view.state.doc.length, insert: content },
-        });
-        this.editor.view.focus();
-      }
-    } catch (error) {
-      console.error("Error loading example:", error);
-    }
-  },
-
-  async onExampleChange() {
-    await this.loadSelectedExample();
+  onExampleChange() {
+    loadSelectedExample(this.selectedExampleIndex);
   },
 };
 

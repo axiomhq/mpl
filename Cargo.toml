@@ -52,6 +52,10 @@ wasm-bindgen = { version = "0.2.108", optional = true }
 serde-wasm-bindgen = { version = "0.6.5", optional = true }
 tsify = { version = "0.5.6", features = ["js"], optional = true }
 miette = { version = "7.6.0", features = ["serde"] }
+derive_more = { version = "2", features = ["deref"] }
+eyre = "0.6"
+rand = { version = "0.9", optional = true }
+getrandom = { version = "0.3", optional = true, features = ["wasm_js"] }
 
 [dev-dependencies]
 test-case = "3"
@@ -70,4 +74,4 @@ wasm = [
   "dep:serde-wasm-bindgen",
 ]
 # for node or web-based compilers, eg. playground
-playground = ["wasm"]
+playground = ["wasm", "dep:rand", "dep:getrandom"]

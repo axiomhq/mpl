@@ -64,8 +64,8 @@ console.log(`\nExamples (must parse) — ${examplesDir}`);
 for (const { name, path } of mplFiles(examplesDir)) {
   const content = readFileSync(path, "utf8");
   try {
-    const result = mpl.parse_steps(content);
-    const errors = result.steps
+    const steps = mpl.parse_steps(content);
+    const errors = steps
       .filter((s) => s.node?.Error)
       .map((s) => s.node.Error);
 
@@ -93,8 +93,8 @@ console.log(`\nErrors (must throw) — ${errorsDir}`);
 for (const { name, path } of mplFiles(errorsDir)) {
   const content = readFileSync(path, "utf8");
   try {
-    const result = mpl.parse_steps(content);
-    const hasStepError = result.steps.some((s) => s.node?.Error);
+    const steps = mpl.parse_steps(content);
+    const hasStepError = steps.some((s) => s.node?.Error);
     if (hasStepError) {
       console.log(`  PASS  ${name}  (step error)`);
       passed++;
