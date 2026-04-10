@@ -1,6 +1,6 @@
 import { linter, type Diagnostic, type Action } from "@codemirror/lint";
 import { type EditorView } from "@codemirror/view";
-import * as mpl from "@axiomhq/mpl-lang";
+import * as mpl from "@axiomhq/mpl";
 
 type Severity = "error" | "warning" | "info" | "hint";
 
