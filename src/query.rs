@@ -339,7 +339,7 @@ impl std::fmt::Display for ParamType {
 /// Types for params.
 #[cfg_attr(feature = "wasm", tsify::declare)]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub enum TagType {
     /// String
     String,
@@ -352,6 +352,7 @@ pub enum TagType {
     /// None / Null value
     None,
 }
+
 impl std::fmt::Display for TagType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(

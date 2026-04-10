@@ -1,5 +1,5 @@
 //! encoding for regular expressions.
-use std::ops::Deref;
+use std::{hash, ops::Deref};
 
 use regex::Regex;
 #[cfg(feature = "wasm")]
@@ -14,9 +14,16 @@ pub struct EncodableRegex(
     #[cfg_attr(feature = "wasm", tsify(type = "RegExp"))]
     Regex,
 );
+
 impl PartialEq for EncodableRegex {
     fn eq(&self, other: &Self) -> bool {
         self.0.as_str() == other.0.as_str()
+    }
+}
+
+impl hash::Hash for EncodableRegex {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        self.0.as_str().hash(state);
     }
 }
 
