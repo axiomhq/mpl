@@ -525,7 +525,7 @@ dependencies = [
 
 [[package]]
 name = "mpl-lang"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "arborium",
  "bincode",
