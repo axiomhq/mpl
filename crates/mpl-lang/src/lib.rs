@@ -9,7 +9,8 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(unused_assignments)] // We need this for the type error
 
-mod parser;
+#[allow(missing_docs)]
+pub mod parser;
 
 pub mod enc_regex;
 pub mod errors;

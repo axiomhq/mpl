@@ -1,0 +1,63 @@
+[package]
+name = "mpl-lang"
+version = "0.3.2"
+edition = "2024"
+authors = ["Seoyoung Lee <seoyoung@axiom.co>", "Arne Bahlo <arne@axiom.co>", "Heinz Gies <heinz@axiom.co>", "Samuel Cristobal <samu@messy.page>"]
+description = "Axioms Metrics Processing Language"
+documentation = "https://docs.axiom.co"
+homepage = "https://axiom.co"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/axiomhq/mpl"
+rust-version = "1.92.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "mplc"
+path = "src/bin/mplc.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "mplstdlib"
+path = "src/bin/mplstdlib.rs"
+required-features = ["cli"]
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }
+clap = { version = "4", optional = true, features = ["derive"] }
+regex =  "1"
+thiserror = "2"
+serde_json = "1"
+serde = "1"
+bincode = { version = "2", optional = true, features = ["serde"] }
+strumbra = { version = "0.6", features = ["serde"] }
+ordered-float = "5"
+ron = { version = "0.12", optional = true }
+arborium = { version = "2", optional = true, default-features = false, features = ["lang-ron", "lang-json"] }
+pest = "2.8.6"
+pest_derive = "2.8.6"
+serde_regex = "1"
+strsim = "0.11.1"
+wasm-bindgen = { version = "0.2.108", optional = true }
+serde-wasm-bindgen = { version = "0.6.5", optional = true }
+tsify = { version = "0.5.6", features = ["js"], optional = true }
+miette = { version = "7.6.0", features = ["serde"] }
+
+[dev-dependencies]
+test-case = "3"
+
+[features]
+default = ["bincode", "clock"]
+clock = ["chrono/clock"]
+# Include examples in the build
+examples = []
+# for CLI tools
+cli = ["dep:clap", "dep:ron", "dep:arborium", "miette/fancy"]
+# for WASM bindings
+wasm = [
+  "dep:wasm-bindgen",
+  "dep:tsify",
+  "dep:serde-wasm-bindgen",
+]

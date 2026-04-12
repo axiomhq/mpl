@@ -45,6 +45,6 @@
     "@codemirror/lint": "^6",
     "@codemirror/state": "^6",
     "@codemirror/view": "^6",
-    "@axiomhq/mpl": "*"
+    "@axiomhq/mpl-lang": "*"
   }
 }

@@ -1,49 +1,27 @@
 // Dataset schema, loading and validation.
 
 import * as v from "valibot";
+import rawDatasets from "./datasets.json";
 
-export const SeriesSchema = v.object({
+const SeriesSchema = v.object({
   name: v.string(),
   tags: v.record(v.string(), v.string()),
   timestamps: v.array(v.number()),
   values: v.array(v.number()),
 });
 
-export type Series = v.InferOutput<typeof SeriesSchema>;
+const MetricSchema = v.object({
+  name: v.string(),
+  series: v.array(SeriesSchema),
+});
 
-const DatasetsSchema = v.record(v.string(), v.record(v.string(), v.array(SeriesSchema)));
+const DatasetSchema = v.object({
+  name: v.string(),
+  metrics: v.array(MetricSchema),
+});
 
-type Datasets = v.InferOutput<typeof DatasetsSchema>;
-type DatasetIndex = Record<string, Record<string, string[]>>;
+const DatasetsSchema = v.array(DatasetSchema);
 
-let db: Datasets = {};
+export type Datasets = v.InferOutput<typeof DatasetsSchema>;
 
-export async function initDatasets(): Promise<void> {
-  const resp = await fetch("/datasets.json");
-  if (!resp.ok) return;
-  const data = await resp.json();
-  initDatasetsSync(data);
-}
-
-export function initDatasetsSync(data: unknown): void {
-  db = v.parse(DatasetsSchema, data);
-}
-
-export function loadDatasetIndex(): DatasetIndex {
-  const index: DatasetIndex = {};
-  for (const [dataset, metrics] of Object.entries(db)) {
-    index[dataset] = {};
-    for (const [metric, series] of Object.entries(metrics)) {
-      const tags = new Set<string>();
-      for (const s of series) {
-        for (const k of Object.keys(s.tags)) tags.add(k);
-      }
-      index[dataset][metric] = [...tags].sort();
-    }
-  }
-  return index;
-}
-
-export function loadSeries(dataset: string, metric: string): Series[] {
-  return db[dataset]?.[metric] ?? [];
-}
+export const datasets: Datasets = v.parse(DatasetsSchema, rawDatasets);

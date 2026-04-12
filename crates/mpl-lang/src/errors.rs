@@ -385,7 +385,8 @@ fn join_with_or(items: &[&str]) -> String {
 }
 
 /// Convert a Pest `Pair` span to a miette `SourceSpan`
-pub(crate) fn pair_to_source_span(pair: &Pair<Rule>) -> SourceSpan {
+#[must_use]
+pub fn pair_to_source_span(pair: &Pair<Rule>) -> SourceSpan {
     let span = pair.as_span();
     let start = span.start();
     let len = span.end() - start;

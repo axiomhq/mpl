@@ -137,4 +137,5 @@ pub fn tokenize(query: &str) -> JsValue {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_fun_call)]
 mod tests;

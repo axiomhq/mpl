@@ -1,6 +1,6 @@
 import { ViewPlugin, ViewUpdate, Decoration, DecorationSet, EditorView } from "@codemirror/view";
 import { RangeSetBuilder } from "@codemirror/state";
-import * as mpl from "@axiomhq/mpl";
+import * as mpl from "@axiomhq/mpl-lang";
 
 type TokenType = "variable" | "string" | "number" | "bool" | "regexp" | "operator" | "punctuation" | "keyword" | "type";
 

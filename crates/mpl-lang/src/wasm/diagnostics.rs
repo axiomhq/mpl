@@ -332,4 +332,5 @@ fn suggest_function_replacements(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::doc_markdown)]
 mod tests;

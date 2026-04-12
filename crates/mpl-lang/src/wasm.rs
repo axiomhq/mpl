@@ -5,8 +5,6 @@ use wasm_bindgen::prelude::*;
 mod completions;
 mod diagnostics;
 mod lints;
-#[cfg(feature = "playground")]
-pub mod steps;
 mod tokenize;
 mod visit;
 

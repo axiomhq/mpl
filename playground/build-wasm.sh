@@ -3,14 +3,14 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MPL_LIB_DIR="$SCRIPT_DIR/.."
-DEST_PKG_DIR="$SCRIPT_DIR/mpl-lang"
+DEST_PKG_DIR="$SCRIPT_DIR/wasm"
 
 cd "$MPL_LIB_DIR"
 # --no-opt: wasm-pack's bundled wasm-opt (v117) crashes on this binary, and even
 # system wasm-opt (v126) increases gzipped size despite shrinking raw size, because
 # our wasm-release profile (LTO + opt-level=z) already produces compression-friendly output.
-wasm-pack build crates/mpl-lang --scope axiomhq --target web --profile wasm-release --no-opt --no-default-features --features wasm
+wasm-pack build crates/mpl-playground --scope axiomhq --target web --profile wasm-release --no-opt
 mkdir -p "$DEST_PKG_DIR"
-cp -r crates/mpl-lang/pkg/* "$DEST_PKG_DIR/"
+cp -r crates/mpl-playground/pkg/* "$DEST_PKG_DIR/"
 
-echo "MPL WASM package built successfully"
+echo "MPL Playground WASM package built successfully"

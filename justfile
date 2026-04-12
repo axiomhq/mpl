@@ -13,8 +13,8 @@ wasm-test:
     # --no-opt: wasm-pack's bundled wasm-opt (v117) crashes on this binary, and even
     # system wasm-opt (v126) increases gzipped size despite shrinking raw size, because
     # our wasm-release profile (LTO + opt-level=z) already produces compression-friendly output.
-    wasm-pack build --target web --profile wasm-release --no-opt --no-default-features --features wasm
-    npx tsc --noEmit -t esnext mpl.d.ts
+    wasm-pack build crates/mpl-lang --target web --profile wasm-release --no-opt --no-default-features --features wasm
+    npx tsc --noEmit -t esnext crates/mpl-lang/pkg/mpl_lang.d.ts
 
 # launch the MPL Playground in a dev server, requires wasm-pack and node/npm installed
 playground:

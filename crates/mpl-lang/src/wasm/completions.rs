@@ -1584,4 +1584,9 @@ fn suggest_for_source(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::redundant_closure_for_method_calls,
+    clippy::doc_markdown,
+    clippy::doc_link_with_quotes
+)]
 mod tests;

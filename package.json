@@ -5,15 +5,14 @@
   "type": "module",
   "workspaces": [
     "playground",
-    "packages/mpl",
+    "packages/mpl-lang",
     "packages/mpl-codemirror"
   ],
   "scripts": {
     "dev": "npm run dev -w playground",
     "build:mpl": "./packages/build-mpl-wasm.sh",
     "build:codemirror": "npm run build -w @axiomhq/mpl-codemirror",
-    "build:web": "npm run build -w playground",
-    "build": "npm run build:mpl && npm run build:codemirror && npm run build:web",
-    "clean": "rm -rf node_modules playground/node_modules packages/mpl-codemirror/node_modules packages/mpl-codemirror/dist pkg packages/mpl"
+    "build:playground": "npm run build -w playground",
+    "clean": "rm -rf node_modules playground/node_modules playground/wasm packages/mpl-codemirror/node_modules packages/mpl-codemirror/dist packages/mpl-lang"
   }
 }

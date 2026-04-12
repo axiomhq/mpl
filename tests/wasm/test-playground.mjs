@@ -19,15 +19,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../..");
 const pkgDir = process.argv[2]
   ? resolve(process.argv[2])
-  : join(repoRoot, "pkg");
+  : join(repoRoot, "crates/mpl-playground/pkg");
 
-const mpl = await import(join(pkgDir, "mpl_lang.js"));
-const wasmBytes = readFileSync(join(pkgDir, "mpl_lang_bg.wasm"));
+const mpl = await import(join(pkgDir, "mpl_playground.js"));
+const wasmBytes = readFileSync(join(pkgDir, "mpl_playground_bg.wasm"));
 mpl.initSync({ module: wasmBytes });
 
 if (typeof mpl.parse_steps !== "function") {
   console.error(
-    "ERROR: parse_steps() not exported — was the build run with --features playground?"
+    "ERROR: parse_steps() not exported — was mpl-playground built?"
   );
   process.exit(1);
 }
@@ -58,14 +58,14 @@ function mplFiles(dir) {
 
 // --- examples: must parse (step errors only for not_supported/not_implemented) -
 
-const examplesDir = join(repoRoot, "tests/examples");
+const examplesDir = join(repoRoot, "crates/mpl-lang/tests/examples");
 console.log(`\nExamples (must parse) — ${examplesDir}`);
 
 for (const { name, path } of mplFiles(examplesDir)) {
   const content = readFileSync(path, "utf8");
   try {
-    const result = mpl.parse_steps(content);
-    const errors = result.steps
+    const steps = mpl.parse_steps(content);
+    const errors = steps
       .filter((s) => s.node?.Error)
       .map((s) => s.node.Error);
 
@@ -87,14 +87,14 @@ for (const { name, path } of mplFiles(examplesDir)) {
 
 // --- errors: must throw a hard parse error ----------------------------------
 
-const errorsDir = join(repoRoot, "tests/errors");
+const errorsDir = join(repoRoot, "crates/mpl-lang/tests/errors");
 console.log(`\nErrors (must throw) — ${errorsDir}`);
 
 for (const { name, path } of mplFiles(errorsDir)) {
   const content = readFileSync(path, "utf8");
   try {
-    const result = mpl.parse_steps(content);
-    const hasStepError = result.steps.some((s) => s.node?.Error);
+    const steps = mpl.parse_steps(content);
+    const hasStepError = steps.some((s) => s.node?.Error);
     if (hasStepError) {
       console.log(`  PASS  ${name}  (step error)`);
       passed++;

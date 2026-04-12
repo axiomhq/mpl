@@ -46,19 +46,22 @@ jobs:
       - name: Install wasm-pack
         run: cargo install wasm-pack --locked
       - name: Build WASM
-        run: wasm-pack build --out-name mpl --out-dir packages/mpl --scope axiomhq --target web --profile wasm-release --no-opt --features wasm 
+        run: |
+          wasm-pack build crates/mpl-lang --out-name mpl --scope axiomhq --target web --profile wasm-release --no-opt --no-default-features --features wasm
+          mkdir -p packages/mpl
+          cp -r crates/mpl-lang/pkg/* packages/mpl-lang/
       - name: Update mpl package.json
         run: |
           set -euo pipefail
 
           jq '
-            .name = "@axiomhq/mpl"
+            .name = "@axiomhq/mpl-lang"
             | .files = ["mpl.js", "mpl.d.ts", "mpl_bg.wasm", "mpl_bg.wasm.d.ts", "LICENSE-MIT", "LICENSE-APACHE"]
             | .repository.url = "git+https://github.com/axiomhq/mpl.git"
-          ' packages/mpl/package.json > packages/mpl/package.json.tmp
-          mv packages/mpl/package.json.tmp packages/mpl/package.json
+          ' packages/mpl-lang/package.json > packages/mpl-lang/package.json.tmp
+          mv packages/mpl-lang/package.json.tmp packages/mpl-lang/package.json
       - name: Type-check WASM bindings
-        working-directory: packages/mpl
+        working-directory: packages/mpl-lang
         run: |
           npm install --no-save typescript
           npx tsc --noEmit -t esnext mpl.d.ts
@@ -66,7 +69,7 @@ jobs:
         working-directory: packages/mpl-codemirror
         run: npm install && npm run build
       - name: Publish mpl to npmjs.org
-        working-directory: packages/mpl
+        working-directory: packages/mpl-lang
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_AUTOMATION_TOKEN }}
         run: npm publish --access public
@@ -81,7 +84,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo publish
+      - run: cargo publish -p mpl-lang
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 

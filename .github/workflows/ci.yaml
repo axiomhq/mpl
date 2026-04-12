@@ -40,7 +40,7 @@ jobs:
         env:
           RUSTFLAGS: -D warnings
         run: |
-          cargo llvm-cov --locked --no-report nextest --profile ci
+          cargo llvm-cov --locked --no-report nextest --profile ci --workspace --all-features
           cargo llvm-cov report --locked --lcov --output-path lcov.txt
       - name: Upload coverage to Codecov
         if: github.event.pull_request.user.login != 'dependabot[bot]'
@@ -53,27 +53,6 @@ jobs:
           attempt_delay: 10000
           with: |
             files: ./lcov.txt
-            flags: unittests
-            fail_ci_if_error: ${{ github.event_name == 'pull_request' }}
-            verbose: true
-      - name: Generate code coverage (wasm)
-        env:
-          RUSTFLAGS: -D warnings
-        run: |
-          cargo llvm-cov --locked --no-report nextest --profile ci --no-default-features --features playground
-          cargo llvm-cov report --locked --lcov --output-path lcov-wasm.txt
-      - name: Upload coverage to Codecov
-        if: github.event.pull_request.user.login != 'dependabot[bot]'
-        uses: Wandalen/wretry.action@v3
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-        with:
-          action: codecov/codecov-action@v4
-          attempt_limit: 6
-          attempt_delay: 10000
-          with: |
-            files: ./lcov-wasm.txt
-            flags: wasm
             fail_ci_if_error: ${{ github.event_name == 'pull_request' }}
             verbose: true
   test-typescript:
@@ -97,14 +76,14 @@ jobs:
       - name: Build wasm
         # --no-opt: wasm-pack's bundled wasm-opt crashes, and even system wasm-opt
         # increases gzipped size (our wasm-release profile already optimizes well).
-        run: wasm-pack build --scope axiomhq --target web --profile wasm-release --no-opt --no-default-features --features wasm
+        run: wasm-pack build crates/mpl-lang --scope axiomhq --target web --profile wasm-release --no-opt --no-default-features --features wasm
       - run: npm install typescript
-        working-directory: pkg
+        working-directory: crates/mpl-lang/pkg
       - name: Check TypeScript types
         run: npx tsc --noEmit -t esnext mpl_lang.d.ts
-        working-directory: pkg
+        working-directory: crates/mpl-lang/pkg
       - name: Test wasm build against sample queries
-        run: node tests/wasm/test-wasm.mjs
+        run: node tests/wasm/test-wasm.mjs crates/mpl-lang/pkg
   build-wasm-playground:
     runs-on: ubuntu-latest
     steps:
@@ -117,11 +96,11 @@ jobs:
       - name: Build wasm (playground)
         # --no-opt: wasm-pack's bundled wasm-opt crashes, and even system wasm-opt
         # increases gzipped size (our wasm-release profile already optimizes well).
-        run: wasm-pack build --scope axiomhq --target web --profile wasm-release --no-opt --no-default-features --features playground
+        run: wasm-pack build crates/mpl-playground --scope axiomhq --target web --profile wasm-release --no-opt
       - run: npm install typescript
-        working-directory: pkg
+        working-directory: crates/mpl-playground/pkg
       - name: Check TypeScript types (playground)
-        run: npx tsc --noEmit -t esnext mpl_lang.d.ts
-        working-directory: pkg
+        run: npx tsc --noEmit -t esnext mpl_playground.d.ts
+        working-directory: crates/mpl-playground/pkg
       - name: Test playground build against sample queries
-        run: node tests/wasm/test-playground.mjs
+        run: node tests/wasm/test-playground.mjs crates/mpl-playground/pkg

@@ -2,6 +2,7 @@
 proptest-regressions
 temp
 .DS_Store
+.claude/
 node_modules/
 test-results/
 packages/mpl/

@@ -2,12 +2,15 @@
 
 use std::fmt::{self, Display};
 
+use derive_more::Deref;
+
 use miette::SourceSpan;
 use pest::Parser as _;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use tsify::Tsify;
 use wasm_bindgen::prelude::wasm_bindgen;
 
-use crate::{
+use mpl_lang::{
     errors::pair_to_source_span,
     linker::ComputeFunction,
     parser::{self, MPLParser, Parser, Rule},
@@ -16,8 +19,8 @@ use crate::{
 };
 
 /// A single pipeline step.
-#[derive(Debug, Clone, Serialize, tsify::Tsify)]
-#[tsify(into_wasm_abi)]
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct PipeStep {
     /// Byte range in the source text.
     #[tsify(type = "{ offset: number, length: number }")]
@@ -29,8 +32,8 @@ pub struct PipeStep {
 }
 
 /// The AST node for a parsed step.
-#[derive(Debug, Clone, Serialize, tsify::Tsify)]
-#[tsify(into_wasm_abi)]
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 pub enum StepNode {
     /// The data source.
     Source(Source),
@@ -84,16 +87,14 @@ impl Display for StepNode {
 }
 
 /// Result of step-based parsing.
-#[derive(Debug, Clone, Serialize, tsify::Tsify)]
-#[tsify(into_wasm_abi)]
-pub struct ParseStepsResult {
-    /// The pipeline steps.
-    pub steps: Vec<PipeStep>,
-}
+#[derive(Debug, Clone, Deref, Serialize, Deserialize, Tsify)]
+#[serde(transparent)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct ParseSteps(pub Vec<PipeStep>);
 
 /// Parses an MPL query into pipeline steps with error recovery.
 #[wasm_bindgen]
-pub fn parse_steps(query: &str) -> Result<ParseStepsResult, String> {
+pub fn parse_steps(query: &str) -> Result<ParseSteps, String> {
     let pairs = MPLParser::parse(Rule::file, query).map_err(|e| e.to_string())?;
     let parser = Parser::default();
 
@@ -134,7 +135,7 @@ pub fn parse_steps(query: &str) -> Result<ParseStepsResult, String> {
         }
     }
 
-    Ok(ParseStepsResult { steps })
+    Ok(ParseSteps(steps))
 }
 
 fn parse_simple_steps(
@@ -343,283 +344,5 @@ fn extract_span_text(source: &str, span: SourceSpan) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn simple_query() {
-        let steps = parse_steps("test:metric").unwrap().steps;
-        assert_eq!(steps.len(), 1);
-        assert!(matches!(steps[0].node, StepNode::Source(_)));
-        assert_eq!(steps[0].canonical, "`test`:`metric`");
-    }
-
-    #[test]
-    fn filter_and_aggregate() {
-        let steps = parse_steps("test:metric\n| where code >= 500\n| group using sum")
-            .unwrap()
-            .steps;
-        assert_eq!(steps.len(), 3);
-        assert!(matches!(steps[0].node, StepNode::Source(_)));
-        assert!(matches!(steps[1].node, StepNode::Filter(_)));
-        assert!(matches!(steps[2].node, StepNode::Aggregate(_)));
-    }
-
-    #[test]
-    fn unknown_function_produces_error_step() {
-        let steps = parse_steps("test:metric\n| align to 5m using unknown_fn\n| group using sum")
-            .unwrap()
-            .steps;
-        assert_eq!(steps.len(), 3);
-        assert!(matches!(steps[0].node, StepNode::Source(_)));
-        assert!(matches!(steps[1].node, StepNode::Error(_)));
-        assert!(matches!(steps[2].node, StepNode::Aggregate(_)));
-    }
-
-    #[test]
-    fn unsupported_replace_produces_error_step() {
-        let steps = parse_steps("test:metric\n| replace x = y ~ #s/foo/bar/\n| group using sum")
-            .unwrap()
-            .steps;
-        assert!(
-            steps
-                .iter()
-                .any(|s| matches!(&s.node, StepNode::Error(msg) if msg.contains("not supported")))
-        );
-        assert!(
-            steps
-                .iter()
-                .any(|s| matches!(s.node, StepNode::Aggregate(_)))
-        );
-    }
-
-    #[test]
-    fn unsupported_join_produces_error_step() {
-        let steps = parse_steps("test:metric\n| join x from test:other by y\n| group using sum")
-            .unwrap()
-            .steps;
-        assert!(
-            steps
-                .iter()
-                .any(|s| matches!(&s.node, StepNode::Error(msg) if msg.contains("not supported")))
-        );
-    }
-
-    #[test]
-    fn syntax_error_throws() {
-        assert!(parse_steps("test:metric\n| blahblah").is_err());
-    }
-
-    #[test]
-    fn compute_query() {
-        let steps = parse_steps("(\n  test:a,\n  test:b\n)\n| compute ratio using /")
-            .unwrap()
-            .steps;
-        assert_eq!(steps.len(), 1);
-        assert!(matches!(steps[0].node, StepNode::Compute { .. }));
-    }
-
-    #[test]
-    fn compute_with_post_pipes() {
-        let steps =
-            parse_steps("(\n  test:a,\n  test:b\n)\n| compute ratio using /\n| group using sum")
-                .unwrap()
-                .steps;
-        assert_eq!(steps.len(), 2);
-        assert!(matches!(steps[0].node, StepNode::Compute { .. }));
-        assert!(matches!(steps[1].node, StepNode::Aggregate(_)));
-    }
-
-    #[test]
-    fn sample_step() {
-        let steps = parse_steps("test:metric\n| sample 0.5\n| group using sum")
-            .unwrap()
-            .steps;
-        assert_eq!(steps.len(), 3);
-        assert!(matches!(steps[1].node, StepNode::Sample(v) if (v - 0.5).abs() < f64::EPSILON));
-    }
-
-    #[test]
-    fn directives_and_params() {
-        let steps = parse_steps(
-            "param $ds: dataset;\nparam $dur: duration;\n$ds:metric\n| align to $dur using avg",
-        )
-        .unwrap()
-        .steps;
-        assert_eq!(steps.len(), 2);
-        assert!(matches!(steps[0].node, StepNode::Source(_)));
-    }
-
-    #[test]
-    fn canonical_has_no_comments() {
-        let steps = parse_steps("// comment\ntest:metric\n// another\n| group using sum")
-            .unwrap()
-            .steps;
-        assert!(!steps[0].canonical.contains("//"));
-        assert!(!steps[1].canonical.contains("//"));
-    }
-
-    #[test]
-    fn source_with_as() {
-        let steps = parse_steps("`com.app.test`:ingest_pressure as cake")
-            .unwrap()
-            .steps;
-        assert_eq!(steps.len(), 2);
-        assert!(matches!(steps[0].node, StepNode::Source(_)));
-        assert!(matches!(
-            steps[1].node,
-            StepNode::Aggregate(Aggregate::As(_))
-        ));
-    }
-
-    #[test]
-    fn map_operations() {
-        let s = parse_steps("test:metric\n| map rate").unwrap().steps;
-        assert!(matches!(s[1].node, StepNode::Aggregate(_)));
-
-        let s = parse_steps("test:metric\n| map * 5").unwrap().steps;
-        assert!(matches!(s[1].node, StepNode::Aggregate(_)));
-
-        let s = parse_steps("test:metric\n| map is::lt(100)").unwrap().steps;
-        assert!(matches!(s[1].node, StepNode::Aggregate(_)));
-    }
-
-    #[test]
-    fn align_prom_rate() {
-        let steps = parse_steps("test:metric\n| align to 5m using prom::rate")
-            .unwrap()
-            .steps;
-        assert!(matches!(steps[1].node, StepNode::Aggregate(_)));
-    }
-
-    #[test]
-    fn bucket_histogram() {
-        let steps = parse_steps(
-            "test:metric\n| bucket by method, path to 5m using interpolate_delta_histogram(0.90, max, 0.99)",
-        )
-        .unwrap()
-        .steps;
-        assert!(matches!(steps[1].node, StepNode::Aggregate(_)));
-    }
-
-    #[test]
-    fn set_directives() {
-        let steps = parse_steps("set strict;\nset x = 42;\ntest:metric")
-            .unwrap()
-            .steps;
-        assert_eq!(steps.len(), 1);
-        assert!(matches!(steps[0].node, StepNode::Source(_)));
-    }
-
-    #[test]
-    fn spans_are_correct() {
-        let input = "test:metric\n| where code >= 500\n| group using sum";
-        let steps = parse_steps(input).unwrap().steps;
-        for step in &steps {
-            let end = step.span.offset() + step.span.len();
-            assert!(end <= input.len());
-        }
-    }
-
-    // Display impls (lines 61-65)
-    #[test]
-    fn display_source() {
-        let steps = parse_steps("test:metric").unwrap().steps;
-        assert_eq!(format!("{}", steps[0].node), "`test`:`metric`");
-    }
-
-    #[test]
-    fn display_filter() {
-        let steps = parse_steps("test:metric\n| where code >= 500")
-            .unwrap()
-            .steps;
-        let s = format!("{}", steps[1].node);
-        assert!(s.starts_with("| where"));
-    }
-
-    #[test]
-    fn display_aggregate() {
-        let steps = parse_steps("test:metric\n| group using sum").unwrap().steps;
-        let s = format!("{}", steps[1].node);
-        assert!(s.contains("group"));
-    }
-
-    #[test]
-    fn display_sample() {
-        let node = StepNode::Sample(0.5);
-        assert_eq!(format!("{node}"), "| sample 0.5");
-    }
-
-    #[test]
-    fn display_error() {
-        let node = StepNode::Error("bad".into());
-        assert_eq!(format!("{node}"), "/* error: bad */");
-    }
-
-    #[test]
-    fn display_compute() {
-        let steps = parse_steps("(\n  test:a,\n  test:b\n)\n| compute ratio using /")
-            .unwrap()
-            .steps;
-        let s = format!("{}", steps[0].node);
-        assert!(s.contains("compute"));
-        assert!(s.contains("ratio"));
-    }
-
-    // Source parse error (lines 168-174) — unresolved param in source
-    #[test]
-    fn source_with_unresolved_param_produces_error() {
-        let steps = parse_steps("$missing:metric").unwrap().steps;
-        assert!(steps.iter().any(|s| matches!(&s.node, StepNode::Error(_))));
-    }
-
-    // Filter parse error (lines 206-212) — unresolved param in filter
-    #[test]
-    fn filter_with_unresolved_param_produces_error() {
-        let steps = parse_steps("test:metric\n| where x == $missing")
-            .unwrap()
-            .steps;
-        assert!(steps.iter().any(|s| matches!(&s.node, StepNode::Error(_))));
-    }
-
-    // Nested compute — left sub-query is compute (lines 252-262)
-    #[test]
-    fn nested_compute_left() {
-        let input = "(\n  (\n    test:a,\n    test:b\n  )\n  | compute inner using /,\n  test:c\n)\n| compute outer using *";
-        let steps = parse_steps(input).unwrap().steps;
-        assert_eq!(steps.len(), 1);
-        if let StepNode::Compute { left, .. } = &steps[0].node {
-            assert_eq!(left.len(), 1);
-            assert!(matches!(left[0].node, StepNode::Compute { .. }));
-        } else {
-            panic!("expected compute");
-        }
-    }
-
-    // Nested compute — right sub-query is compute (lines 272-282)
-    #[test]
-    fn nested_compute_right() {
-        let input = "(\n  test:a,\n  (\n    test:b,\n    test:c\n  )\n  | compute inner using /\n)\n| compute outer using *";
-        let steps = parse_steps(input).unwrap().steps;
-        assert_eq!(steps.len(), 1);
-        if let StepNode::Compute { right, .. } = &steps[0].node {
-            assert_eq!(right.len(), 1);
-            assert!(matches!(right[0].node, StepNode::Compute { .. }));
-        } else {
-            panic!("expected compute");
-        }
-    }
-
-    // Post-compute pipe error (lines 326-332)
-    #[test]
-    fn compute_with_post_pipe_error() {
-        let steps = parse_steps(
-            "(\n  test:a,\n  test:b\n)\n| compute ratio using /\n| align to 5m using unknown_fn",
-        )
-        .unwrap()
-        .steps;
-        assert_eq!(steps.len(), 2);
-        assert!(matches!(steps[0].node, StepNode::Compute { .. }));
-        assert!(matches!(steps[1].node, StepNode::Error(_)));
-    }
-}
+#[allow(clippy::unwrap_used)]
+mod tests;

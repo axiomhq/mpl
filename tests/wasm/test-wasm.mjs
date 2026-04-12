@@ -19,7 +19,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../..");
 const pkgDir = process.argv[2]
   ? resolve(process.argv[2])
-  : join(repoRoot, "pkg");
+  : join(repoRoot, "crates/mpl-lang/pkg");
 
 const mpl = await import(join(pkgDir, "mpl_lang.js"));
 const wasmBytes = readFileSync(join(pkgDir, "mpl_lang_bg.wasm"));
@@ -55,7 +55,7 @@ function mplFiles(dir) {
 
 // --- examples: must have no hard errors ------------------------------------
 
-const examplesDir = join(repoRoot, "tests/examples");
+const examplesDir = join(repoRoot, "crates/mpl-lang/tests/examples");
 console.log(`\nExamples (must parse) — ${examplesDir}`);
 
 for (const { name, path } of mplFiles(examplesDir)) {
@@ -79,7 +79,7 @@ for (const { name, path } of mplFiles(examplesDir)) {
 
 // --- errors: must have at least one error diagnostic -----------------------
 
-const errorsDir = join(repoRoot, "tests/errors");
+const errorsDir = join(repoRoot, "crates/mpl-lang/tests/errors");
 console.log(`\nErrors (must have errors) — ${errorsDir}`);
 
 for (const { name, path } of mplFiles(errorsDir)) {
