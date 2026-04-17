@@ -11,6 +11,10 @@ readme = "README.md"
 repository = "https://github.com/axiomhq/mpl"
 rust-version = "1.92.0"
 
+[workspace]
+members = ["extra/mpl-playground"]
+resolver = "3"
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 
@@ -69,5 +73,6 @@ wasm = [
   "dep:tsify",
   "dep:serde-wasm-bindgen",
 ]
+internals = []
 # for node or web-based compilers, eg. playground
 playground = ["wasm"]

@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 
-const examplesDir = path.resolve(import.meta.dirname, "../public/examples");
+const examplesDir = path.resolve(import.meta.dirname, "../examples");
 const examples = fs
   .readdirSync(examplesDir)
   .filter((f) => f.endsWith(".mpl"))

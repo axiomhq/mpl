@@ -9,6 +9,13 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(unused_assignments)] // We need this for the type error
 
+#[cfg(feature = "internals")]
+#[allow(
+    missing_docs,
+    reason = "pub items behind a private-by-default module; not part of the public API"
+)]
+pub mod parser;
+#[cfg(not(feature = "internals"))]
 mod parser;
 
 pub mod enc_regex;
