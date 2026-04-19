@@ -173,7 +173,7 @@ function createChart(container: HTMLElement, series: Series[], width: number): u
           stroke: dark ? "#888" : "#999",
           grid: { stroke: gridColor, width: 1 },
           ticks: { stroke: gridColor, width: 1 },
-          font: "10px system-ui, sans-serif",
+          font: "10px Ioskeley Mono, ui-monospace, monospace",
           size: 28,
         },
         { show: false, grid: { stroke: gridColor, width: 1 } },
