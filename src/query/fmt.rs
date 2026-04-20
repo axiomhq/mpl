@@ -218,7 +218,7 @@ impl Display for Aggregate {
                 } else {
                     write!(f, "group ")?;
                 }
-                write!(f, " using {function}",)
+                write!(f, " using {function}")
             }
             Aggregate::Bucket(BucketBy {
                 span: _,
