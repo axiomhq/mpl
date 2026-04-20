@@ -681,7 +681,7 @@ mod tests {
         let res = Resolution::secs(res)?;
         let align_up_to = Resolution::secs(align_up_to)?;
 
-        assert_eq!(expected, res.align_up_to(align_up_to), "{name}",);
+        assert_eq!(expected, res.align_up_to(align_up_to), "{name}");
         Ok(())
     }
 }
