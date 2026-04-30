@@ -168,13 +168,13 @@ dataset:metric
 #[test]
 fn parse_params() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-param $dataset: dataset;
-param $resolution: duration;
+param $dataset: Dataset;
+param $resolution: Duration;
 param $name: string;
 param $age: int;
 param $height: float;
 param $is_cool: bool;
-param $re: regex;
+param $re: Regex;
 
 $dataset:metric
 | filter name == $name
@@ -198,8 +198,8 @@ $dataset:metric
 #[test]
 fn parse_params_multi_define() {
     let s = r"
-param $dataset: dataset;
-param $dataset: duration;
+param $dataset: Dataset;
+param $dataset: Duration;
 
 $dataset:metric
 ";
@@ -227,7 +227,7 @@ fn parse_params_undefined() {
 #[test]
 fn parse_params_mismatched_type() {
     let s = r"
-param $dataset: duration;
+param $dataset: Duration;
 
 $dataset:metric
 ";
@@ -255,7 +255,7 @@ $dataset:metric
 #[test]
 fn parse_params_mismatched_type_value() {
     let s = r"
-param $value: dataset;
+param $value: Dataset;
 
 dataset:metric
 | where key == $value
@@ -292,7 +292,7 @@ dataset:metric
 #[test]
 fn parse_params_mismatched_type_duration() {
     let s = r"
-param $duration: dataset;
+param $duration: Dataset;
 
 dataset:metric
 | align to $duration using avg

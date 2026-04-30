@@ -23,6 +23,10 @@ const LINT_RULES: &[LintRule] = &[
         rule: Rule::escaped_ident,
         check: lint_unnecessary_escape,
     },
+    LintRule {
+        rule: Rule::param_native_type,
+        check: lint_lowercase_duration,
+    },
 ];
 
 #[allow(clippy::unnecessary_wraps)] // signature dictated by LintRule::check
@@ -50,6 +54,27 @@ fn is_plain_ident(s: &str) -> bool {
         _ => return false,
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Warns when the lowercase `duration` keyword is used as a param type.
+/// `Duration` (capitalised) is the canonical form; `duration` is a legacy alias
+/// kept in the grammar for backwards compatibility.
+fn lint_lowercase_duration(node: Node, source: &str) -> Option<DiagnosticItem> {
+    let text = &source[node.span.from..node.span.to];
+    if text != "duration" {
+        return None;
+    }
+    Some(DiagnosticItem {
+        span: node.span,
+        severity: Severity::Warning,
+        message: "`duration` is deprecated; use `Duration`".to_string(),
+        help: Some("Param types use PascalCase: `Duration`, `Dataset`, `Regex`".to_string()),
+        actions: vec![DiagnosticAction {
+            name: "Replace with `Duration`".to_string(),
+            span: node.span,
+            insert: "Duration".to_string(),
+        }],
+    })
 }
 
 fn lint_unnecessary_escape(node: Node, source: &str) -> Option<DiagnosticItem> {

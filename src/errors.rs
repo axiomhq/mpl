@@ -464,7 +464,9 @@ fn friendly_rule(rule: Rule) -> String {
         // Params
         Rule::param => "param".to_string(),
         Rule::param_ident => "param identifier".to_string(),
-        Rule::param_type => "param type".to_string(),
+        Rule::param_type => {
+            "param type (Duration, Dataset, Regex, string, int, float, bool)".to_string()
+        }
 
         // Funs
         Rule::func => "function".to_string(),

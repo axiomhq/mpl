@@ -16,6 +16,7 @@ use super::completions::{
 #[serde(rename_all = "lowercase")]
 pub(super) enum Severity {
     Error,
+    Warning,
     Info,
     Hint,
 }

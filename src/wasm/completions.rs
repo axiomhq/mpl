@@ -851,14 +851,15 @@ fn parse_param_decl(rest: &str) -> Option<ParamItem> {
     }
 
     let typ = match typ_str {
-        "dataset" => ParamType::Dataset,
-        "metric" => ParamType::Metric,
-        "duration" => ParamType::Duration,
+        "Dataset" => ParamType::Dataset,
+        "Metric" => ParamType::Metric,
+        // `duration` is a legacy lowercase alias; `Duration` is canonical.
+        "Duration" | "duration" => ParamType::Duration,
         "string" => ParamType::String,
         "int" => ParamType::Int,
         "float" => ParamType::Float,
         "bool" => ParamType::Bool,
-        "regex" => ParamType::Regex,
+        "Regex" => ParamType::Regex,
         _ => return None,
     };
 
@@ -1487,18 +1488,18 @@ fn is_preamble_position(text: &str) -> bool {
 
 const PARAM_TYPE_KEYWORDS: [KeywordItem; 8] = [
     KeywordItem {
-        label: "dataset",
-        apply: Some("dataset;\n"),
+        label: "Dataset",
+        apply: Some("Dataset;\n"),
         info: "Parameter type",
     },
     KeywordItem {
-        label: "metric",
-        apply: Some("metric;\n"),
+        label: "Metric",
+        apply: Some("Metric;\n"),
         info: "Parameter type",
     },
     KeywordItem {
-        label: "duration",
-        apply: Some("duration;\n"),
+        label: "Duration",
+        apply: Some("Duration;\n"),
         info: "Parameter type",
     },
     KeywordItem {
@@ -1522,8 +1523,8 @@ const PARAM_TYPE_KEYWORDS: [KeywordItem; 8] = [
         info: "Parameter type",
     },
     KeywordItem {
-        label: "regex",
-        apply: Some("regex;\n"),
+        label: "Regex",
+        apply: Some("Regex;\n"),
         info: "Parameter type",
     },
 ];

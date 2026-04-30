@@ -442,7 +442,7 @@ mod tests {
     #[test]
     fn directives_and_params() {
         let steps = parse_steps(
-            "param $ds: dataset;\nparam $dur: duration;\n$ds:metric\n| align to $dur using avg",
+            "param $ds: Dataset;\nparam $dur: Duration;\n$ds:metric\n| align to $dur using avg",
         )
         .unwrap()
         .steps;

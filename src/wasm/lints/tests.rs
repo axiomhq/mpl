@@ -97,6 +97,63 @@ fn unnecessary_escape_multiple() {
     assert_eq!(escape_hints.len(), 2, "should flag both escaped idents");
 }
 
+// ── lowercase duration hint ──────────────────────────────────────
+
+#[test]
+fn lowercase_duration_warns() {
+    let query = "param $t: duration;\nds:metric | align to $t over 5m using sum";
+    let items = detect_hints(query);
+    let duration_hints: Vec<_> = items
+        .iter()
+        .filter(|i| i.message.contains("Duration"))
+        .collect();
+    assert_eq!(duration_hints.len(), 1);
+    assert!(matches!(duration_hints[0].severity, Severity::Warning));
+    assert_eq!(duration_hints[0].actions.len(), 1);
+    assert_eq!(duration_hints[0].actions[0].insert, "Duration");
+    assert_eq!(
+        &query[duration_hints[0].span.from..duration_hints[0].span.to],
+        "duration"
+    );
+}
+
+#[test]
+fn uppercase_duration_no_hint() {
+    let query = "param $t: Duration;\nds:metric | align to $t over 5m using sum";
+    let items = detect_hints(query);
+    assert!(
+        !items.iter().any(|i| i.message.contains("Duration")),
+        "uppercase Duration should not produce a lint"
+    );
+}
+
+#[test]
+fn lowercase_duration_fix_span_correct() {
+    // Verify the action span covers exactly the `duration` token.
+    let query = "param $t: duration;\nds:metric | align to $t over 5m using sum";
+    let items = detect_hints(query);
+    let hint = items
+        .iter()
+        .find(|i| i.message.contains("Duration"))
+        .expect("expected a Duration hint");
+    let action = &hint.actions[0];
+    // The action span should replace the exact token.
+    assert_eq!(&query[action.span.from..action.span.to], "duration");
+    assert_eq!(action.insert, "Duration");
+}
+
+#[test]
+fn multiple_lowercase_duration_params() {
+    let query =
+        "param $t: duration;\nparam $u: duration;\n$dataset:metric | align to $t over $u using sum";
+    let items = detect_hints(query);
+    let duration_hints: Vec<_> = items
+        .iter()
+        .filter(|i| i.message.contains("Duration"))
+        .collect();
+    assert_eq!(duration_hints.len(), 2, "should warn for each occurrence");
+}
+
 // ── dataset given, no metric ─────────────────────────────────────
 
 #[test]

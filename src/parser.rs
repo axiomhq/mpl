@@ -463,9 +463,9 @@ fn parse_directive_value(source: Pair<Rule>) -> Result<DirectiveValue> {
 fn parse_param_native_type(source: &Pair<Rule>) -> Result<ParamType> {
     source.assert_type(Rule::param_native_type)?;
     match source.as_str() {
-        "dataset" => Ok(ParamType::Dataset),
-        "duration" => Ok(ParamType::Duration),
-        "regex" => Ok(ParamType::Regex),
+        "Dataset" => Ok(ParamType::Dataset),
+        "duration" | "Duration" => Ok(ParamType::Duration),
+        "Regex" => Ok(ParamType::Regex),
         _ => Err(ParseError::Unexpected {
             span: pair_to_source_span(source),
             rule: Rule::param_type,

@@ -1026,6 +1026,7 @@ fn unanchored_regexp() {
 
 #[test]
 fn extract_params_single() {
+    // `duration` is the legacy lowercase alias; scanner must accept it.
     let params = extract_declared_params("param $interval: duration;\nds:metric");
     assert_eq!(params.len(), 1);
     assert_eq!(params[0].label, "$interval");
@@ -1033,8 +1034,17 @@ fn extract_params_single() {
 }
 
 #[test]
+fn extract_params_single_uppercase() {
+    // `Duration` is the canonical PascalCase form.
+    let params = extract_declared_params("param $interval: Duration;\nds:metric");
+    assert_eq!(params.len(), 1);
+    assert_eq!(params[0].label, "$interval");
+    assert_eq!(params[0].typ, ParamType::Duration);
+}
+
+#[test]
 fn extract_params_multiple() {
-    let text = "param $ds: dataset;\nparam $str: string;\nparam $r: regex;\nds:metric";
+    let text = "param $ds: Dataset;\nparam $str: string;\nparam $r: Regex;\nds:metric";
     let params = extract_declared_params(text);
     assert_eq!(params.len(), 3);
     assert_eq!(params[0].label, "$ds");
@@ -1057,14 +1067,14 @@ fn extract_params_after_directives() {
 #[test]
 fn extract_params_all_types() {
     let text = "\
-param $a: dataset;\n\
-param $b: metric;\n\
-param $c: duration;\n\
+param $a: Dataset;\n\
+param $b: Metric;\n\
+param $c: Duration;\n\
 param $d: string;\n\
 param $e: int;\n\
 param $f: float;\n\
 param $g: bool;\n\
-param $h: regex;\n\
+param $h: Regex;\n\
 ds:metric";
     let params = extract_declared_params(text);
     assert_eq!(params.len(), 8);
@@ -1082,6 +1092,16 @@ ds:metric";
             ParamType::Regex,
         ]
     );
+}
+
+#[test]
+fn extract_params_legacy_lowercase_duration() {
+    // The grammar accepts `duration` (lowercase) as a legacy alias alongside
+    // canonical `Duration`. Both must round-trip through the scanner.
+    let text = "param $a: duration;\nparam $b: Duration;\nds:metric";
+    let params = extract_declared_params(text);
+    assert_eq!(params.len(), 2);
+    assert!(params.iter().all(|p| p.typ == ParamType::Duration));
 }
 
 #[test]
@@ -1249,20 +1269,20 @@ fn completions_at(input: &str) -> Option<CompletionResult> {
 #[test_case("`my-dataset`:met#"                          => Some("metric")           ; "backtick dataset partial metric")]
 #[test_case("`my-dataset`:`my-met#"                      => Some("metric")           ; "both backticked partial metric")]
 #[test_case("`my-dataset`:`my-metric` | #"               => Some("keywords")         ; "backtick pipe keywords")]
-#[test_case("param $dataset: dataset;\n#"                => None                     ; "no dataset after param decl")]
-#[test_case("param $ds: dataset;\nparam $m: metric;\n#"  => None                     ; "no dataset after multiple params")]
-#[test_case("set foo = bar;\nparam $ds: dataset;\n#"     => None                     ; "no dataset after directive and params")]
+#[test_case("param $dataset: Dataset;\n#"                => None                     ; "no dataset after param decl")]
+#[test_case("param $ds: Dataset;\nparam $m: Metric;\n#"  => None                     ; "no dataset after multiple params")]
+#[test_case("set foo = bar;\nparam $ds: Dataset;\n#"     => None                     ; "no dataset after directive and params")]
 #[test_case("ds:metric | bucket to 1m using histogram(#" => Some("keywords")         ; "bucket histogram open paren")]
 #[test_case("ds:metric | bucket to 1m using histogram(co#" => Some("keywords")       ; "bucket histogram partial")]
 #[test_case("ds:metric | bucket to 1m using histogram(count, #" => Some("keywords")  ; "bucket histogram after comma")]
 #[test_case("ds:metric | bucket to 1m using interpolate_delta_histogram(#" => Some("keywords") ; "bucket interpolate delta histogram")]
 #[test_case("ds:metric | bucket to 1m using histogram(count) | #" => Some("keywords"); "after bucket closed paren")]
-#[test_case("param $ds: dataset;\nlo#"                   => Some("dataset")          ; "plain text source with params")]
-#[test_case("param $m: metric;\nds:met#"                 => Some("metric")           ; "plain metric source with params")]
+#[test_case("param $ds: Dataset;\nlo#"                   => Some("dataset")          ; "plain text source with params")]
+#[test_case("param $m: Metric;\nds:met#"                 => Some("metric")           ; "plain metric source with params")]
 #[test_case("param $foo: string;\nparam $bar: int;\nds:metric | filter tag == $fo#" => Some("params") ; "partial param at filter value")]
-#[test_case("param $ds: dataset;\n$#"                    => Some("params")           ; "dollar at dataset position")]
-#[test_case("param $ds: dataset;\nparam $other: string;\n$d#" => Some("params")      ; "partial dollar at dataset position")]
-#[test_case("param $m: metric;\nds:$#"                   => Some("params")           ; "dollar at metric position")]
+#[test_case("param $ds: Dataset;\n$#"                    => Some("params")           ; "dollar at dataset position")]
+#[test_case("param $ds: Dataset;\nparam $other: string;\n$d#" => Some("params")      ; "partial dollar at dataset position")]
+#[test_case("param $m: Metric;\nds:$#"                   => Some("params")           ; "dollar at metric position")]
 #[test_case("param $w: duration;\nds:metric | align to #" => Some("params")          ; "align to with duration param")]
 #[test_case("param $w: duration;\nds:metric | align to 1m over #" => Some("params")  ; "align to over with duration param")]
 #[test_case("param $w: duration;\nds:metric | bucket to #" => Some("params")         ; "bucket to with duration param")]
@@ -1318,7 +1338,7 @@ fn test_completion_kind(input: &str) -> Option<&'static str> {
 #[test_case("( ds1:m1 , ds2:m2 ) | compute result using / | #", &["map", "align"]                  ; "compute tail has map and align")]
 #[test_case("`dev.metrics`:http_requests_total\n| align #", &["to"]                    ; "align initially suggests to")]
 #[test_case("`dev.metrics`:http_requests_total\n| align to 42s #", &["using"]          ; "align after to suggests using")]
-#[test_case("param $name: #", &["dataset", "metric", "duration", "string", "int", "float", "bool", "regex"] ; "all param types")]
+#[test_case("param $name: #", &["Dataset", "Metric", "Duration", "string", "int", "float", "bool", "Regex"] ; "all param types")]
 #[test_case("`my-dataset`:`my-metric` | #", &["sample", "where", "map"]                           ; "backtick pipe keywords")]
 // ── mid-query cursor ────────────────────────────────────────────
 #[test_case("ds:metric | wh#ere tag == \"x\"",   &["where"]                                       ; "mid keyword contains where")]
@@ -1348,7 +1368,7 @@ fn test_completion_labels_contain(input: &str, expected: &[&str]) {
 #[test_case("ds:metric | group by a, b #", &["by"]                                    ; "group by bare tag excludes by")]
 // ── mid-query cursor ────────────────────────────────────────────
 #[test_case("ds:metric | bucket to 1m using interpolate_cumulative_histogram(ra#te, count)", &["count"] ; "mid bucket first arg excludes specs")]
-#[test_case("ds:metric | where tag is #",                  &["dataset", "metric", "duration", "regex"] ; "is excludes non-tag types")]
+#[test_case("ds:metric | where tag is #",                  &["Dataset", "metric", "Duration", "regex"] ; "is excludes non-tag types")]
 fn test_completion_labels_exclude(input: &str, excluded: &[&str]) {
     let r = completions_at(input).expect("should produce completions");
     let labels = r.option_labels();
@@ -1367,7 +1387,7 @@ fn test_completion_labels_exclude(input: &str, excluded: &[&str]) {
 #[test_case("( ds1:m1 , ds2:m2 ) | compute result #", &["using"]  ; "compute name only using")]
 #[test_case("ds:metric | align to 42s over 1h #",   &["using"]    ; "align after to over only using")]
 #[test_case("ds:metric | bucket to 1m using histogram(co#", &["count"] ; "histogram partial to count")]
-#[test_case("param $name: du#",                     &["duration"] ; "param type du to duration")]
+#[test_case("param $name: du#",                     &["Duration"] ; "param type du to duration")]
 fn test_completion_labels_exact(input: &str, expected: &[&str]) {
     let r = completions_at(input).expect("should produce completions");
     let labels = r.option_labels();
@@ -1420,22 +1440,22 @@ fn test_completion_source_dataset(input: &str, expected: &str) {
 // ── param labels contain ────────────────────────────────────────
 
 #[test_case("param $s: string;\nparam $i: int;\nds:metric | where tag == #", &["$s", "$i"] ; "where value params")]
-#[test_case("param $r: regex;\nparam $s: string;\nds:metric | where tag == #", &["$r", "$s"]; "eq includes regex")]
-#[test_case("param $r: regex;\nds:metric | where tag != #", &["$r"]                         ; "neq includes regex")]
-#[test_case("param $r: regex;\nparam $i: int;\nds:metric | filter tag < #", &["$i"]          ; "lt includes int")]
-#[test_case("param $r: regex;\nparam $f: float;\nds:metric | filter tag >= #", &["$f"]       ; "gte includes float")]
-#[test_case("param $d: dataset;\nparam $m: metric;\nparam $s: string;\nds:metric | filter tag == #", &["$s"] ; "filter value includes string")]
+#[test_case("param $r: Regex;\nparam $s: string;\nds:metric | where tag == #", &["$r", "$s"]; "eq includes regex")]
+#[test_case("param $r: Regex;\nds:metric | where tag != #", &["$r"]                         ; "neq includes regex")]
+#[test_case("param $r: Regex;\nparam $i: int;\nds:metric | filter tag < #", &["$i"]          ; "lt includes int")]
+#[test_case("param $r: Regex;\nparam $f: float;\nds:metric | filter tag >= #", &["$f"]       ; "gte includes float")]
+#[test_case("param $d: Dataset;\nparam $m: Metric;\nparam $s: string;\nds:metric | filter tag == #", &["$s"] ; "filter value includes string")]
 #[test_case("param $dur: duration;\nparam $b: bool;\nds:metric | filter tag == #", &["$b"]   ; "filter value includes bool")]
 #[test_case("param $foo: string;\nparam $bar: int;\nds:metric | filter tag == $fo#", &["$foo"] ; "partial param filtered")]
 #[test_case("param $w: duration;\nds:metric | align to #", &["$w"]                           ; "align to duration")]
 #[test_case("param $w: duration;\nds:metric | align to 1m over #", &["$w"]                   ; "align over duration")]
 #[test_case("param $w: duration;\nds:metric | bucket to #", &["$w"]                          ; "bucket to duration")]
 #[test_case("param $s: string;\nparam $w: duration;\nds:metric | align to #", &["$w"]        ; "align to includes duration")]
-#[test_case("param $ds: dataset;\n$#", &["$ds"]                                              ; "source dataset param")]
-#[test_case("param $ds: dataset;\nparam $other: string;\n$d#", &["$ds"]                      ; "source dataset param partial")]
-#[test_case("param $s: string;\nparam $d: dataset;\n$#", &["$d"]                             ; "source dataset includes dataset")]
-#[test_case("param $m: metric;\nds:$#", &["$m"]                                              ; "source metric param")]
-#[test_case("param $s: string;\nparam $m: metric;\nds:$#", &["$m"]                           ; "source metric includes metric")]
+#[test_case("param $ds: Dataset;\n$#", &["$ds"]                                              ; "source dataset param")]
+#[test_case("param $ds: Dataset;\nparam $other: string;\n$d#", &["$ds"]                      ; "source dataset param partial")]
+#[test_case("param $s: string;\nparam $d: Dataset;\n$#", &["$d"]                             ; "source dataset includes dataset")]
+#[test_case("param $m: Metric;\nds:$#", &["$m"]                                              ; "source metric param")]
+#[test_case("param $s: string;\nparam $m: Metric;\nds:$#", &["$m"]                           ; "source metric includes metric")]
 // ── mid-query cursor ────────────────────────────────────────────
 #[test_case("param $str: string;\nds:metric | filter tag == $s#tr and other == 1", &["$str"] ; "mid param suffix ignored")]
 fn test_completion_params_contain(input: &str, expected: &[&str]) {
@@ -1449,16 +1469,16 @@ fn test_completion_params_contain(input: &str, expected: &[&str]) {
 
 // ── param labels exclude ────────────────────────────────────────
 
-#[test_case("param $r: regex;\nparam $i: int;\nds:metric | filter tag < #",   &["$r"]  ; "lt excludes regex")]
-#[test_case("param $r: regex;\nparam $f: float;\nds:metric | where tag >= #", &["$r"]  ; "gte excludes regex")]
-#[test_case("param $d: dataset;\nparam $s: string;\nds:metric | where tag == #", &["$d"] ; "filter excludes dataset")]
-#[test_case("param $d: dataset;\nparam $m: metric;\nparam $s: string;\nds:metric | filter tag == #", &["$d", "$m"] ; "filter excludes dataset and metric")]
+#[test_case("param $r: Regex;\nparam $i: int;\nds:metric | filter tag < #",   &["$r"]  ; "lt excludes regex")]
+#[test_case("param $r: Regex;\nparam $f: float;\nds:metric | where tag >= #", &["$r"]  ; "gte excludes regex")]
+#[test_case("param $d: Dataset;\nparam $s: string;\nds:metric | where tag == #", &["$d"] ; "filter excludes dataset")]
+#[test_case("param $d: Dataset;\nparam $m: Metric;\nparam $s: string;\nds:metric | filter tag == #", &["$d", "$m"] ; "filter excludes dataset and metric")]
 #[test_case("param $dur: duration;\nparam $b: bool;\nds:metric | filter tag == #", &["$dur"] ; "filter excludes duration")]
 #[test_case("param $foo: string;\nparam $bar: int;\nds:metric | filter tag == $fo#", &["$bar"] ; "partial param excludes non-matching")]
 #[test_case("param $s: string;\nparam $w: duration;\nds:metric | align to #", &["$s"]   ; "align excludes non-duration")]
-#[test_case("param $s: string;\nparam $d: dataset;\n$#", &["$s"]                        ; "source excludes non-dataset")]
-#[test_case("param $ds: dataset;\nparam $other: string;\n$d#", &["$other"]               ; "source partial excludes non-matching")]
-#[test_case("param $s: string;\nparam $m: metric;\nds:$#", &["$s"]                      ; "metric excludes non-metric")]
+#[test_case("param $s: string;\nparam $d: Dataset;\n$#", &["$s"]                        ; "source excludes non-dataset")]
+#[test_case("param $ds: Dataset;\nparam $other: string;\n$d#", &["$other"]               ; "source partial excludes non-matching")]
+#[test_case("param $s: string;\nparam $m: Metric;\nds:$#", &["$s"]                      ; "metric excludes non-metric")]
 fn test_completion_params_exclude(input: &str, excluded: &[&str]) {
     let r = completions_at(input).expect("should produce param completions");
     let labels = r.option_labels();

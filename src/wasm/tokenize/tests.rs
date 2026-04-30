@@ -314,7 +314,7 @@ fn param_ident_highlighted_as_variable() {
 #[test]
 fn param_type_all_variants_highlighted() {
     let types = [
-        "dataset", "duration", "string", "int", "float", "bool", "regex",
+        "Dataset", "Duration", "string", "int", "float", "bool", "Regex",
     ];
     for typ_name in types {
         let query = format!("param $x: {typ_name};\nds:metric");
@@ -334,7 +334,7 @@ fn param_type_all_variants_highlighted() {
 
 #[test]
 fn param_multiple_declarations() {
-    let query = "param $ds: dataset;\nparam $d: duration;\nds:metric";
+    let query = "param $ds: Dataset;\nparam $d: duration;\nds:metric";
     let tokens = collect_tokens(query).expect("should tokenize");
     let param_keywords: Vec<_> = tokens
         .iter()

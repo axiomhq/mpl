@@ -328,9 +328,9 @@ pub enum ParamType {
 impl std::fmt::Display for ParamType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParamType::Dataset => write!(f, "dataset"),
-            ParamType::Duration => write!(f, "duration"),
-            ParamType::Regex => write!(f, "regex"),
+            ParamType::Dataset => write!(f, "Dataset"),
+            ParamType::Duration => write!(f, "Duration"),
+            ParamType::Regex => write!(f, "Regex"),
             ParamType::Tag(t) => t.fmt(f),
         }
     }
