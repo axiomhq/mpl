@@ -107,7 +107,7 @@ pub struct Source {
     pub time: Option<TimeRange>,
 }
 
-///An error relkated to value parsing
+/// An error related to value parsing
 #[derive(Debug, thiserror::Error)]
 pub enum ValueError {
     /// Invalid float value
@@ -160,13 +160,38 @@ pub enum Filter {
     Or(Vec<Filter>),
     /// Logical NOT of the given filters
     Not(Box<Filter>),
-    /// Filter based on a filed
+    /// Filter based on a field
     Cmp {
         /// The field to filter on
         field: String,
-        /// The compaison to perform
+        /// The comparison to perform
         rhs: Cmp,
     },
+}
+
+/// Ifdef conditionally filters the series
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub enum FilterOrIfDef {
+    /// A plain filter
+    Filter(Filter),
+    /// ifdef based on a parameter declaration
+    Ifdef {
+        /// The name of the parameter
+        param: ParamDeclaration,
+        /// The filter
+        filter: Filter,
+    },
+}
+
+impl FilterOrIfDef {
+    #[cfg(test)]
+    pub(crate) fn filter(&self) -> &Filter {
+        match self {
+            FilterOrIfDef::Filter(filter) | FilterOrIfDef::Ifdef { filter, .. } => filter,
+        }
+    }
 }
 
 /// A Mapping function
@@ -312,10 +337,35 @@ impl DirectiveValue {
     }
 }
 
-/// Types for params.
+/// A parameter type, either Optional or Terminal.
 #[cfg_attr(feature = "wasm", tsify::declare)]
 #[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub enum ParamType {
+    /// A type that's defined and present `param p: int`
+    Terminal(TerminalParamType),
+    /// A type that may or may not be present `param p: Option<int>`
+    Optional(TerminalParamType),
+}
+
+impl ParamType {
+    fn is_optional(self) -> bool {
+        matches!(self, ParamType::Optional(_))
+    }
+}
+
+impl std::fmt::Display for ParamType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParamType::Terminal(t) => t.fmt(f),
+            ParamType::Optional(t) => write!(f, "Option<{t}>"),
+        }
+    }
+}
+
+/// Terminal Types for params.
+#[cfg_attr(feature = "wasm", tsify::declare)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub enum TerminalParamType {
     /// Duration (e.g. 25s)
     Duration,
     /// Dataset
@@ -325,13 +375,13 @@ pub enum ParamType {
     /// A tag value type
     Tag(TagType),
 }
-impl std::fmt::Display for ParamType {
+impl std::fmt::Display for TerminalParamType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParamType::Dataset => write!(f, "Dataset"),
-            ParamType::Duration => write!(f, "Duration"),
-            ParamType::Regex => write!(f, "Regex"),
-            ParamType::Tag(t) => t.fmt(f),
+            TerminalParamType::Dataset => write!(f, "Dataset"),
+            TerminalParamType::Duration => write!(f, "Duration"),
+            TerminalParamType::Regex => write!(f, "Regex"),
+            TerminalParamType::Tag(t) => t.fmt(f),
         }
     }
 }
@@ -349,8 +399,17 @@ pub enum TagType {
     Float,
     /// Bool
     Bool,
-    /// None / Null value
-    None,
+    /// Null value
+    Null,
+}
+
+#[test]
+fn test_renaming_none_to_null_has_no_bincode_side_effects() {
+    let enc = [4];
+    assert_eq!(
+        (TagType::Null, 1),
+        bincode::decode_from_slice(&enc, bincode::config::standard()).expect("it does ...")
+    );
 }
 
 impl std::fmt::Display for TagType {
@@ -363,7 +422,7 @@ impl std::fmt::Display for TagType {
                 TagType::Int => "int",
                 TagType::Float => "float",
                 TagType::Bool => "bool",
-                TagType::None => "null",
+                TagType::Null => "null",
             }
         )
     }
@@ -376,7 +435,7 @@ pub type Directives = HashMap<String, DirectiveValue>;
 /// A param.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-pub struct Param {
+pub struct ParamDeclaration {
     /// The location of the param
     #[cfg_attr(feature = "wasm", tsify(type = "{ offset: number, length: number }"))]
     pub span: SourceSpan,
@@ -384,6 +443,20 @@ pub struct Param {
     pub name: String,
     /// The type of the param
     pub typ: ParamType,
+}
+
+impl ParamDeclaration {
+    pub(crate) fn typ(&self) -> TerminalParamType {
+        match self.typ {
+            ParamType::Terminal(terminal_param_type) | ParamType::Optional(terminal_param_type) => {
+                terminal_param_type
+            }
+        }
+    }
+
+    pub(crate) fn is_optional(&self) -> bool {
+        self.typ.is_optional()
+    }
 }
 
 /// A param value.
@@ -408,15 +481,15 @@ pub enum ParamValue {
 impl ParamValue {
     /// Get the type of the param value.
     #[must_use]
-    pub fn typ(&self) -> ParamType {
+    pub fn typ(&self) -> TerminalParamType {
         match self {
-            ParamValue::Dataset(_) => ParamType::Dataset,
-            ParamValue::Duration(_) => ParamType::Duration,
-            ParamValue::Regex(_) => ParamType::Regex,
-            ParamValue::String(_) => ParamType::Tag(TagType::String),
-            ParamValue::Int(_) => ParamType::Tag(TagType::Int),
-            ParamValue::Float(_) => ParamType::Tag(TagType::Float),
-            ParamValue::Bool(_) => ParamType::Tag(TagType::Bool),
+            ParamValue::Dataset(_) => TerminalParamType::Dataset,
+            ParamValue::Duration(_) => TerminalParamType::Duration,
+            ParamValue::Regex(_) => TerminalParamType::Regex,
+            ParamValue::String(_) => TerminalParamType::Tag(TagType::String),
+            ParamValue::Int(_) => TerminalParamType::Tag(TagType::Int),
+            ParamValue::Float(_) => TerminalParamType::Tag(TagType::Float),
+            ParamValue::Bool(_) => TerminalParamType::Tag(TagType::Bool),
         }
     }
 }
@@ -461,9 +534,9 @@ pub enum ResolveError {
         /// Name of the param
         name: String,
         /// Type of the param
-        defined: ParamType,
+        defined: TerminalParamType,
         /// The type that is valid in the context it was used
-        expected: Vec<ParamType>,
+        expected: Vec<TerminalParamType>,
     },
     /// Shared string error
     #[error("Shared string error: {0}")]
@@ -643,7 +716,13 @@ impl ProvidedParams {
 
         let declared_param_names = mpl_params
             .iter()
-            .map(|p| p.name.as_str())
+            .filter_map(|p| {
+                if p.typ.is_optional() {
+                    None
+                } else {
+                    Some(p.name.as_str())
+                }
+            })
             .collect::<HashSet<&str>>();
         let declared_but_not_provided = declared_param_names
             .difference(&seen)
@@ -694,10 +773,10 @@ impl ProvidedParams {
                 name: param.name,
                 defined: val.typ(),
                 expected: vec![
-                    ParamType::Tag(TagType::String),
-                    ParamType::Tag(TagType::Int),
-                    ParamType::Tag(TagType::Float),
-                    ParamType::Tag(TagType::Bool),
+                    TerminalParamType::Tag(TagType::String),
+                    TerminalParamType::Tag(TagType::Int),
+                    TerminalParamType::Tag(TagType::Float),
+                    TerminalParamType::Tag(TagType::Bool),
                 ],
             }),
         }
@@ -716,7 +795,7 @@ impl ProvidedParams {
             val => Err(ResolveError::InvalidType {
                 name: param.name,
                 defined: val.typ(),
-                expected: vec![ParamType::Dataset],
+                expected: vec![TerminalParamType::Dataset],
             }),
         }
     }
@@ -737,7 +816,7 @@ impl ProvidedParams {
             val => Err(ResolveError::InvalidType {
                 name: param.name,
                 defined: val.typ(),
-                expected: vec![ParamType::Duration],
+                expected: vec![TerminalParamType::Duration],
             }),
         }
     }
@@ -758,15 +837,20 @@ impl ProvidedParams {
             val => Err(ResolveError::InvalidType {
                 name: param.name,
                 defined: val.typ(),
-                expected: vec![ParamType::Regex],
+                expected: vec![TerminalParamType::Regex],
             }),
         }
+    }
+    /// Checks if a param was provided
+    #[must_use]
+    pub fn contains(&self, param: &str) -> bool {
+        self.get_param(param).is_ok()
     }
 }
 
 /// Parameters that will be set externally.
 #[cfg_attr(feature = "wasm", tsify::declare)]
-pub type Params = Vec<Param>;
+pub type Params = Vec<ParamDeclaration>;
 
 /// A Query AST representing a query in the `MPL` language
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -778,7 +862,7 @@ pub enum Query {
         /// The source of the data
         source: Source,
         /// The filters to apply to the data
-        filters: Vec<Filter>,
+        filters: Vec<FilterOrIfDef>,
         /// The aggregates to apply to the data
         aggregates: Vec<Aggregate>,
         /// The directives

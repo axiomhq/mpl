@@ -38,7 +38,7 @@ pub use query::Query;
 pub use stdlib::STDLIB;
 
 use crate::{
-    query::{Cmp, ParamType, TagType},
+    query::{Cmp, Filter, ParamDeclaration, TagType, TerminalParamType},
     types::{Dataset, Parameterized},
     visitor::{QueryVisitor, QueryWalker, VisitRes},
 };
@@ -58,6 +58,11 @@ pub enum CompileError {
     #[error(transparent)]
     #[diagnostic(transparent)]
     Group(#[from] GroupError),
+
+    /// Option error
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Ifdef(#[from] IfdefError),
 }
 
 /// Parses and typechecks an MPL query into a Query object.
@@ -71,6 +76,9 @@ pub fn compile(query: &str) -> Result<Query, CompileError> {
     visitor.walk(&mut query)?;
     // stage 3: group check
     let mut visitor = GroupCheckVisitor::default();
+    visitor.walk(&mut query)?;
+
+    let mut visitor = OptionCheckVisitor::default();
     visitor.walk(&mut query)?;
 
     Ok(query)
@@ -91,6 +99,78 @@ pub enum GroupError {
         prev_span: Box<SourceSpan>,
     },
 }
+
+#[derive(Default)]
+struct OptionCheckVisitor {
+    ifdef_param: Option<ParamDeclaration>,
+}
+
+/// Ifdef error
+#[derive(Debug, thiserror::Error, Diagnostic)]
+pub enum IfdefError {
+    /// Usage of optional parameter outside of ifdef
+    #[error("{} is optional and used outside of ifdef", param.name)]
+    OptionalOutsideOfIfdef {
+        /// The source location
+        #[label("{}", param.name)]
+        span: SourceSpan,
+        /// The param declaration
+        param: ParamDeclaration,
+    },
+}
+
+impl QueryVisitor for OptionCheckVisitor {
+    type Error = IfdefError;
+    fn visit_ifdef(
+        &mut self,
+        param: &mut ParamDeclaration,
+        _filter: &mut Filter,
+    ) -> Result<VisitRes, Self::Error> {
+        self.ifdef_param = Some(param.clone());
+        Ok(VisitRes::Walk)
+    }
+    fn leave_ifdef(
+        &mut self,
+        _param: &mut ParamDeclaration,
+        _filter: &mut Filter,
+    ) -> Result<(), Self::Error> {
+        self.ifdef_param = None;
+        Ok(())
+    }
+    fn visit_parameterized_value(
+        &mut self,
+        value: &mut Parameterized<tags::TagValue>,
+    ) -> Result<VisitRes, Self::Error> {
+        if let Parameterized::Param { span, param } = value
+            && param.is_optional()
+            && Some(&*param) != self.ifdef_param.as_ref()
+        {
+            return Err(IfdefError::OptionalOutsideOfIfdef {
+                span: *span,
+                param: param.clone(),
+            });
+        }
+        Ok(VisitRes::Walk)
+    }
+    fn visit_parameterized_regex(
+        &mut self,
+        regex: &mut Parameterized<enc_regex::EncodableRegex>,
+    ) -> Result<VisitRes, Self::Error> {
+        if let Parameterized::Param { span, param } = regex
+            && param.is_optional()
+            && Some(&*param) != self.ifdef_param.as_ref()
+        {
+            return Err(IfdefError::OptionalOutsideOfIfdef {
+                span: *span,
+                param: param.clone(),
+            });
+        }
+        Ok(VisitRes::Walk)
+    }
+}
+
+impl QueryWalker for OptionCheckVisitor {}
+
 struct GroupCheckVisitor {
     groups: Option<HashSet<String>>,
     span: SourceSpan,
@@ -178,9 +258,9 @@ pub enum TypeError {
         /// The param name
         param_name: String,
         /// The expected type(s)
-        expected: Vec<ParamType>,
+        expected: Vec<TerminalParamType>,
         /// The actual type
-        actual: ParamType,
+        actual: TerminalParamType,
     },
 }
 
@@ -189,17 +269,17 @@ struct ParamTypecheckVisitor {}
 impl ParamTypecheckVisitor {
     fn assert_param_type<T>(
         value: &Parameterized<T>,
-        expected: Vec<ParamType>,
+        expected: Vec<TerminalParamType>,
     ) -> Result<(), TypeError> {
         if let Parameterized::Param { span, param } = value
-            && !expected.contains(&param.typ)
+            && !expected.contains(&param.typ())
         {
             return Err(TypeError::TypeMismatch {
                 use_span: *span,
                 declaration_span: param.span,
                 param_name: param.name.clone(),
                 expected,
-                actual: param.typ,
+                actual: param.typ(),
             });
         }
 
@@ -214,33 +294,35 @@ impl QueryVisitor for ParamTypecheckVisitor {
         &mut self,
         dataset: &mut Parameterized<Dataset>,
     ) -> Result<VisitRes, Self::Error> {
-        Self::assert_param_type(dataset, vec![ParamType::Dataset]).map(|()| VisitRes::Walk)
+        Self::assert_param_type(dataset, vec![TerminalParamType::Dataset]).map(|()| VisitRes::Walk)
     }
 
     fn visit_align(&mut self, align: &mut query::Align) -> Result<VisitRes, Self::Error> {
-        Self::assert_param_type(&align.time, vec![ParamType::Duration]).map(|()| VisitRes::Walk)
+        Self::assert_param_type(&align.time, vec![TerminalParamType::Duration])
+            .map(|()| VisitRes::Walk)
     }
 
     fn visit_bucket_by(
         &mut self,
         bucket_by: &mut query::BucketBy,
     ) -> Result<VisitRes, Self::Error> {
-        Self::assert_param_type(&bucket_by.time, vec![ParamType::Duration]).map(|()| VisitRes::Walk)
+        Self::assert_param_type(&bucket_by.time, vec![TerminalParamType::Duration])
+            .map(|()| VisitRes::Walk)
     }
 
     fn visit_cmp(&mut self, _field: &mut String, cmp: &mut Cmp) -> Result<VisitRes, Self::Error> {
         let tag_value_param_types = vec![
-            ParamType::Tag(TagType::String),
-            ParamType::Tag(TagType::Int),
-            ParamType::Tag(TagType::Float),
-            ParamType::Tag(TagType::Bool),
+            TerminalParamType::Tag(TagType::String),
+            TerminalParamType::Tag(TagType::Int),
+            TerminalParamType::Tag(TagType::Float),
+            TerminalParamType::Tag(TagType::Bool),
         ];
 
         match cmp {
             Cmp::Is(_) => Ok(VisitRes::Walk),
             Cmp::Eq(value) => {
                 if let Parameterized::Param { span, param } = value
-                    && param.typ == ParamType::Regex
+                    && param.typ() == TerminalParamType::Regex
                 {
                     // we have a regex param in an eq
                     // this happens because we cannot detect this in pest
@@ -257,7 +339,7 @@ impl QueryVisitor for ParamTypecheckVisitor {
             }
             Cmp::Ne(value) => {
                 if let Parameterized::Param { span, param } = value
-                    && param.typ == ParamType::Regex
+                    && param.typ() == TerminalParamType::Regex
                 {
                     // we have a regex param in ne
                     // this happens because we cannot detect this in pest
@@ -276,7 +358,8 @@ impl QueryVisitor for ParamTypecheckVisitor {
                 Self::assert_param_type(value, tag_value_param_types).map(|()| VisitRes::Walk)
             }
             Cmp::RegEx(value) | Cmp::RegExNot(value) => {
-                Self::assert_param_type(value, vec![ParamType::Regex]).map(|()| VisitRes::Walk)
+                Self::assert_param_type(value, vec![TerminalParamType::Regex])
+                    .map(|()| VisitRes::Walk)
             }
         }
     }

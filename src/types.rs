@@ -8,7 +8,7 @@ use strumbra::SharedString;
 
 use crate::{
     linker::{Arg, ArgType, FunctionTrait},
-    query::Param,
+    query::ParamDeclaration,
 };
 
 /// A dataset identifier
@@ -79,7 +79,7 @@ pub enum Parameterized<T> {
         #[cfg_attr(feature = "wasm", tsify(type = "{ offset: number, length: number }"))]
         span: SourceSpan,
         /// The param
-        param: Param,
+        param: ParamDeclaration,
     },
 }
 

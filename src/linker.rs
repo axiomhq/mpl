@@ -258,7 +258,7 @@ impl Serialize for Module {
 }
 
 impl Module {
-    /// Generates tye markdown style documentation for hte module
+    /// Generates the markdown style documentation for the module
     pub fn documentation(&self, level: usize) -> Result<String, std::fmt::Error> {
         let header = "#".repeat(level + 1);
         let mut functions = String::new();

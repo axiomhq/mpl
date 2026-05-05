@@ -10,7 +10,7 @@ use pest::{
 };
 use strsim::jaro;
 
-use crate::parser::Rule;
+use crate::{parser::Rule, query::ParamDeclaration};
 
 /// `MPL` parsing error
 #[derive(thiserror::Error, Debug, Diagnostic)]
@@ -274,6 +274,16 @@ pub enum ParseError {
         span: miette::SourceSpan,
         /// The invalid type
         tpe: String,
+    },
+    /// `ifdef()` was used on a parameter that wasn't declared optional
+    #[error("The parameter {} is not declared as optional", param.name)]
+    #[diagnostic(code(mpl_lang::ifdef_not_optional))]
+    IfdefNotOptional {
+        /// The source location of the param declaration
+        #[label("param declaration")]
+        span: miette::SourceSpan,
+        /// The param type
+        param: ParamDeclaration,
     },
 }
 

@@ -2,11 +2,13 @@
 
 use crate::{
     Query,
+    enc_regex::EncodableRegex,
     linker::ComputeFunction,
     query::{
-        Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter, GroupBy, Mapping,
-        Param, Source,
+        Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter, FilterOrIfDef,
+        GroupBy, Mapping, ParamDeclaration, Source,
     },
+    tags::TagValue,
     types::{Dataset, Metric, Parameterized},
 };
 
@@ -88,14 +90,29 @@ pub trait QueryVisitor {
     }
 
     /// Visit filters.
-    fn visit_filters(&mut self, filters: &mut Vec<Filter>) -> Result<VisitRes, Self::Error> {
+    fn visit_filters(&mut self, filters: &mut Vec<FilterOrIfDef>) -> Result<VisitRes, Self::Error> {
         let _ = filters;
         Ok(VisitRes::Walk)
     }
 
     /// Leave filters.
-    fn leave_filters(&mut self, filters: &mut Vec<Filter>) -> Result<(), Self::Error> {
+    fn leave_filters(&mut self, filters: &mut Vec<FilterOrIfDef>) -> Result<(), Self::Error> {
         let _ = filters;
+        Ok(())
+    }
+
+    /// Visit a filter or ifdef.
+    fn visit_filter_or_ifdef(
+        &mut self,
+        filter: &mut FilterOrIfDef,
+    ) -> Result<VisitRes, Self::Error> {
+        let _ = filter;
+        Ok(VisitRes::Walk)
+    }
+
+    /// Leave a filter or ifdef.
+    fn leave_filter_or_ifdef(&mut self, filter: &mut FilterOrIfDef) -> Result<(), Self::Error> {
+        let _ = filter;
         Ok(())
     }
 
@@ -111,6 +128,28 @@ pub trait QueryVisitor {
         Ok(())
     }
 
+    /// Visit an ifdef.
+    fn visit_ifdef(
+        &mut self,
+        param: &mut ParamDeclaration,
+        filter: &mut Filter,
+    ) -> Result<VisitRes, Self::Error> {
+        let _ = filter;
+        let _ = param;
+        Ok(VisitRes::Walk)
+    }
+
+    /// Leave an ifdef.
+    fn leave_ifdef(
+        &mut self,
+        param: &mut ParamDeclaration,
+        filter: &mut Filter,
+    ) -> Result<(), Self::Error> {
+        let _ = filter;
+        let _ = param;
+        Ok(())
+    }
+
     /// Visit a comparison.
     fn visit_cmp(&mut self, field: &mut String, cmp: &mut Cmp) -> Result<VisitRes, Self::Error> {
         let _ = field;
@@ -122,6 +161,42 @@ pub trait QueryVisitor {
     fn leave_cmp(&mut self, field: &mut String, cmp: &mut Cmp) -> Result<(), Self::Error> {
         let _ = field;
         let _ = cmp;
+        Ok(())
+    }
+
+    /// Visit a parameterized value.
+    fn visit_parameterized_value(
+        &mut self,
+        value: &mut Parameterized<TagValue>,
+    ) -> Result<VisitRes, Self::Error> {
+        let _ = value;
+        Ok(VisitRes::Walk)
+    }
+
+    /// Leave a parameterized value.
+    fn leave_parameterized_value(
+        &mut self,
+        value: &mut Parameterized<TagValue>,
+    ) -> Result<(), Self::Error> {
+        let _ = value;
+        Ok(())
+    }
+
+    /// Visit a parameterized regex.
+    fn visit_parameterized_regex(
+        &mut self,
+        regex: &mut Parameterized<EncodableRegex>,
+    ) -> Result<VisitRes, Self::Error> {
+        let _ = regex;
+        Ok(VisitRes::Walk)
+    }
+
+    /// Leave a parameterized regex.
+    fn leave_parameterized_regex(
+        &mut self,
+        regex: &mut Parameterized<EncodableRegex>,
+    ) -> Result<(), Self::Error> {
+        let _ = regex;
         Ok(())
     }
 
@@ -259,25 +334,28 @@ pub trait QueryVisitor {
     }
 
     /// Visit params.
-    fn visit_params(&mut self, params: &mut Vec<Param>) -> Result<VisitRes, Self::Error> {
+    fn visit_params(
+        &mut self,
+        params: &mut Vec<ParamDeclaration>,
+    ) -> Result<VisitRes, Self::Error> {
         let _ = params;
         Ok(VisitRes::Walk)
     }
 
     /// Leave params.
-    fn leave_params(&mut self, params: &mut Vec<Param>) -> Result<(), Self::Error> {
+    fn leave_params(&mut self, params: &mut Vec<ParamDeclaration>) -> Result<(), Self::Error> {
         let _ = params;
         Ok(())
     }
 
     /// Visit a param.
-    fn visit_param(&mut self, param: &mut Param) -> Result<VisitRes, Self::Error> {
+    fn visit_param(&mut self, param: &mut ParamDeclaration) -> Result<VisitRes, Self::Error> {
         let _ = param;
         Ok(VisitRes::Walk)
     }
 
     /// Leave a param.
-    fn leave_param(&mut self, param: &mut Param) -> Result<(), Self::Error> {
+    fn leave_param(&mut self, param: &mut ParamDeclaration) -> Result<(), Self::Error> {
         let _ = param;
         Ok(())
     }
@@ -371,15 +449,45 @@ pub trait QueryWalker: QueryVisitor {
     }
 
     /// Walk filters.
-    fn walk_filters(&mut self, filters: &mut Vec<Filter>) -> Result<(), Self::Error> {
+    fn walk_filters(&mut self, filters: &mut Vec<FilterOrIfDef>) -> Result<(), Self::Error> {
         stop!(
             QueryVisitor::visit_filters(self, filters),
             QueryVisitor::leave_filters(self, filters)
         );
         for filter in filters.iter_mut() {
-            QueryWalker::walk_filter(self, filter)?;
+            QueryWalker::walk_filter_or_ifdef(self, filter)?;
         }
         QueryVisitor::leave_filters(self, filters)?;
+        Ok(())
+    }
+
+    /// Walk a filter or ifdef.
+    fn walk_filter_or_ifdef(&mut self, filter: &mut FilterOrIfDef) -> Result<(), Self::Error> {
+        stop!(
+            QueryVisitor::visit_filter_or_ifdef(self, filter),
+            QueryVisitor::leave_filter_or_ifdef(self, filter)
+        );
+        match filter {
+            FilterOrIfDef::Filter(filter) => QueryWalker::walk_filter(self, filter)?,
+            FilterOrIfDef::Ifdef { param, filter } => QueryWalker::walk_ifdef(self, param, filter)?,
+        }
+        QueryVisitor::leave_filter_or_ifdef(self, filter)?;
+        Ok(())
+    }
+
+    /// Walk an ifdef.
+    fn walk_ifdef(
+        &mut self,
+        param: &mut ParamDeclaration,
+        filter: &mut Filter,
+    ) -> Result<(), Self::Error> {
+        stop!(
+            QueryVisitor::visit_ifdef(self, param, filter),
+            QueryVisitor::leave_ifdef(self, param, filter)
+        );
+        QueryWalker::walk_param(self, param)?;
+        QueryWalker::walk_filter(self, filter)?;
+        QueryVisitor::leave_ifdef(self, param, filter)?;
         Ok(())
     }
 
@@ -405,8 +513,36 @@ pub trait QueryWalker: QueryVisitor {
     /// Walk a cmp.
     fn walk_cmp(&mut self, field: &mut String, rhs: &mut Cmp) -> Result<(), Self::Error> {
         QueryVisitor::visit_cmp(self, field, rhs)?;
-        QueryVisitor::leave_cmp(self, field, rhs)?;
-        Ok(())
+
+        match rhs {
+            Cmp::Eq(parameterized)
+            | Cmp::Ne(parameterized)
+            | Cmp::Gt(parameterized)
+            | Cmp::Ge(parameterized)
+            | Cmp::Lt(parameterized)
+            | Cmp::Le(parameterized) => QueryWalker::walk_parameterized_value(self, parameterized)?,
+            Cmp::RegEx(parameterized) | Cmp::RegExNot(parameterized) => {
+                QueryWalker::walk_parameterized_regex(self, parameterized)?;
+            }
+            Cmp::Is(_tag_type) => (),
+        }
+        QueryVisitor::leave_cmp(self, field, rhs)
+    }
+    /// Walks a parameterized value
+    fn walk_parameterized_value(
+        &mut self,
+        value: &mut Parameterized<TagValue>,
+    ) -> Result<(), Self::Error> {
+        QueryVisitor::visit_parameterized_value(self, value)?;
+        QueryVisitor::leave_parameterized_value(self, value)
+    }
+    /// Walks a parameterized regex
+    fn walk_parameterized_regex(
+        &mut self,
+        regex: &mut Parameterized<EncodableRegex>,
+    ) -> Result<(), Self::Error> {
+        QueryVisitor::visit_parameterized_regex(self, regex)?;
+        QueryVisitor::leave_parameterized_regex(self, regex)
     }
 
     /// Walk an op.
@@ -507,7 +643,7 @@ pub trait QueryWalker: QueryVisitor {
     }
 
     /// Walk params.
-    fn walk_params(&mut self, params: &mut Vec<Param>) -> Result<(), Self::Error> {
+    fn walk_params(&mut self, params: &mut Vec<ParamDeclaration>) -> Result<(), Self::Error> {
         stop!(
             QueryVisitor::visit_params(self, params),
             QueryVisitor::leave_params(self, params)
@@ -520,7 +656,7 @@ pub trait QueryWalker: QueryVisitor {
     }
 
     /// Walk a param.
-    fn walk_param(&mut self, param: &mut Param) -> Result<(), Self::Error> {
+    fn walk_param(&mut self, param: &mut ParamDeclaration) -> Result<(), Self::Error> {
         QueryVisitor::visit_param(self, param)?;
         QueryVisitor::leave_param(self, param)?;
         Ok(())

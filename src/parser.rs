@@ -13,9 +13,9 @@ use crate::{
         AlignFunction, ComputeFunction, Function, FunctionId, GroupFunction, Module, ModuleId,
     },
     query::{
-        Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter, GroupBy, Mapping,
-        MetricId, Param, ParamType, ParamValue, Params, Query, RelativeTime, Source, TagType, Time,
-        TimeRange, TimeUnit,
+        Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter, FilterOrIfDef,
+        GroupBy, Mapping, MetricId, ParamDeclaration, ParamType, ParamValue, Params, Query,
+        RelativeTime, Source, TagType, TerminalParamType, Time, TimeRange, TimeUnit,
     },
     stdlib::STDLIB,
     tags::TagValue,
@@ -128,7 +128,7 @@ fn parse_ident(source: &Pair<'_, Rule>) -> Result<String> {
     }
 }
 
-fn resolve_param<'p>(source: &Pair<'_, Rule>, params: &'p Params) -> Result<&'p Param> {
+fn resolve_param<'p>(source: &Pair<'_, Rule>, params: &'p Params) -> Result<&'p ParamDeclaration> {
     let name = match source.as_rule() {
         Rule::plain_ident => source.as_str(),
         rule => {
@@ -460,12 +460,12 @@ fn parse_directive_value(source: Pair<Rule>) -> Result<DirectiveValue> {
         }),
     }
 }
-fn parse_param_native_type(source: &Pair<Rule>) -> Result<ParamType> {
+fn parse_param_native_type(source: &Pair<Rule>) -> Result<TerminalParamType> {
     source.assert_type(Rule::param_native_type)?;
     match source.as_str() {
-        "Dataset" => Ok(ParamType::Dataset),
-        "duration" | "Duration" => Ok(ParamType::Duration),
-        "Regex" => Ok(ParamType::Regex),
+        "Dataset" => Ok(TerminalParamType::Dataset),
+        "duration" | "Duration" => Ok(TerminalParamType::Duration),
+        "Regex" => Ok(TerminalParamType::Regex),
         _ => Err(ParseError::Unexpected {
             span: pair_to_source_span(source),
             rule: Rule::param_type,
@@ -479,13 +479,48 @@ fn parse_param_type(source: Pair<Rule>) -> Result<ParamType> {
     let mut inner = source.into_inner();
     let next = inner.n()?;
     let r = match next.as_rule() {
-        Rule::tag_type => ParamType::Tag(parse_tag_type(&next)?),
-        Rule::param_native_type => parse_param_native_type(&next)?,
+        Rule::tag_type => ParamType::Terminal(TerminalParamType::Tag(parse_tag_type(&next)?)),
+        Rule::param_native_type => ParamType::Terminal(parse_param_native_type(&next)?),
+        Rule::optional_type => {
+            let mut inner = next.into_inner();
+            let next = inner.n()?;
+            let r = match next.as_rule() {
+                Rule::tag_type => {
+                    ParamType::Optional(TerminalParamType::Tag(parse_tag_type(&next)?))
+                }
+                Rule::param_native_type => match parse_param_native_type(&next)? {
+                    TerminalParamType::Duration | TerminalParamType::Dataset => {
+                        return Err(ParseError::Unexpected {
+                            span: pair_to_source_span(&next),
+                            rule: Rule::param_native_type,
+                            expected: vec![Rule::tag_type],
+                        });
+                    }
+                    TerminalParamType::Regex => ParamType::Optional(TerminalParamType::Regex),
+                    TerminalParamType::Tag(tag_type) => {
+                        ParamType::Optional(TerminalParamType::Tag(tag_type))
+                    }
+                },
+                _ => {
+                    return Err(ParseError::Unexpected {
+                        span: pair_to_source_span(&next),
+                        rule: Rule::param_type,
+                        expected: vec![
+                            Rule::tag_type,
+                            Rule::param_native_type,
+                            Rule::optional_type,
+                        ],
+                    });
+                }
+            };
+            inner.assert_empty()?;
+            r
+        }
         _ => {
             return Err(ParseError::Unexpected {
                 span: pair_to_source_span(&next),
                 rule: Rule::param_type,
-                expected: vec![Rule::tag_type, Rule::param_native_type],
+                expected: vec![Rule::tag_type, Rule::param_native_type, Rule::optional_type],
             });
         }
     };
@@ -578,7 +613,7 @@ pub enum ParseParamError {
 }
 
 pub(crate) fn parse_param_value(
-    param: &Param,
+    param: &ParamDeclaration,
     mut source: Pairs<'_, Rule>,
 ) -> core::result::Result<ParamValue, ParseParamError> {
     let next = source.n()?;
@@ -586,8 +621,8 @@ pub(crate) fn parse_param_value(
     let mut inner = next.into_inner();
     let next = inner.n()?;
 
-    match param.typ {
-        ParamType::Dataset => match next.as_rule() {
+    match param.typ() {
+        TerminalParamType::Dataset => match next.as_rule() {
             Rule::plain_ident | Rule::escaped_ident => {
                 Ok(ParamValue::Dataset(Dataset::new(parse_ident(&next)?)))
             }
@@ -596,35 +631,42 @@ pub(crate) fn parse_param_value(
                 rule,
             }),
         },
-        ParamType::Duration => match next.as_rule() {
+        TerminalParamType::Duration => match next.as_rule() {
             Rule::time_relative => Ok(ParamValue::Duration(parse_relative_time(next)?)),
             rule => Err(ParseParamError::TypeMismatch {
                 declared_typ: param.typ,
                 rule,
             }),
         },
-        ParamType::Tag(TagType::String) => match next.as_rule() {
+        TerminalParamType::Regex => match next.as_rule() {
+            Rule::regex => Ok(ParamValue::Regex(parse_regex(&next)?.into())),
+            rule => Err(ParseParamError::TypeMismatch {
+                declared_typ: param.typ,
+                rule,
+            }),
+        },
+        TerminalParamType::Tag(TagType::String) => match next.as_rule() {
             Rule::string => Ok(ParamValue::String(unescape(next.as_str(), '"'))),
             rule => Err(ParseParamError::TypeMismatch {
                 declared_typ: param.typ,
                 rule,
             }),
         },
-        ParamType::Tag(TagType::Int) => match next.as_rule() {
+        TerminalParamType::Tag(TagType::Int) => match next.as_rule() {
             Rule::int => Ok(ParamValue::Int(parse_int(&next)?)),
             rule => Err(ParseParamError::TypeMismatch {
                 declared_typ: param.typ,
                 rule,
             }),
         },
-        ParamType::Tag(TagType::Float) => match next.as_rule() {
+        TerminalParamType::Tag(TagType::Float) => match next.as_rule() {
             Rule::float => Ok(ParamValue::Float(next.as_str().parse()?)),
             rule => Err(ParseParamError::TypeMismatch {
                 declared_typ: param.typ,
                 rule,
             }),
         },
-        ParamType::Tag(TagType::Bool) => match next.as_rule() {
+        TerminalParamType::Tag(TagType::Bool) => match next.as_rule() {
             Rule::bool => Ok(ParamValue::Bool(
                 next.as_str()
                     .to_string()
@@ -636,14 +678,7 @@ pub(crate) fn parse_param_value(
                 rule,
             }),
         },
-        ParamType::Tag(TagType::None) => Err(ParseParamError::NoneParam),
-        ParamType::Regex => match next.as_rule() {
-            Rule::regex => Ok(ParamValue::Regex(parse_regex(&next)?.into())),
-            rule => Err(ParseParamError::TypeMismatch {
-                declared_typ: param.typ,
-                rule,
-            }),
-        },
+        TerminalParamType::Tag(TagType::Null) => Err(ParseParamError::NoneParam),
     }
 }
 
@@ -784,11 +819,44 @@ pub(crate) fn parse_filter(source: Pair<Rule>, params: &Params) -> Result<Filter
     let keyword = inner.n()?;
     keyword.assert_type(Rule::pipe_keyword)?;
 
-    let _filter_kw = inner.n()?; // kw_filter / kw_where
-    let next = inner.n()?;
+    parse_where_part(inner, params)
+}
+
+fn parse_where_part(mut source: Pairs<Rule>, params: &Params) -> Result<Filter> {
+    let _filter_kw = source.n()?; // kw_filter / kw_where
+    let next = source.n()?;
     let res = parse_or(next, params)?;
-    inner.assert_empty()?;
+    source.assert_empty()?;
     Ok(res)
+}
+
+pub(crate) fn parse_ifdef(source: Pair<Rule>, params: &Params) -> Result<FilterOrIfDef> {
+    source.assert_type(Rule::ifdef_rule)?;
+    let mut inner = source.into_inner();
+
+    let keyword = inner.n()?;
+    keyword.assert_type(Rule::pipe_keyword)?;
+
+    let param = inner.n()?;
+    let span = pair_to_source_span(&param);
+    let param = if matches!(param.as_rule(), Rule::param_ident) {
+        let mut inner = param.into_inner();
+        let next = inner.n()?;
+        let param = resolve_param(&next, params)?.clone();
+        if !param.is_optional() {
+            return Err(ParseError::IfdefNotOptional { span, param });
+        }
+        param
+    } else {
+        return Err(ParseError::Unexpected {
+            span,
+            rule: param.as_rule(),
+            expected: vec![Rule::param_ident],
+        });
+    };
+
+    let filter = parse_where_part(inner, params)?;
+    Ok(FilterOrIfDef::Ifdef { param, filter })
 }
 
 pub(crate) fn parse_sample(source: Pair<Rule>) -> Result<f64> {
@@ -1001,7 +1069,7 @@ impl Parser {
         Ok((directive, value))
     }
 
-    pub(crate) fn parse_param(params: &Params, source: Pair<'_, Rule>) -> Result<Param> {
+    pub(crate) fn parse_param(params: &Params, source: Pair<'_, Rule>) -> Result<ParamDeclaration> {
         let mut inner = source.into_inner();
         let next = inner.n()?;
         let span = pair_to_source_span(&next);
@@ -1013,7 +1081,7 @@ impl Parser {
 
         let typ = parse_param_type(inner.n()?)?;
 
-        Ok(Param { span, name, typ })
+        Ok(ParamDeclaration { span, name, typ })
     }
 
     fn parse_query_(
@@ -1140,7 +1208,10 @@ impl Parser {
                 // we only allow one sample rule
                 Rule::sample_rule if sample.is_some() => {}
                 Rule::sample_rule => sample = Some(parse_sample(next)?),
-                Rule::filter_rule => filters.push(parse_filter(next, &params)?),
+                Rule::ifdef_rule => filters.push(parse_ifdef(next, &params)?),
+                Rule::filter_rule => {
+                    filters.push(FilterOrIfDef::Filter(parse_filter(next, &params)?));
+                }
                 Rule::pipe_rule => aggregates.push(self.parse_pipe(next, &params)?),
                 rule => {
                     return Err(ParseError::Unexpected {

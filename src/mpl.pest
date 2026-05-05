@@ -100,6 +100,7 @@ filter_and     =  { filter_not ~ ("and" ~ filter_not)* }
 filter_or      =  { filter_and ~ ("or" ~ filter_and)* }
 filter_expr    = _{ filter_keyword ~ filter_or }
 filter_rule    =  { pipe_keyword ~ filter_expr }
+ifdef_rule     =  { pipe_keyword ~ "ifdef" ~ "(" ~ param_ident ~ ")" ~ "{" ~ filter_expr ~ "}" }
 sample_expr    =  { kw_sample ~ number }
 sample_rule    =  { pipe_keyword ~ sample_expr }
 
@@ -116,7 +117,8 @@ func = { (module ~ "::")* ~ ident }
 
 param_native_type =  { "Dataset" | "Duration" | "duration" | "Regex" }
 tag_type          =  { "string" | "int" | "float" | "bool" }
-param_type        =  { param_native_type | tag_type }
+optional_type     =  { "Option" ~ "<" ~ ( tag_type | param_native_type ) ~ ">" }
+param_type        =  { param_native_type | tag_type | optional_type }
 param_ident       = ${ "$" ~ ident }
 param             =  { "param" ~ param_ident ~ ":" ~ param_type ~ ";" }
 param_value       =  { time_relative | string | float | int | bool | regex | ident }
@@ -143,7 +145,7 @@ bucket_by                      = { "bucket" ~ ("by" ~ tags)? ~ "to" ~ time_relat
 join                           = { "join" ~ tags ~ "from" ~ metric_id ~ "by" ~ tags }
 pipe_rule                      = { pipe_keyword ~ (align | map | group_by | replace | bucket_by | join | as) }
 
-simple_query = { source ~ (sample_rule)? ~ (filter_rule)* ~ pipe_rule* }
+simple_query = { source ~ (sample_rule)? ~ (filter_rule | ifdef_rule)* ~ pipe_rule* }
 
 compute_op   = { "/" | "*" | "+" | "-" }
 compute_fn   = { func | compute_op }

@@ -1,6 +1,6 @@
 use crate::{
     CompileError, ParseError, TypeError,
-    query::{Cmp, Filter, ParamType, TagType},
+    query::{Cmp, Filter, TagType, TerminalParamType},
     types::Parameterized,
 };
 
@@ -83,7 +83,7 @@ dataset:metric
     match res {
         crate::Query::Simple { filters, .. } => {
             assert_eq!(1, filters.len());
-            assert_eq!(expected, filters[0]);
+            assert_eq!(&expected, filters[0].filter());
         }
         crate::Query::Compute { .. } => panic!("not a simple query"),
     }
@@ -111,7 +111,7 @@ dataset:metric
     match res {
         crate::Query::Simple { filters, .. } => {
             assert_eq!(1, filters.len());
-            assert_eq!(expected, filters[0]);
+            assert_eq!(&expected, filters[0].filter());
         }
         crate::Query::Compute { .. } => panic!("not a simple query"),
     }
@@ -157,7 +157,7 @@ dataset:metric
     match res {
         crate::Query::Simple { filters, .. } => {
             assert_eq!(1, filters.len());
-            assert_eq!(expected, filters[0]);
+            assert_eq!(&expected, filters[0].filter());
         }
         crate::Query::Compute { .. } => panic!("not a simple query"),
     }
@@ -241,8 +241,8 @@ $dataset:metric
             actual,
         })) => {
             assert_eq!("dataset", param_name);
-            assert_eq!(&[ParamType::Dataset], expected.as_slice());
-            assert_eq!(ParamType::Duration, actual);
+            assert_eq!(&[TerminalParamType::Dataset], expected.as_slice());
+            assert_eq!(TerminalParamType::Duration, actual);
             assert_eq!(28, use_span.offset());
             assert_eq!(8, use_span.len());
             assert_eq!(7, declaration_span.offset());
@@ -272,14 +272,14 @@ dataset:metric
             assert_eq!("value", param_name);
             assert_eq!(
                 &[
-                    ParamType::Tag(TagType::String),
-                    ParamType::Tag(TagType::Int),
-                    ParamType::Tag(TagType::Float),
-                    ParamType::Tag(TagType::Bool)
+                    TerminalParamType::Tag(TagType::String),
+                    TerminalParamType::Tag(TagType::Int),
+                    TerminalParamType::Tag(TagType::Float),
+                    TerminalParamType::Tag(TagType::Bool)
                 ],
                 expected.as_slice()
             );
-            assert_eq!(ParamType::Dataset, actual);
+            assert_eq!(TerminalParamType::Dataset, actual);
             assert_eq!(55, use_span.offset());
             assert_eq!(6, use_span.len());
             assert_eq!(7, declaration_span.offset());
@@ -307,8 +307,8 @@ dataset:metric
             actual,
         })) => {
             assert_eq!("duration", param_name);
-            assert_eq!(&[ParamType::Duration], expected.as_slice());
-            assert_eq!(ParamType::Dataset, actual);
+            assert_eq!(&[TerminalParamType::Duration], expected.as_slice());
+            assert_eq!(TerminalParamType::Dataset, actual);
             assert_eq!(54, use_span.offset());
             assert_eq!(9, use_span.len());
             assert_eq!(7, declaration_span.offset());

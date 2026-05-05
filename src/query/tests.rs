@@ -3,8 +3,8 @@ use miette::SourceSpan;
 use crate::{
     enc_regex::EncodableRegex,
     query::{
-        Param, ParamType, ParamValue, ParseProvidedParamsError, ProvidedParam, ProvidedParams,
-        RelativeTime, TagType, TimeUnit,
+        ParamDeclaration, ParamType, ParamValue, ParseProvidedParamsError, ProvidedParam,
+        ProvidedParams, RelativeTime, TagType, TerminalParamType, TimeUnit,
     },
     types::Dataset,
 };
@@ -12,40 +12,40 @@ use crate::{
 #[test]
 fn provided_params_parse() {
     let mpl_params = vec![
-        Param {
+        ParamDeclaration {
             span: SourceSpan::from(0..0),
             name: "dataset".to_string(),
-            typ: ParamType::Dataset,
+            typ: ParamType::Terminal(TerminalParamType::Dataset),
         },
-        Param {
+        ParamDeclaration {
             span: SourceSpan::from(0..0),
             name: "duration".to_string(),
-            typ: ParamType::Duration,
+            typ: ParamType::Terminal(TerminalParamType::Duration),
         },
-        Param {
+        ParamDeclaration {
             span: SourceSpan::from(0..0),
             name: "string".to_string(),
-            typ: ParamType::Tag(TagType::String),
+            typ: ParamType::Terminal(TerminalParamType::Tag(TagType::String)),
         },
-        Param {
+        ParamDeclaration {
             span: SourceSpan::from(0..0),
             name: "int".to_string(),
-            typ: ParamType::Tag(TagType::Int),
+            typ: ParamType::Terminal(TerminalParamType::Tag(TagType::Int)),
         },
-        Param {
+        ParamDeclaration {
             span: SourceSpan::from(0..0),
             name: "float".to_string(),
-            typ: ParamType::Tag(TagType::Float),
+            typ: ParamType::Terminal(TerminalParamType::Tag(TagType::Float)),
         },
-        Param {
+        ParamDeclaration {
             span: SourceSpan::from(0..0),
             name: "bool".to_string(),
-            typ: ParamType::Tag(TagType::Bool),
+            typ: ParamType::Terminal(TerminalParamType::Tag(TagType::Bool)),
         },
-        Param {
+        ParamDeclaration {
             span: SourceSpan::from(0..0),
             name: "regex".to_string(),
-            typ: ParamType::Regex,
+            typ: ParamType::Terminal(TerminalParamType::Regex),
         },
     ];
 
@@ -103,15 +103,15 @@ fn provided_params_parse() {
 #[test]
 fn provided_params_duplicates() {
     let mpl_params = vec![
-        Param {
+        ParamDeclaration {
             span: SourceSpan::from(0..0),
             name: "dataset".to_string(),
-            typ: ParamType::Dataset,
+            typ: ParamType::Terminal(TerminalParamType::Dataset),
         },
-        Param {
+        ParamDeclaration {
             span: SourceSpan::from(0..0),
             name: "__interval".to_string(),
-            typ: ParamType::Duration,
+            typ: ParamType::Terminal(TerminalParamType::Duration),
         },
     ];
 
@@ -138,10 +138,10 @@ fn provided_params_duplicates() {
 
 #[test]
 fn provided_params_declared_but_not_provided() {
-    let mpl_params = vec![Param {
+    let mpl_params = vec![ParamDeclaration {
         span: SourceSpan::from(0..0),
         name: "dataset".to_string(),
-        typ: ParamType::Dataset,
+        typ: ParamType::Terminal(TerminalParamType::Dataset),
     }];
 
     let query_params = [("lol", "whatever, this should be ignored")]
@@ -180,15 +180,15 @@ fn provided_params_not_declared() {
 #[test]
 fn provided_params_parse_failure() {
     let mpl_params = vec![
-        Param {
+        ParamDeclaration {
             span: SourceSpan::from(0..0),
             name: "dataset".to_string(),
-            typ: ParamType::Dataset,
+            typ: ParamType::Terminal(TerminalParamType::Dataset),
         },
-        Param {
+        ParamDeclaration {
             span: SourceSpan::from(0..0),
             name: "duration".to_string(),
-            typ: ParamType::Duration,
+            typ: ParamType::Terminal(TerminalParamType::Duration),
         },
     ];
 
@@ -207,7 +207,10 @@ fn provided_params_parse_failure() {
             err: _,
         }) => {
             assert_eq!("duration", param_name);
-            assert_eq!(ParamType::Duration, expected_type);
+            assert_eq!(
+                ParamType::Terminal(TerminalParamType::Duration),
+                expected_type
+            );
         }
         res => panic!("expected parse param error, got {res:?}"),
     }

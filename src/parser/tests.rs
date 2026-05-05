@@ -86,3 +86,34 @@ fn test_compute_query_post_compute_aggregates()
 
     Ok(())
 }
+#[test]
+fn optional_ok() {
+    let query = "
+        param $t: Option<string>;
+        dataset:metric
+        | ifdef($t) { where tag == $t }
+    ";
+
+    assert!(crate::compile(query).is_ok());
+}
+
+#[test]
+fn optional_use_without_ifdef() {
+    let query = "
+        param $t: Option<string>;
+        dataset:metric
+        | where tag == $t
+    ";
+    assert!(crate::compile(query).is_err());
+}
+
+#[test]
+fn optional_ifdef_without_optional() {
+    let query = "
+        param $t: string;
+        dataset:metric
+        | ifdef($t) { where tag == $t }
+    ";
+
+    assert!(crate::compile(query).is_err());
+}

@@ -17,8 +17,8 @@ use crate::{query::TagType, types::StrumbraError};
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum TagValue {
     #[default]
-    /// No value
-    None,
+    /// Null value
+    Null,
     /// Boolean value
     Bool(bool),
     /// Integer value
@@ -37,7 +37,7 @@ impl TagValue {
     #[must_use]
     pub fn tpe(&self) -> TagType {
         match self {
-            Self::None => TagType::None,
+            Self::Null => TagType::Null,
             Self::Bool(_) => TagType::Bool,
             Self::Int(_) => TagType::Int,
             Self::Float(_) => TagType::Float,
@@ -49,7 +49,7 @@ impl TagValue {
 impl fmt::Debug for TagValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::None => write!(f, "None"),
+            Self::Null => write!(f, "Null"),
             Self::Bool(arg0) => f.debug_tuple("Bool").field(arg0).finish(),
             Self::Int(arg0) => f.debug_tuple("Int").field(arg0).finish(),
             Self::Float(arg0) => f.debug_tuple("Float").field(arg0).finish(),
@@ -70,7 +70,7 @@ impl Ord for TagValue {
         match (self, other) {
             // First the easy cases, if we have two values of the same type,
             // compare them directly
-            (TagValue::None, TagValue::None) => std::cmp::Ordering::Equal,
+            (TagValue::Null, TagValue::Null) => std::cmp::Ordering::Equal,
             (TagValue::Int(a), TagValue::Int(b)) => a.cmp(b),
             (TagValue::Float(a), TagValue::Float(b)) => OrderedFloat(*a).cmp(&OrderedFloat(*b)),
             (TagValue::String(a), TagValue::String(b)) => a.cmp(b),
@@ -93,9 +93,9 @@ impl Ord for TagValue {
             // the rule we use is 'the more complex the type is the
             // greater the ordering'
 
-            // Everything greater than None
-            (TagValue::None, _) => std::cmp::Ordering::Less,
-            (_, TagValue::None) => std::cmp::Ordering::Greater,
+            // Everything greater than Null
+            (TagValue::Null, _) => std::cmp::Ordering::Less,
+            (_, TagValue::Null) => std::cmp::Ordering::Greater,
 
             // The rest if larger than bool
             (TagValue::Bool(_), _) => std::cmp::Ordering::Less,
@@ -135,7 +135,7 @@ impl TagValue {
     #[must_use]
     pub fn len(&self) -> usize {
         match self {
-            TagValue::None => 0,
+            TagValue::Null => 0,
             TagValue::String(s) => s.len(),
             TagValue::Int(_) | TagValue::Float(_) => 8, // size of i64 or f64
             TagValue::Bool(_) => 1,                     // size of bool
@@ -145,7 +145,7 @@ impl TagValue {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         match self {
-            TagValue::None => true,
+            TagValue::Null => true,
             TagValue::String(s) => s.is_empty(),
             TagValue::Bool(_) | TagValue::Int(_) | TagValue::Float(_) => false, // bool, i64 and f64 are never empty
         }
@@ -156,7 +156,7 @@ impl Hash for TagValue {
     fn hash<H: Hasher>(&self, state: &mut H) {
         core::mem::discriminant(self).hash(state);
         match self {
-            TagValue::None => (),
+            TagValue::Null => (),
             TagValue::String(s) => s.hash(state),
             TagValue::Int(i) => i.hash(state),
             TagValue::Float(fl) => OrderedFloat(*fl).hash(state),
@@ -171,7 +171,7 @@ impl Eq for TagValue {}
 impl std::fmt::Display for TagValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TagValue::None => write!(f, "None"),
+            TagValue::Null => write!(f, "Null"),
             TagValue::String(s) => {
                 let mut hasher = DefaultHasher::new();
                 s.hash(&mut hasher);

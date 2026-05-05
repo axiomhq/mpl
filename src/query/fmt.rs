@@ -34,7 +34,14 @@ impl Display for Query {
                     writeln!(f, "| sample {sample}")?;
                 }
                 for filter in filters {
-                    writeln!(f, "| where {filter}")?;
+                    match filter {
+                        crate::query::FilterOrIfDef::Filter(filter) => {
+                            writeln!(f, "| where {filter}")?;
+                        }
+                        crate::query::FilterOrIfDef::Ifdef { param, filter } => {
+                            writeln!(f, "| ifdef(${}) {{ where {filter} }}", param.name)?;
+                        }
+                    }
                 }
                 for aggregate in aggregates {
                     writeln!(f, " {aggregate}")?;
