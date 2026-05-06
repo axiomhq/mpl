@@ -118,7 +118,7 @@ pub enum IfdefError {
         /// The param declaration
         param: ParamDeclaration,
     },
-    /// Usage of optional parameter outside of ifdef
+    /// Usage of optional parameter when it's not referenced
     #[error("{} is used in a ifdef guard but not referenced inside of it", param.name)]
     OptionalNotUsed {
         /// The source location

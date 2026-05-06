@@ -718,6 +718,7 @@ impl ProvidedParams {
         let declared_param_names = mpl_params
             .iter()
             .filter_map(|p| {
+                // Skip optional params since they don't need to be provided.
                 if p.typ.is_optional() {
                     None
                 } else {

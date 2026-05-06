@@ -58,7 +58,7 @@ As part of the query they can only be used in ifdef blocks to scope their actual
 ... 
 ```
 
-What this is not:
+What this is not in this first iteration:
 
 - ifdef only takes a single variable: `ifdef($a, $b)` is not supported
 - ifdef for tags: `ifdef(tag)` - only variables are supported 
