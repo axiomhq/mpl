@@ -403,6 +403,7 @@ pub enum TagType {
     Null,
 }
 
+#[cfg(feature = "bincode")]
 #[test]
 fn test_renaming_none_to_null_has_no_bincode_side_effects() {
     let enc = [4];
