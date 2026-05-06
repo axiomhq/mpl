@@ -10,7 +10,7 @@ use std::{
 use derive_more::Deref;
 use eyre::{Result, bail, ensure, eyre};
 use miette::{SourceOffset, SourceSpan};
-use rand::Rng as _;
+use rand::RngExt as _;
 use serde::{Deserialize, Serialize};
 use tsify::Tsify;
 use wasm_bindgen::prelude::*;
