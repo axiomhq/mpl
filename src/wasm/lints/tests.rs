@@ -36,6 +36,25 @@ fn filter_hint_mixed_where_and_filter() {
     assert_eq!(&query[items[0].span.from..items[0].span.to], "filter");
 }
 
+/// `filter` inside an `ifdef` body is still the deprecated alias and must
+/// produce the same hint as anywhere else. Locks in the canonical-form
+/// invariant: the ifdef body always reads as `where`, never `filter`.
+#[test]
+fn filter_hint_inside_ifdef_body() {
+    let query = "param $f: Option<string>;\nds:metric | ifdef($f) { filter tag == $f }";
+    let items = detect_hints(query);
+    let filter_hints: Vec<_> = items
+        .iter()
+        .filter(|i| i.message.contains("filter"))
+        .collect();
+    assert_eq!(filter_hints.len(), 1, "filter inside ifdef should hint");
+    assert_eq!(filter_hints[0].actions[0].insert, "where");
+    assert_eq!(
+        &query[filter_hints[0].span.from..filter_hints[0].span.to],
+        "filter"
+    );
+}
+
 // ── unnecessary escape lint ──────────────────────────────────────
 
 #[test]

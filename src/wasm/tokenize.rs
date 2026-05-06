@@ -53,11 +53,12 @@ fn token_type(rule: Rule) -> Option<TokenType> {
         | Rule::kw_filter
         | Rule::kw_where
         | Rule::kw_sample
+        | Rule::kw_ifdef
         | Rule::kw_is
         | Rule::bucket_conversion
         | Rule::bucket_by_fn
         | Rule::bucket_by_with_conversion_fn => Some(TokenType::Keyword),
-        Rule::param_type | Rule::param_native_type | Rule::tag_type => Some(TokenType::Type),
+        Rule::param_native_type | Rule::tag_type => Some(TokenType::Type),
         _ => None,
     }
 }
@@ -93,6 +94,18 @@ impl PairVisitor for TokenCollector<'_> {
             self.tokens.push(Token {
                 span: Span::new(kw_start, kw_start + "param".len()),
                 kind: TokenType::Keyword,
+            });
+            return VisitAction::Walk;
+        }
+
+        // `optional_type` matches `Option<…>`; the literal "Option" is not a
+        // named child, so emit a Type token for it and walk into the inner
+        // type rule for its own token.
+        if node.rule == Rule::optional_type {
+            let start = node.span.from;
+            self.tokens.push(Token {
+                span: Span::new(start, start + "Option".len()),
+                kind: TokenType::Type,
             });
             return VisitAction::Walk;
         }

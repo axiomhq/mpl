@@ -830,12 +830,18 @@ fn parse_where_part(mut source: Pairs<Rule>, params: &Params) -> Result<Filter> 
     Ok(res)
 }
 
-pub(crate) fn parse_ifdef(source: Pair<Rule>, params: &Params) -> Result<FilterOrIfDef> {
+pub(crate) fn parse_ifdef(
+    source: Pair<Rule>,
+    params: &Params,
+) -> Result<(ParamDeclaration, Filter)> {
     source.assert_type(Rule::ifdef_rule)?;
     let mut inner = source.into_inner();
 
     let keyword = inner.n()?;
     keyword.assert_type(Rule::pipe_keyword)?;
+
+    let kw_ifdef = inner.n()?;
+    kw_ifdef.assert_type(Rule::kw_ifdef)?;
 
     let param = inner.n()?;
     let span = pair_to_source_span(&param);
@@ -856,7 +862,7 @@ pub(crate) fn parse_ifdef(source: Pair<Rule>, params: &Params) -> Result<FilterO
     };
 
     let filter = parse_where_part(inner, params)?;
-    Ok(FilterOrIfDef::Ifdef { param, filter })
+    Ok((param, filter))
 }
 
 pub(crate) fn parse_sample(source: Pair<Rule>) -> Result<f64> {
@@ -1208,7 +1214,10 @@ impl Parser {
                 // we only allow one sample rule
                 Rule::sample_rule if sample.is_some() => {}
                 Rule::sample_rule => sample = Some(parse_sample(next)?),
-                Rule::ifdef_rule => filters.push(parse_ifdef(next, &params)?),
+                Rule::ifdef_rule => {
+                    let (param, filter) = parse_ifdef(next, &params)?;
+                    filters.push(FilterOrIfDef::Ifdef { param, filter });
+                }
                 Rule::filter_rule => {
                     filters.push(FilterOrIfDef::Filter(parse_filter(next, &params)?));
                 }

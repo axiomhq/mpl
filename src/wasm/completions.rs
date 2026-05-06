@@ -33,11 +33,12 @@ pub(super) enum ParamType {
     Regex,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub(super) struct ParamItem {
     pub(super) label: std::string::String,
     #[serde(rename = "type")]
     pub(super) typ: ParamType,
+    pub(super) optional: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -840,6 +841,10 @@ pub(super) fn extract_declared_params(text: &str) -> Vec<ParamItem> {
 }
 
 /// Parses the remainder of a `param` declaration: `$name: type;`
+///
+/// Accepts both `$name: T;` and `$name: Option<T>;`. Optional params can only
+/// appear inside `ifdef(...)` blocks, so completions need the optional flag
+/// to gate the `ifdef` keyword and filter the param list inside `ifdef(`.
 fn parse_param_decl(rest: &str) -> Option<ParamItem> {
     let rest = rest.trim().strip_suffix(';')?.trim();
     let (name, typ_str) = rest.split_once(':')?;
@@ -850,7 +855,15 @@ fn parse_param_decl(rest: &str) -> Option<ParamItem> {
         return None;
     }
 
-    let typ = match typ_str {
+    let (inner, optional) = match typ_str
+        .strip_prefix("Option<")
+        .and_then(|s| s.strip_suffix('>'))
+    {
+        Some(inner) => (inner.trim(), true),
+        None => (typ_str, false),
+    };
+
+    let typ = match inner {
         "Dataset" => ParamType::Dataset,
         "Metric" => ParamType::Metric,
         // `duration` is a legacy lowercase alias; `Duration` is canonical.
@@ -863,20 +876,46 @@ fn parse_param_decl(rest: &str) -> Option<ParamItem> {
         _ => return None,
     };
 
+    if optional
+        && !matches!(
+            typ,
+            ParamType::String
+                | ParamType::Int
+                | ParamType::Float
+                | ParamType::Bool
+                | ParamType::Regex
+        )
+    {
+        return None;
+    }
+
     Some(ParamItem {
         label: name.to_string(),
         typ,
+        optional,
     })
 }
 
 /// Builds a `Params` completion result from the given params, filtered by
 /// the allowed type predicate. Returns `None` if no params match.
+///
+/// Optional params are admissible only when `active_gate` matches their label
+/// (e.g. inside `ifdef($x) { ... }`, only `$x` may appear). Outside an
+/// ifdef body, callers pass `None` and optional params are filtered out so
+/// completions never suggest text that the compiler will reject as
+/// `OptionalOutsideOfIfdef`.
 fn suggest_params(
     span: Span,
     params: &[ParamItem],
+    active_gate: Option<&str>,
     allowed: impl Fn(ParamType) -> bool,
 ) -> Option<CompletionResult> {
-    let options: Vec<ParamItem> = params.iter().filter(|p| allowed(p.typ)).cloned().collect();
+    let options: Vec<ParamItem> = params
+        .iter()
+        .filter(|p| allowed(p.typ))
+        .filter(|p| !p.optional || active_gate == Some(p.label.as_str()))
+        .cloned()
+        .collect();
 
     if options.is_empty() {
         None
@@ -901,8 +940,13 @@ pub(super) enum FilterPolicy {
 // `ParseError::NotSupported` for both, so suggesting them would lead users
 // to write queries that immediately fail. Add them here once parser and
 // runtime support lands.
-fn pipe_keywords(span: Span, policy: FilterPolicy, allow_sample: bool) -> CompletionResult {
-    let mut options = Vec::with_capacity(9);
+fn pipe_keywords(
+    span: Span,
+    policy: FilterPolicy,
+    allow_sample: bool,
+    has_optional_params: bool,
+) -> CompletionResult {
+    let mut options = Vec::with_capacity(10);
     if allow_sample {
         options.push(KeywordItem {
             label: "sample",
@@ -916,6 +960,13 @@ fn pipe_keywords(span: Span, policy: FilterPolicy, allow_sample: bool) -> Comple
             apply: Some("where "),
             info: "Filter time series by label values",
         });
+        if has_optional_params {
+            options.push(KeywordItem {
+                label: "ifdef",
+                apply: Some("ifdef("),
+                info: "Apply a filter only when an optional param is supplied",
+            });
+        }
     }
     options.extend([
         KeywordItem {
@@ -1002,9 +1053,15 @@ fn suggest_for_context(
 
     // `sample` is only valid at the first pipe of a simple subquery
     let allow_sample = policy == FilterPolicy::Include && count_pipes(before) == 1;
+    let has_optional_params = params.iter().any(|p| p.optional);
 
     if after_pipe.is_empty() {
-        return Some(pipe_keywords(span, policy, allow_sample));
+        return Some(pipe_keywords(
+            span,
+            policy,
+            allow_sample,
+            has_optional_params,
+        ));
     }
 
     let words: Vec<&str> = after_pipe.split_whitespace().collect();
@@ -1013,10 +1070,13 @@ fn suggest_for_context(
 
     match first {
         "where" | "filter" if policy == FilterPolicy::Include => {
-            suggest_filter_context(before, span, &words, last, params)
+            suggest_filter_context(before, span, &words, last, params, None)
         }
         // `sample` takes a single numeric argument; no further completions
         "sample" => None,
+        f if f.starts_with("ifdef") && policy == FilterPolicy::Include => {
+            suggest_ifdef_context(before, span, after_pipe, params)
+        }
         "group"
             if words.len() >= 2 && words[1] == "by" && (last == "by" || last.ends_with(',')) =>
         {
@@ -1031,6 +1091,94 @@ fn suggest_for_context(
     }
 }
 
+/// Dispatches completions inside an `ifdef(...) { ... }` clause.
+///
+/// Three cursor positions are handled:
+///   (a) inside the `(...)` argument: optional params only
+///   (b) after `)` but before `{`: suggest the opening brace + `where`
+///   (c) inside the `{ ... }` body: suggest `where` (when empty) or defer
+///       to the regular filter-context logic
+fn suggest_ifdef_context(
+    before: &str,
+    span: Span,
+    after_pipe: &str,
+    params: &[ParamItem],
+) -> Option<CompletionResult> {
+    let open_paren = after_pipe.find('(');
+    let close_paren = after_pipe.rfind(')');
+    let open_brace = after_pipe.rfind('{');
+
+    // (a) inside the argument list — `(` seen, no matching `)` yet
+    if open_paren.is_some() && close_paren.is_none() {
+        return suggest_optional_params(span, params);
+    }
+
+    // (b) `)` typed but no `{` yet — suggest opening the body
+    if close_paren.is_some() && open_brace.is_none() {
+        return Some(CompletionResult::Keywords {
+            span,
+            options: vec![KeywordItem {
+                label: "{",
+                apply: Some("{ where "),
+                info: "Open the ifdef filter body",
+            }],
+        });
+    }
+
+    // (c) inside the body — slice past the `{` and route to filter logic
+    let brace_idx = open_brace?;
+    let body = after_pipe[brace_idx + 1..].trim();
+    // Gate name (e.g. `"$f"`) scopes optional-param completions inside the
+    // body to *this* ifdef's gate. Falling back to `None` when the argument
+    // is malformed is intentional: with no gate, all optionals are filtered
+    // out, which is the safe direction (compiler would reject either way).
+    let active_gate = open_paren.and_then(|p| extract_ifdef_gate_name(after_pipe, p));
+    if body.is_empty() {
+        return Some(CompletionResult::Keywords {
+            span,
+            options: vec![KeywordItem {
+                label: "where",
+                apply: Some("where "),
+                info: "Filter time series by label values",
+            }],
+        });
+    }
+
+    let body_words: Vec<&str> = body.split_whitespace().collect();
+    let body_first = body_words[0];
+    let body_last = body_words.last().copied().unwrap_or(body_first);
+    if matches!(body_first, "where" | "filter") {
+        suggest_filter_context(before, span, &body_words, body_last, params, active_gate)
+    } else {
+        None
+    }
+}
+
+/// Extracts the gate param name (e.g. `"$f"`) from text like
+/// `ifdef($f) { ... `, given the position of the opening `(`. Returns
+/// `None` when the argument is malformed or absent — the caller should then
+/// fall back to "no active gate," which filters all optional params.
+fn extract_ifdef_gate_name(after_pipe: &str, open_paren: usize) -> Option<&str> {
+    let after = after_pipe.get(open_paren + 1..)?;
+    let close = after.find(')')?;
+    let inner = after[..close].trim();
+    let rest = inner.strip_prefix('$')?;
+    if rest.is_empty() || !rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(inner)
+}
+
+/// Returns the list of declared optional params, regardless of inner type.
+fn suggest_optional_params(span: Span, params: &[ParamItem]) -> Option<CompletionResult> {
+    let options: Vec<ParamItem> = params.iter().filter(|p| p.optional).cloned().collect();
+    if options.is_empty() {
+        None
+    } else {
+        Some(CompletionResult::Params { span, options })
+    }
+}
+
 /// Shared logic for `pipe_rule` keyword completions (align/map/group/bucket/
 /// as). Used by both simple queries and compute outer tails.
 fn suggest_pipe_rule(
@@ -1042,7 +1190,7 @@ fn suggest_pipe_rule(
 ) -> Option<CompletionResult> {
     match first {
         "align" => match last {
-            "to" | "over" => suggest_params(span, params, |t| t == ParamType::Duration),
+            "to" | "over" => suggest_params(span, params, None, |t| t == ParamType::Duration),
             "using" => Some(CompletionResult::AlignFunctions {
                 span,
                 options: ALIGN_COMPLETIONS.clone(),
@@ -1134,7 +1282,7 @@ fn suggest_bucket_pipe(
     }
     match last {
         "by" => None,
-        "to" => suggest_params(span, params, |t| t == ParamType::Duration),
+        "to" => suggest_params(span, params, None, |t| t == ParamType::Duration),
         "using" => Some(CompletionResult::BucketFunctions {
             span,
             options: BUCKET_COMPLETIONS.clone(),
@@ -1257,6 +1405,7 @@ fn suggest_filter_context(
     words: &[&str],
     last: &str,
     params: &[ParamItem],
+    active_gate: Option<&str>,
 ) -> Option<CompletionResult> {
     // Tag position: right after filter keyword, or after a boolean operator
     // NOTE: "not" and "(" overlap as logical grouping operators; both
@@ -1298,7 +1447,7 @@ fn suggest_filter_context(
             });
         }
         if matches!(last, "==" | "!=" | "<" | ">" | "<=" | ">=") {
-            return suggest_filter_value_params(span, last, params);
+            return suggest_filter_value_params(span, last, params, active_gate);
         }
         Some(CompletionResult::Keywords {
             span,
@@ -1367,13 +1516,16 @@ fn suggest_filter_context(
 
 /// Returns param completions for the filter value position (after a comparison
 /// operator). Allows string/bool/int/float params for all operators, and regex
-/// params only for `==` and `!=`.
+/// params only for `==` and `!=`. Optional params are gated by `active_gate`
+/// so a `where` outside any `ifdef` never suggests them, and an `ifdef($x)`
+/// body suggests `$x` only — not other optional params.
 fn suggest_filter_value_params(
     span: Span,
     op: &str,
     params: &[ParamItem],
+    active_gate: Option<&str>,
 ) -> Option<CompletionResult> {
-    suggest_params(span, params, |typ| match typ {
+    suggest_params(span, params, active_gate, |typ| match typ {
         ParamType::String | ParamType::Bool | ParamType::Int | ParamType::Float => true,
         ParamType::Regex => matches!(op, "==" | "!="),
         _ => false,
@@ -1404,7 +1556,7 @@ fn is_preamble_only(text: &str) -> bool {
 /// source). Handles:
 /// - Preamble keyword suggestions (`param`, `set`) when typing a prefix
 /// - Suppression of source completions mid-declaration (`param `, `set `)
-/// - Param type suggestions after `param $name: ` (the 8 valid types)
+/// - Param type suggestions after `param $name: ` (plain types and valid `Option` wrappers)
 fn suggest_for_preamble(text: &str, partial: &str, span: Span) -> Option<CompletionResult> {
     if find_last_pipe(text).is_some() {
         return None;
@@ -1486,7 +1638,7 @@ fn is_preamble_position(text: &str) -> bool {
     true
 }
 
-const PARAM_TYPE_KEYWORDS: [KeywordItem; 8] = [
+const PARAM_TYPE_KEYWORDS: [KeywordItem; 13] = [
     KeywordItem {
         label: "Dataset",
         apply: Some("Dataset;\n"),
@@ -1527,6 +1679,31 @@ const PARAM_TYPE_KEYWORDS: [KeywordItem; 8] = [
         apply: Some("Regex;\n"),
         info: "Parameter type",
     },
+    KeywordItem {
+        label: "Option<string>",
+        apply: Some("Option<string>;\n"),
+        info: "Optional parameter type for ifdef filters",
+    },
+    KeywordItem {
+        label: "Option<int>",
+        apply: Some("Option<int>;\n"),
+        info: "Optional parameter type for ifdef filters",
+    },
+    KeywordItem {
+        label: "Option<float>",
+        apply: Some("Option<float>;\n"),
+        info: "Optional parameter type for ifdef filters",
+    },
+    KeywordItem {
+        label: "Option<bool>",
+        apply: Some("Option<bool>;\n"),
+        info: "Optional parameter type for ifdef filters",
+    },
+    KeywordItem {
+        label: "Option<Regex>",
+        apply: Some("Option<Regex>;\n"),
+        info: "Optional parameter type for ifdef filters",
+    },
 ];
 
 /// Suggests dataset or metric completions when the cursor is at the source
@@ -1559,9 +1736,12 @@ fn suggest_for_source(
         // Metric part after the colon — param mode when it starts with `$`
         let metric_part = &partial[colon_idx + 1..];
         if metric_part.starts_with('$') {
-            return suggest_params(Span::new(span.from + colon_idx + 1, span.to), params, |t| {
-                t == ParamType::Metric
-            });
+            return suggest_params(
+                Span::new(span.from + colon_idx + 1, span.to),
+                params,
+                None,
+                |t| t == ParamType::Metric,
+            );
         }
         let dataset = dataset_raw
             .strip_prefix('`')
@@ -1574,7 +1754,7 @@ fn suggest_for_source(
             dataset: dataset.to_string(),
         })
     } else if partial.starts_with('$') {
-        suggest_params(span, params, |t| t == ParamType::Dataset)
+        suggest_params(span, params, None, |t| t == ParamType::Dataset)
     } else {
         // Skip past the opening backtick for unclosed escaped identifiers
         let backtick_offset = usize::from(partial.starts_with('`'));

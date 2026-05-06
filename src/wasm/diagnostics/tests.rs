@@ -7,6 +7,7 @@ fn diagnostic_items(q: &str) -> Vec<DiagnosticItem> {
         Err(CompileError::Parse(error)) => error.diagnostic_items(),
         Err(CompileError::Type(error)) => error.diagnostic_items(),
         Err(CompileError::Group(error)) => error.diagnostic_items(),
+        Err(CompileError::Ifdef(error)) => error.diagnostic_items(),
     }
 }
 
@@ -81,14 +82,16 @@ fn type_error_puts_error_on_use_and_info_on_declaration() {
         Err(CompileError::Parse(_)) => panic!("should be a type error, not parse error"),
         Err(CompileError::Type(error)) => error.diagnostic_items(),
         Err(CompileError::Group(error)) => error.diagnostic_items(),
+        Err(CompileError::Ifdef(_)) => panic!("should be a type error, not ifdef error"),
     };
 
     assert_eq!(items.len(), 2, "should produce two diagnostics");
 
     // The error should be on the usage site ($tag in align)
-    let error_item = items.iter().find(|i| matches!(i.severity, Severity::Error));
-    assert!(error_item.is_some(), "should have an error diagnostic");
-    let error_item = error_item.unwrap();
+    let error_item = items
+        .iter()
+        .find(|i| matches!(i.severity, Severity::Error))
+        .expect("should have an error diagnostic");
     assert_eq!(
         &query[error_item.span.from..error_item.span.to],
         "$tag",
@@ -96,12 +99,112 @@ fn type_error_puts_error_on_use_and_info_on_declaration() {
     );
 
     // The info should be on the declaration site
-    let info_item = items.iter().find(|i| matches!(i.severity, Severity::Info));
-    assert!(info_item.is_some(), "should have an info diagnostic");
-    let info_item = info_item.unwrap();
+    let info_item = items
+        .iter()
+        .find(|i| matches!(i.severity, Severity::Info))
+        .expect("should have an info diagnostic");
     assert!(
         info_item.message.contains("declaration"),
         "info message should mention declaration"
+    );
+}
+
+#[test]
+fn optional_param_outside_ifdef_is_error() {
+    let query = "param $f: Option<string>;\nds:metric | where tag == $f";
+    let items = match compile(query) {
+        Ok(_) => panic!("optional usage outside ifdef should not compile"),
+        Err(CompileError::Ifdef(error)) => error.diagnostic_items(),
+        Err(other) => panic!("expected ifdef error, got: {other}"),
+    };
+
+    assert_eq!(items.len(), 1, "should produce exactly one diagnostic");
+    let item = &items[0];
+    assert!(matches!(item.severity, Severity::Error));
+    assert_eq!(
+        &query[item.span.from..item.span.to],
+        "$f",
+        "error should point at the use site"
+    );
+    assert!(
+        item.message.contains('f') && item.message.contains("ifdef"),
+        "message should mention the param and ifdef, got: {:?}",
+        item.message
+    );
+}
+
+#[test]
+fn ifdef_body_does_not_reference_param_is_error() {
+    // The gating param `$f` is never referenced inside the ifdef body — that
+    // means the ifdef is structurally pointless. The visitor catches this on
+    // leave_ifdef.
+    let query = "param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" }";
+    let items = match compile(query) {
+        Ok(_) => panic!("ifdef body without param reference should not compile"),
+        Err(CompileError::Ifdef(error)) => error.diagnostic_items(),
+        Err(other) => panic!("expected ifdef error, got: {other}"),
+    };
+
+    assert_eq!(items.len(), 1);
+    assert!(matches!(items[0].severity, Severity::Error));
+    assert!(
+        items[0].message.contains("not referenced"),
+        "message should describe the missing reference, got: {:?}",
+        items[0].message
+    );
+}
+
+#[test]
+fn ifdef_body_referencing_param_compiles() {
+    // Sanity: an ifdef whose body DOES reference the gating param compiles.
+    let query = "param $f: Option<string>;\nds:metric | ifdef($f) { where tag == $f }";
+    assert!(
+        compile(query).is_ok(),
+        "ifdef body referencing the gating param should compile"
+    );
+}
+
+#[test]
+fn optional_regex_param_outside_ifdef_is_error() {
+    // Triggers OptionCheckVisitor::visit_parameterized_regex (the second emit
+    // site of IfdefError::OptionalOutsideOfIfdef), distinct from the value path.
+    let query = "param $r: Option<Regex>;\nds:metric | where tag == $r";
+    let items = match compile(query) {
+        Ok(_) => panic!("optional regex usage outside ifdef should not compile"),
+        Err(CompileError::Ifdef(error)) => error.diagnostic_items(),
+        Err(other) => panic!("expected ifdef error, got: {other}"),
+    };
+
+    assert_eq!(items.len(), 1);
+    assert!(matches!(items[0].severity, Severity::Error));
+    assert_eq!(
+        &query[items[0].span.from..items[0].span.to],
+        "$r",
+        "error should point at the regex use site"
+    );
+}
+
+#[test]
+fn optional_param_in_other_ifdef_is_error() {
+    // $b is gated by ifdef($a), but referenced through ifdef($b)'s gate —
+    // the visitor only allows the *same* optional param inside the ifdef.
+    let query = concat!(
+        "param $a: Option<string>;\n",
+        "param $b: Option<string>;\n",
+        "ds:metric | ifdef($a) { where tag == $b }",
+    );
+    let err = match compile(query) {
+        Ok(_) => panic!("cross-ifdef optional should not compile"),
+        Err(CompileError::Ifdef(error)) => error,
+        Err(other) => panic!("expected ifdef error, got: {other}"),
+    };
+    let items = err.diagnostic_items();
+    assert_eq!(items.len(), 1);
+    assert!(matches!(items[0].severity, Severity::Error));
+    assert_eq!(
+        &query[items[0].span.from..items[0].span.to],
+        "$b",
+        "error should point at the wrongly-gated param"
     );
 }
 
@@ -125,8 +228,8 @@ fn assert_parse_error(query: &str, expected_from: usize, expected_to: usize) {
     let items = match compile(query) {
         Ok(_) => panic!("'{query}' should not compile"),
         Err(CompileError::Parse(error)) => error.diagnostic_items(),
-        Err(CompileError::Type(_) | CompileError::Group(_)) => {
-            panic!("'{query}' should be a parse error, not type/group error")
+        Err(CompileError::Type(_) | CompileError::Group(_) | CompileError::Ifdef(_)) => {
+            panic!("'{query}' should be a parse error, not type/group/ifdef error")
         }
     };
     assert_eq!(
@@ -197,15 +300,15 @@ fn dataset_no_metric_with_time_range_error_at_bracket() {
 
 // ── escaped ident dataset with dot, no colon ────────────────────
 
-/// Runs compile → diagnostic_items → maybe_rewrite (the full wasm path).
+/// Runs `compile` → `diagnostic_items` → `maybe_rewrite` (the full wasm path).
 fn diagnostics_for(query: &str) -> Vec<DiagnosticItem> {
     match compile(query) {
         Ok(_) => panic!("'{query}' should not compile"),
         Err(CompileError::Parse(error)) => {
             maybe_rewrite_escaped_dataset_error(query, error.diagnostic_items())
         }
-        Err(CompileError::Type(_) | CompileError::Group(_)) => {
-            panic!("'{query}' should be a parse error, not type error")
+        Err(CompileError::Type(_) | CompileError::Group(_) | CompileError::Ifdef(_)) => {
+            panic!("'{query}' should be a parse error, not type/group/ifdef error")
         }
     }
 }

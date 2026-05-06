@@ -19,8 +19,8 @@ use mpl_lang::{
     Query, compile,
     linker::{AlignFunction, ComputeFunction, GroupFunction, MapFunction},
     query::{
-        Aggregate, Align, As, BucketBy, Cmp, Filter, GroupBy, Mapping, RelativeTime, Source,
-        TagType, TimeUnit,
+        Aggregate, Align, As, BucketBy, Cmp, Filter, FilterOrIfDef, GroupBy, Mapping,
+        ParamDeclaration, RelativeTime, Source, TagType, TimeUnit,
     },
     tags::TagValue,
     types::{BucketSpec, MapType, Parameterized, TagsType, TimeType},
@@ -47,6 +47,13 @@ pub enum StepNode {
     Source(Source),
     /// A filter clause.
     Filter(Filter),
+    /// An ifdef clause: a filter gated on an optional param being provided.
+    Ifdef {
+        /// The optional param the filter is gated on.
+        param: ParamDeclaration,
+        /// The filter applied when the param is set.
+        filter: Filter,
+    },
     /// An aggregate pipe.
     Aggregate(Aggregate),
     /// A sample clause.
@@ -71,6 +78,9 @@ impl Display for StepNode {
         match self {
             StepNode::Source(s) => write!(f, "{s}"),
             StepNode::Filter(fl) => write!(f, "| where {fl}"),
+            StepNode::Ifdef { param, filter } => {
+                write!(f, "| ifdef(${}) {{ where {filter} }}", param.name)
+            }
             StepNode::Aggregate(a) => write!(f, "{a}"),
             StepNode::Sample(v) => write!(f, "| sample {v}"),
             StepNode::Error(msg) => write!(f, "/* error: {msg} */"),
@@ -226,11 +236,10 @@ fn query_steps(query: Query) -> Vec<PipeStep> {
             if let Some(rate) = sample {
                 steps.push(step(StepNode::Sample(rate)));
             }
-            steps.extend(
-                filters
-                    .into_iter()
-                    .map(|filter| step(StepNode::Filter(filter))),
-            );
+            steps.extend(filters.into_iter().map(|fi| match fi {
+                FilterOrIfDef::Filter(filter) => step(StepNode::Filter(filter)),
+                FilterOrIfDef::Ifdef { param, filter } => step(StepNode::Ifdef { param, filter }),
+            }));
             steps.extend(
                 aggregates
                     .into_iter()
@@ -272,6 +281,9 @@ pub fn interpret(pipe_steps: &[PipeStep], datasets: &Datasets) -> Vec<Result<Vec
         let outcome = match &step.node {
             StepNode::Source(src) => eval_source(src, datasets),
             StepNode::Filter(f) => apply_filter(&series, f),
+            // The playground has no way to provide values for optional params,
+            // so the gated filter never applies and the series passes through.
+            StepNode::Ifdef { .. } => Ok(series.clone()),
             StepNode::Sample(rate) => apply_sample(&series, *rate),
             StepNode::Error(msg) => Err(eyre!("{msg}")),
             StepNode::Aggregate(agg) => apply_aggregate(&series, agg),
@@ -300,7 +312,7 @@ fn get_param<T>(p: &Parameterized<T>) -> Result<&T> {
 
 fn raw_tag(v: &TagValue) -> String {
     match v {
-        TagValue::None => String::new(),
+        TagValue::Null => String::new(),
         TagValue::Bool(b) => b.to_string(),
         TagValue::Int(i) => i.to_string(),
         TagValue::Float(f) => f.to_string(),
@@ -371,7 +383,7 @@ fn evaluate_cmp(tag_val: &str, rhs: &Cmp) -> Result<bool> {
             Ok(!re.is_match(tag_val))
         }
         Cmp::Is(tag_type) => Ok(match tag_type {
-            TagType::None => tag_val.is_empty(),
+            TagType::Null => tag_val.is_empty(),
             TagType::Bool => tag_val == "true" || tag_val == "false",
             TagType::Int => tag_val.parse::<i64>().is_ok(),
             TagType::Float => tag_val.parse::<f64>().is_ok(),

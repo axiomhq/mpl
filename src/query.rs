@@ -846,6 +846,28 @@ impl ProvidedParams {
     pub fn contains(&self, param: &str) -> bool {
         self.get_param(param).is_ok()
     }
+
+    /// Returns the filter when it should be applied for these params.
+    ///
+    /// Plain filters are always active. `ifdef` filters are active only when
+    /// their guarding optional param was provided by the caller.
+    #[must_use]
+    pub fn active_filter<'a>(&self, filter: &'a FilterOrIfDef) -> Option<&'a Filter> {
+        match filter {
+            FilterOrIfDef::Filter(filter) => Some(filter),
+            FilterOrIfDef::Ifdef { param, filter } if self.contains(&param.name) => Some(filter),
+            FilterOrIfDef::Ifdef { .. } => None,
+        }
+    }
+
+    /// Returns filters that should be applied for these params, preserving order.
+    #[must_use]
+    pub fn active_filters<'a>(&self, filters: &'a [FilterOrIfDef]) -> Vec<&'a Filter> {
+        filters
+            .iter()
+            .filter_map(|filter| self.active_filter(filter))
+            .collect()
+    }
 }
 
 /// Parameters that will be set externally.

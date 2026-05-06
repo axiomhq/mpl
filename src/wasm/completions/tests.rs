@@ -4,8 +4,8 @@ use test_case::test_case;
 use crate::stdlib::STDLIB;
 
 use super::{
-    CompletionResult, ParamType, QueryContext, compute_completions, extract_declared_params,
-    extract_partial_word, is_char_escaped, locate_query_context,
+    CompletionResult, ParamItem, ParamType, QueryContext, compute_completions,
+    extract_declared_params, extract_partial_word, is_char_escaped, locate_query_context,
 };
 
 fn tag_info(r: &CompletionResult) -> Option<(&str, &str)> {
@@ -459,7 +459,7 @@ fn completions_param_space_suppresses_dataset() {
             .as_ref()
             .is_none_or(|r| r.kind() != "dataset" && r.kind() != "metric"),
         "should NOT suggest dataset/metric while typing a param declaration, got {:?}",
-        result.as_ref().map(|r| r.kind())
+        result.as_ref().map(CompletionResult::kind)
     );
 }
 
@@ -472,7 +472,7 @@ fn completions_set_space_suppresses_dataset() {
             .as_ref()
             .is_none_or(|r| r.kind() != "dataset" && r.kind() != "metric"),
         "should NOT suggest dataset/metric while typing a set directive, got {:?}",
-        result.as_ref().map(|r| r.kind())
+        result.as_ref().map(CompletionResult::kind)
     );
 }
 
@@ -504,7 +504,121 @@ fn completions_partial_param_after_source_no_preamble_keyword() {
 
 // ── apply text assertions ───────────────────────────────────────
 
-/// Selecting a param type completion should insert the type followed by `;\n`.
+// ── parse_param_decl edge cases (via extract_declared_params) ──
+
+fn find_param<'a>(params: &'a [ParamItem], label: &str) -> Option<&'a ParamItem> {
+    params.iter().find(|p| p.label == label)
+}
+
+#[test]
+fn parse_param_decl_optional_flag_set_correctly() {
+    let params = extract_declared_params("param $a: string;\nparam $b: Option<int>;\nds:metric");
+    assert_eq!(params.len(), 2, "both params should parse");
+    assert!(
+        !find_param(&params, "$a")
+            .expect("$a should be parsed")
+            .optional
+    );
+    assert!(
+        find_param(&params, "$b")
+            .expect("$b should be parsed")
+            .optional
+    );
+    // Inner type drives the typ field regardless of the wrapper.
+    assert_eq!(
+        find_param(&params, "$b").expect("$b should be parsed").typ,
+        ParamType::Int
+    );
+}
+
+#[test]
+fn parse_param_decl_unclosed_option_is_dropped() {
+    // `Option<` without `>` does not match the strip pattern; the raw "Option<int"
+    // is then matched against known type names — it isn't one, so the param is
+    // silently dropped from completion suggestions.
+    let params = extract_declared_params("param $x: Option<int;\nds:metric");
+    assert!(
+        params.is_empty(),
+        "malformed Option< should drop the param: {params:?}"
+    );
+}
+
+#[test]
+fn parse_param_decl_unknown_inner_type_is_dropped() {
+    let params = extract_declared_params("param $x: Option<unknown>;\nds:metric");
+    assert!(
+        params.is_empty(),
+        "unknown inner type should drop the param"
+    );
+}
+
+#[test]
+fn parse_param_decl_nested_option_is_dropped() {
+    // We strip one Option layer; the remaining "Option<int>" is not a known type.
+    let params = extract_declared_params("param $x: Option<Option<int>>;\nds:metric");
+    assert!(params.is_empty(), "nested Option is not supported");
+}
+
+#[test]
+fn parse_param_decl_inner_whitespace_tolerated() {
+    let params = extract_declared_params("param $x: Option< string >;\nds:metric");
+    assert_eq!(params.len(), 1);
+    let p = &params[0];
+    assert!(p.optional);
+    assert_eq!(p.typ, ParamType::String);
+}
+
+#[test]
+fn parse_param_decl_all_valid_optional_inner_types_recognised() {
+    let cases = [
+        ("string", ParamType::String),
+        ("int", ParamType::Int),
+        ("float", ParamType::Float),
+        ("bool", ParamType::Bool),
+        ("Regex", ParamType::Regex),
+    ];
+    for (inner, expected) in cases {
+        let query = format!("param $x: Option<{inner}>;\nds:metric");
+        let params = extract_declared_params(&query);
+        assert_eq!(params.len(), 1, "Option<{inner}> should parse");
+        assert!(params[0].optional, "Option<{inner}> should be optional");
+        assert_eq!(
+            params[0].typ, expected,
+            "Option<{inner}> should map to {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn parse_param_decl_invalid_optional_inner_types_are_dropped() {
+    for inner in ["Dataset", "Metric", "Duration", "duration"] {
+        let query = format!("param $x: Option<{inner}>;\nds:metric");
+        let params = extract_declared_params(&query);
+        assert!(
+            params.is_empty(),
+            "Option<{inner}> is not valid in ifdef filters and should not be suggested"
+        );
+    }
+}
+
+#[test]
+fn ifdef_keyword_apply_text_opens_paren() {
+    let r = completions_at("param $f: Option<string>;\nds:metric | #")
+        .expect("should produce pipe keyword completions");
+    assert_eq!(r.kind(), "keywords");
+    let labels = r.option_labels();
+    let applies = r.keyword_apply_texts();
+    let pos = labels
+        .iter()
+        .position(|l| *l == "ifdef")
+        .expect("ifdef should be in pipe keywords when an optional param is declared");
+    assert_eq!(
+        applies[pos],
+        Some("ifdef("),
+        "ifdef apply text should open the paren so the cursor lands on the param argument"
+    );
+}
+
 #[test]
 fn completions_param_type_apply_includes_semicolon_newline() {
     let query = "param $name: ";
@@ -519,6 +633,28 @@ fn completions_param_type_apply_includes_semicolon_newline() {
             Some(expected.as_str()),
             "param type '{label}' should have apply text '{expected}'"
         );
+    }
+}
+
+#[test]
+fn completions_param_type_only_valid_option_snippets() {
+    let query = "param $name: ";
+    let r = compute_completions(query, query.len()).expect("should produce type completions");
+    assert_eq!(r.kind(), "keywords");
+    let labels = r.option_labels();
+
+    for valid in [
+        "Option<string>",
+        "Option<int>",
+        "Option<float>",
+        "Option<bool>",
+        "Option<Regex>",
+    ] {
+        assert!(labels.contains(&valid), "should suggest {valid}");
+    }
+
+    for invalid in ["Option<Dataset>", "Option<Metric>", "Option<Duration>"] {
+        assert!(!labels.contains(&invalid), "should not suggest {invalid}");
     }
 }
 
@@ -605,7 +741,7 @@ fn function_info_submodule_unqualified_search() {
 
 /// Bug 1: After `| filter ` (preceded by filter lines with regexes containing
 /// pipe characters), a `Tag` completion is returned — but the span is
-/// zero-length (`from == to`). The CodeMirror adapter sees an empty
+/// zero-length (`from == to`). The `CodeMirror` adapter sees an empty
 /// replacement range and never opens the completion popup, even though
 /// tags are fetched.
 #[test]
@@ -682,7 +818,7 @@ fn completions_group_by_bare_tag_suggests_using_not_tag() {
     assert!(!labels.contains(&"by"), "should NOT suggest 'by' again");
 }
 
-/// After `| group by tag1 using `, should return GroupFunctions.
+/// After `| group by tag1 using `, should return `GroupFunctions`.
 #[test]
 fn completions_group_by_using_suggests_functions() {
     let query = "ds:metric | group by tag1 using ";
@@ -690,7 +826,7 @@ fn completions_group_by_using_suggests_functions() {
     assert_eq!(r.kind(), "group_functions");
 }
 
-/// After `| group ` (no `by`), should suggest keywords ["by", "using"].
+/// After `| group ` (no `by`), should suggest keywords `by` and `using`.
 #[test]
 fn completions_group_alone_suggests_keywords() {
     let query = "ds:metric | group ";
@@ -914,7 +1050,7 @@ fn completions_filter_value_position_returns_none() {
     assert!(
         result.is_none(),
         "expected None at value position after ==, got {:?}",
-        result.as_ref().map(|r| r.kind())
+        result.as_ref().map(CompletionResult::kind)
     );
 }
 
@@ -926,7 +1062,7 @@ fn completions_filter_value_position_neq_returns_none() {
     assert!(
         result.is_none(),
         "expected None at value position after !=, got {:?}",
-        result.as_ref().map(|r| r.kind())
+        result.as_ref().map(CompletionResult::kind)
     );
 }
 
@@ -938,7 +1074,7 @@ fn completions_filter_value_position_lt_returns_none() {
     assert!(
         result.is_none(),
         "expected None at value position after <, got {:?}",
-        result.as_ref().map(|r| r.kind())
+        result.as_ref().map(CompletionResult::kind)
     );
 }
 
@@ -950,7 +1086,7 @@ fn completions_filter_value_position_gte_returns_none() {
     assert!(
         result.is_none(),
         "expected None at value position after >=, got {:?}",
-        result.as_ref().map(|r| r.kind())
+        result.as_ref().map(CompletionResult::kind)
     );
 }
 
@@ -966,7 +1102,7 @@ fn completions_filter_escaped_tag_value_position_returns_none() {
     assert!(
         result.is_none(),
         "expected None at value position after `container` ==, got {:?}",
-        result.as_ref().map(|r| r.kind())
+        result.as_ref().map(CompletionResult::kind)
     );
 }
 
@@ -1313,6 +1449,20 @@ fn completions_at(input: &str) -> Option<CompletionResult> {
 #[test_case("ds:metric | where tag is string #"           => Some("keywords")         ; "after is string suggests boolean ops")]
 #[test_case("ds:metric | filter tag is bool #"            => Some("keywords")         ; "after is bool suggests boolean ops")]
 #[test_case("ds:metric | sample #"                        => None                     ; "sample takes number no completions")]
+// ── ifdef ───────────────────────────────────────────────────────
+#[test_case("param $f: Option<string>;\nds:metric | ifdef(#"                          => Some("params")   ; "ifdef arg suggests params")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($#"                         => Some("params")   ; "ifdef arg partial dollar")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) #"                      => Some("keywords") ; "ifdef after close paren suggests brace")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) {#"                     => Some("keywords") ; "ifdef open brace suggests where")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { #"                    => Some("keywords") ; "ifdef inside braces suggests where")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where #"              => Some("tag")      ; "ifdef body where suggests tag")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == #"       => Some("params")   ; "ifdef body filter value suggests params")]
+// ── ifdef mid-cursor ────────────────────────────────────────────
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { wh#"                  => Some("keywords") ; "ifdef body partial where keyword")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where ta#"            => Some("tag")      ; "ifdef body partial tag name")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { filter #"             => Some("tag")      ; "ifdef body filter alias suggests tag")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" } | #" => Some("keywords") ; "after closed ifdef pipe again")]
+#[test_case("ds:metric | ifdef(#"                                                     => None             ; "ifdef arg with no optional params returns none")]
 fn test_completion_kind(input: &str) -> Option<&'static str> {
     completions_at(input).map(|r| r.kind())
 }
@@ -1338,8 +1488,14 @@ fn test_completion_kind(input: &str) -> Option<&'static str> {
 #[test_case("( ds1:m1 , ds2:m2 ) | compute result using / | #", &["map", "align"]                  ; "compute tail has map and align")]
 #[test_case("`dev.metrics`:http_requests_total\n| align #", &["to"]                    ; "align initially suggests to")]
 #[test_case("`dev.metrics`:http_requests_total\n| align to 42s #", &["using"]          ; "align after to suggests using")]
-#[test_case("param $name: #", &["Dataset", "Metric", "Duration", "string", "int", "float", "bool", "Regex"] ; "all param types")]
+#[test_case("param $name: #", &["Dataset", "Metric", "Duration", "string", "int", "float", "bool", "Regex", "Option<string>", "Option<int>", "Option<float>", "Option<bool>", "Option<Regex>"] ; "all param types")]
 #[test_case("`my-dataset`:`my-metric` | #", &["sample", "where", "map"]                           ; "backtick pipe keywords")]
+// ── ifdef keyword in pipe-keywords list ─────────────────────────
+#[test_case("param $f: Option<string>;\nds:metric | #", &["ifdef"]                              ; "ifdef offered when optional present")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == $f and other #", &["and", "or"]
+                                                                                                  ; "ifdef body boolean ops")]
+// ── compute query × ifdef ───────────────────────────────────────
+#[test_case("param $f: Option<string>;\n( ds1:m1 | #",                              &["ifdef"]    ; "ifdef in compute subquery")]
 // ── mid-query cursor ────────────────────────────────────────────
 #[test_case("ds:metric | wh#ere tag == \"x\"",   &["where"]                                       ; "mid keyword contains where")]
 #[test_case("( a:b , c:d ) | com#pute out using / | map rate", &["compute"]                        ; "mid compute rule contains compute")]
@@ -1369,6 +1525,11 @@ fn test_completion_labels_contain(input: &str, expected: &[&str]) {
 // ── mid-query cursor ────────────────────────────────────────────
 #[test_case("ds:metric | bucket to 1m using interpolate_cumulative_histogram(ra#te, count)", &["count"] ; "mid bucket first arg excludes specs")]
 #[test_case("ds:metric | where tag is #",                  &["Dataset", "metric", "Duration", "regex"] ; "is excludes non-tag types")]
+// ── ifdef gating ────────────────────────────────────────────────
+#[test_case("ds:metric | #",                           &["ifdef"] ; "ifdef hidden without optional params")]
+#[test_case("param $s: string;\nds:metric | #",        &["ifdef"] ; "ifdef hidden when no params are optional")]
+#[test_case("param $f: Option<string>;\n( ds1:m1 , ds2:m2 ) | compute r using / | #", &["ifdef"]
+                                                                  ; "ifdef hidden in compute outer tail")]
 fn test_completion_labels_exclude(input: &str, excluded: &[&str]) {
     let r = completions_at(input).expect("should produce completions");
     let labels = r.option_labels();
@@ -1458,6 +1619,26 @@ fn test_completion_source_dataset(input: &str, expected: &str) {
 #[test_case("param $s: string;\nparam $m: Metric;\nds:$#", &["$m"]                           ; "source metric includes metric")]
 // ── mid-query cursor ────────────────────────────────────────────
 #[test_case("param $str: string;\nds:metric | filter tag == $s#tr and other == 1", &["$str"] ; "mid param suffix ignored")]
+// ── ifdef arg ───────────────────────────────────────────────────
+#[test_case("param $f: Option<string>;\nds:metric | ifdef(#",                       &["$f"]   ; "ifdef arg suggests optional")]
+#[test_case("param $a: string;\nparam $b: Option<int>;\nds:metric | ifdef(#",       &["$b"]   ; "ifdef arg includes optional only")]
+// ── ifdef body: gate's own optional + non-optional companions ──
+#[test_case(
+    "param $a: Option<string>;\nparam $b: Option<string>;\nds:metric | ifdef($a) { where tag == #",
+    &["$a"]
+    ; "ifdef body includes the gate's optional"
+)]
+#[test_case(
+    "param $a: Option<string>;\nparam $c: string;\nds:metric | ifdef($a) { where tag == #",
+    &["$a", "$c"]
+    ; "ifdef body includes gate optional plus non-optional"
+)]
+// ── filter value: non-optional companions still suggested ──────
+#[test_case(
+    "param $a: Option<string>;\nparam $b: string;\nds:metric | where tag == #",
+    &["$b"]
+    ; "where value position keeps non-optional params"
+)]
 fn test_completion_params_contain(input: &str, expected: &[&str]) {
     let r = completions_at(input).expect("should produce param completions");
     assert_eq!(r.kind(), "params");
@@ -1479,6 +1660,35 @@ fn test_completion_params_contain(input: &str, expected: &[&str]) {
 #[test_case("param $s: string;\nparam $d: Dataset;\n$#", &["$s"]                        ; "source excludes non-dataset")]
 #[test_case("param $ds: Dataset;\nparam $other: string;\n$d#", &["$other"]               ; "source partial excludes non-matching")]
 #[test_case("param $s: string;\nparam $m: Metric;\nds:$#", &["$s"]                      ; "metric excludes non-metric")]
+// ── ifdef arg excludes non-optional ─────────────────────────────
+#[test_case("param $a: string;\nparam $b: Option<int>;\nds:metric | ifdef(#",       &["$a"]   ; "ifdef arg excludes non-optional")]
+// ── filter value position outside ifdef excludes optional params ─
+// Regression for the bug where suggest_filter_value_params filtered by
+// type only and ignored the `optional` flag, so accepting the suggestion
+// produced an immediate `OptionalOutsideOfIfdef` compile error.
+#[test_case(
+    "param $a: Option<string>;\nparam $b: string;\nds:metric | where tag == #",
+    &["$a"]
+    ; "where value excludes optional params"
+)]
+#[test_case(
+    "param $a: Option<int>;\nparam $b: int;\nds:metric | filter tag > #",
+    &["$a"]
+    ; "filter gt value excludes optional params"
+)]
+#[test_case(
+    "param $a: Option<Regex>;\nparam $b: Regex;\nds:metric | where tag == #",
+    &["$a"]
+    ; "where eq value excludes optional regex"
+)]
+// ── ifdef body excludes other ifdefs' optional params ──────────
+// Regression for the bug where ifdef body delegated to suggest_filter_context
+// without scoping optional-param completions to the active gate.
+#[test_case(
+    "param $a: Option<string>;\nparam $b: Option<string>;\nds:metric | ifdef($a) { where tag == #",
+    &["$b"]
+    ; "ifdef body excludes other ifdefs' optionals"
+)]
 fn test_completion_params_exclude(input: &str, excluded: &[&str]) {
     let r = completions_at(input).expect("should produce param completions");
     let labels = r.option_labels();

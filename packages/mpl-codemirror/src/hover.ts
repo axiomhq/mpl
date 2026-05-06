@@ -63,7 +63,86 @@ const KEYWORD_DOCS: Record<string, KeywordDoc> = {
   and: { description: "Logical AND in filter expressions" },
   or: { description: "Logical OR in filter expressions" },
   not: { description: "Logical NOT in filter expressions" },
+  ifdef: {
+    description:
+      "Conditionally apply a filter when an optional param is supplied. The body is dropped when the param is omitted.",
+    syntax: "| ifdef($param) { where <filter-expr> }",
+  },
+  Option: {
+    description:
+      "Wraps a param type to mark it optional. Optional params can only be referenced inside an ifdef gating on them.",
+    syntax: "param $name: Option<T>;",
+  },
 };
+
+/** A declared MPL parameter, as resolved from the document text. */
+export interface ParamDecl {
+  /**
+   * Inner type as written in the source (e.g. `"string"`, `"Duration"`).
+   * For optional params this is the *unwrapped* inner type: `Option<string>`
+   * yields `{ type: "string", optional: true }`.
+   */
+  type: string;
+  optional: boolean;
+}
+
+// Multi-line: matches each `param $name: type;` declaration in the document.
+// Lazy on the type body to stop at the first `;` (single-line declarations).
+const PARAM_LINE_RE = /^[ \t]*param[ \t]+(\$[A-Za-z_][A-Za-z0-9_]*)[ \t]*:[ \t]*([^;]+);/gm;
+const OPTION_RE = /^Option[ \t]*<[ \t]*(.+?)[ \t]*>$/;
+
+/**
+ * Scans the document for `param $name: type;` declarations and returns a map
+ * keyed by the dollar-prefixed name (e.g. `"$container"`).
+ *
+ * Intentionally TS-side rather than a wasm round-trip: the grammar for param
+ * declarations is dead simple and stable, and a hover hint is non-critical
+ * enough that drift risk is acceptable. If the param fails to compile, the
+ * hover simply won't resolve — diagnostics handle the error path.
+ */
+export function parseParamDeclarations(doc: string): Map<string, ParamDecl> {
+  const result = new Map<string, ParamDecl>();
+  const re = new RegExp(PARAM_LINE_RE.source, PARAM_LINE_RE.flags);
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(doc)) !== null) {
+    const [, name, rawType] = m;
+    const trimmed = rawType.trim();
+    const optMatch = OPTION_RE.exec(trimmed);
+    if (optMatch) {
+      result.set(name, { type: optMatch[1].trim(), optional: true });
+    } else {
+      result.set(name, { type: trimmed, optional: false });
+    }
+  }
+  return result;
+}
+
+/**
+ * Locates a `$ident` token at `pos`. The cursor may sit on the `$` itself or
+ * on any character of the name. Returns the dollar-prefixed name and the
+ * span covering it, or `null` when there is no param reference at the cursor.
+ */
+export function extractParamAt(
+  doc: string,
+  pos: number,
+): { name: string; from: number; to: number } | null {
+  if (pos < 0 || pos >= doc.length) return null;
+  const isIdChar = (c: string) => /[A-Za-z0-9_]/.test(c);
+
+  let from = pos;
+  if (doc[from] !== "$") {
+    if (!isIdChar(doc[from])) return null;
+    while (from > 0 && isIdChar(doc[from - 1])) from--;
+    if (from === 0 || doc[from - 1] !== "$") return null;
+    from--;
+  }
+
+  let to = from + 1;
+  while (to < doc.length && isIdChar(doc[to])) to++;
+
+  if (to === from + 1) return null; // bare `$` without an identifier
+  return { name: doc.slice(from, to), from, to };
+}
 
 function extractWordAt(
   doc: string,
@@ -147,6 +226,38 @@ function renderFunctionTooltip(info: WasmFunctionInfo): HTMLElement {
   return dom;
 }
 
+function renderParamTooltip(name: string, decl: ParamDecl): HTMLElement {
+  const dom = document.createElement("div");
+  dom.className = "mpl-hover-tooltip";
+
+  const sig = document.createElement("div");
+  sig.className = "mpl-hover-sig";
+
+  const nameSpan = document.createElement("span");
+  nameSpan.className = "mpl-hover-fn";
+  nameSpan.textContent = name;
+  sig.appendChild(nameSpan);
+
+  sig.appendChild(document.createTextNode(": "));
+
+  const typeSpan = document.createElement("span");
+  typeSpan.className = "mpl-hover-param";
+  typeSpan.textContent = decl.optional ? `Option<${decl.type}>` : decl.type;
+  sig.appendChild(typeSpan);
+
+  dom.appendChild(sig);
+
+  if (decl.optional) {
+    const note = document.createElement("div");
+    note.className = "mpl-hover-doc";
+    note.textContent =
+      "Optional parameter — only referenceable inside an `ifdef` block gating on it.";
+    dom.appendChild(note);
+  }
+
+  return dom;
+}
+
 function renderKeywordTooltip(keyword: string, doc: KeywordDoc): HTMLElement {
   const dom = document.createElement("div");
   dom.className = "mpl-hover-tooltip";
@@ -179,6 +290,30 @@ function hoverSource(
   _side: -1 | 1,
 ): Tooltip | null {
   const doc = _view.state.doc.toString();
+
+  // Param references take priority over the generic word path. `$ident`
+  // tokens are not picked up by `extractWordAt` (the leading `$` short-
+  // circuits its `[a-zA-Z]` guard at the end), so without this branch
+  // hovering a `$container` reference would render no tooltip at all.
+  const param = extractParamAt(doc, pos);
+  if (param) {
+    const decl = parseParamDeclarations(doc).get(param.name);
+    if (decl) {
+      return {
+        pos: param.from,
+        end: param.to,
+        above: true,
+        create() {
+          return { dom: renderParamTooltip(param.name, decl) };
+        },
+      };
+    }
+    // Param referenced but not declared — let diagnostics flag the
+    // undefined name; suppress the hover instead of showing a stale or
+    // misleading tooltip.
+    return null;
+  }
+
   const word = extractWordAt(doc, pos);
   if (!word) return null;
 

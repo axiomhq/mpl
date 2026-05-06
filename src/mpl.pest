@@ -92,6 +92,7 @@ kw_not = { "not" }
 kw_filter      =  { "filter" }
 kw_sample      =  { "sample" }
 kw_where       =  { "where" }
+kw_ifdef       =  { "ifdef" }
 filter_keyword = _{ kw_filter | kw_where }
 filter_atom    =  { (tag ~ (value_filter | regex_filter | is_filter)) }
 filter_clause  =  { filter_atom | ("(" ~ filter_or ~ ")") }
@@ -100,7 +101,7 @@ filter_and     =  { filter_not ~ ("and" ~ filter_not)* }
 filter_or      =  { filter_and ~ ("or" ~ filter_and)* }
 filter_expr    = _{ filter_keyword ~ filter_or }
 filter_rule    =  { pipe_keyword ~ filter_expr }
-ifdef_rule     =  { pipe_keyword ~ "ifdef" ~ "(" ~ param_ident ~ ")" ~ "{" ~ filter_expr ~ "}" }
+ifdef_rule     =  { pipe_keyword ~ kw_ifdef ~ "(" ~ param_ident ~ ")" ~ "{" ~ filter_expr ~ "}" }
 sample_expr    =  { kw_sample ~ number }
 sample_rule    =  { pipe_keyword ~ sample_expr }
 

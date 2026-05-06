@@ -5,7 +5,19 @@ import {
   escapeIdent,
   applyTextForIdent,
   mplWordChars,
+  IFDEF_SNIPPET,
 } from "./completions";
+
+describe("IFDEF_SNIPPET", () => {
+  // Importing this constant runs the @codemirror/autocomplete snippet
+  // parser at module load. If the template were malformed (unbalanced
+  // braces, bad placeholder syntax) the import itself would throw —
+  // hence the assertion is also implicitly a parse-time guard.
+  it("is exported as a callable suitable for Completion.apply", () => {
+    expect(typeof IFDEF_SNIPPET).toBe("function");
+    expect(IFDEF_SNIPPET).not.toBe(undefined);
+  });
+});
 
 describe("mplWordChars", () => {
   it("classifies backtick and $ as word characters", () => {

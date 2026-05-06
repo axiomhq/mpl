@@ -190,6 +190,17 @@ fn keyword_not() {
 }
 
 #[test]
+fn keyword_ifdef() {
+    let query = "param $f: Option<string>;\nds:metric | ifdef($f) { where tag == $f }";
+    let tokens = collect_tokens(query).expect("should tokenize");
+    let kw = tokens
+        .iter()
+        .find(|t| &query[t.span.from..t.span.to] == "ifdef")
+        .expect("should have ifdef keyword");
+    assert_eq!(kw.kind, TokenType::Keyword);
+}
+
+#[test]
 fn keyword_bucket_fn() {
     let query = "ds:metric | bucket to 1m using histogram(count)";
     let tokens = collect_tokens(query).expect("should tokenize");
@@ -318,8 +329,8 @@ fn param_type_all_variants_highlighted() {
     ];
     for typ_name in types {
         let query = format!("param $x: {typ_name};\nds:metric");
-        let tokens =
-            collect_tokens(&query).expect(&format!("should tokenize with type {typ_name}"));
+        let tokens = collect_tokens(&query)
+            .unwrap_or_else(|| panic!("should tokenize with type {typ_name}"));
         let typ = tokens
             .iter()
             .find(|t| &query[t.span.from..t.span.to] == typ_name)
@@ -328,6 +339,76 @@ fn param_type_all_variants_highlighted() {
             typ.kind,
             TokenType::Type,
             "param type '{typ_name}' should be TokenType::Type"
+        );
+    }
+}
+
+#[test]
+fn optional_type_option_keyword_is_type() {
+    let query = "param $f: Option<string>;\nds:metric";
+    let tokens = collect_tokens(query).expect("should tokenize");
+    let opt = tokens
+        .iter()
+        .find(|t| &query[t.span.from..t.span.to] == "Option")
+        .expect("should have Option type token");
+    assert_eq!(opt.kind, TokenType::Type);
+}
+
+#[test]
+fn optional_type_inner_is_separately_tokenized() {
+    let query = "param $f: Option<string>;\nds:metric";
+    let tokens = collect_tokens(query).expect("should tokenize");
+    let inner = tokens
+        .iter()
+        .find(|t| &query[t.span.from..t.span.to] == "string")
+        .expect("inner type should be tokenized separately");
+    assert_eq!(inner.kind, TokenType::Type);
+}
+
+#[test]
+fn optional_type_inner_param_native_type() {
+    // Tokenization is intentionally more lenient than parsing/completions: the
+    // editor should keep syntax highlighting useful while users are mid-edit,
+    // and diagnostics remain responsible for reporting invalid `Option` inners.
+    let query = "param $d: Option<Duration>;\nds:metric";
+    let tokens = collect_tokens(query).expect("should tokenize");
+    assert!(
+        tokens
+            .iter()
+            .any(|t| &query[t.span.from..t.span.to] == "Option" && t.kind == TokenType::Type),
+        "should have Option type token"
+    );
+    assert!(
+        tokens
+            .iter()
+            .any(|t| &query[t.span.from..t.span.to] == "Duration" && t.kind == TokenType::Type),
+        "should have inner Duration type token"
+    );
+}
+
+#[test]
+fn optional_type_all_inner_variants_highlighted() {
+    // Keep highlighting lenient for optional inners that diagnostics later
+    // reject; this avoids flickering while users edit `Option<...>` types.
+    // `Metric` is not an accepted inner type per the grammar — exclude it.
+    let inners = [
+        "Dataset", "Duration", "Regex", "string", "int", "float", "bool",
+    ];
+    for inner in inners {
+        let query = format!("param $x: Option<{inner}>;\nds:metric");
+        let tokens =
+            collect_tokens(&query).unwrap_or_else(|| panic!("should tokenize Option<{inner}>"));
+        assert!(
+            tokens
+                .iter()
+                .any(|t| &query[t.span.from..t.span.to] == "Option" && t.kind == TokenType::Type),
+            "Option not tokenized as Type for inner={inner}"
+        );
+        assert!(
+            tokens
+                .iter()
+                .any(|t| &query[t.span.from..t.span.to] == inner && t.kind == TokenType::Type),
+            "{inner} not tokenized as Type inside Option<>"
         );
     }
 }
@@ -381,8 +462,8 @@ fn is_filter_all_tag_types() {
     let types = ["string", "int", "float", "bool"];
     for typ_name in types {
         let query = format!("ds:metric | where tag is {typ_name}");
-        let tokens =
-            collect_tokens(&query).expect(&format!("should tokenize with type {typ_name}"));
+        let tokens = collect_tokens(&query)
+            .unwrap_or_else(|| panic!("should tokenize with type {typ_name}"));
         let typ = tokens
             .iter()
             .find(|t| &query[t.span.from..t.span.to] == typ_name)

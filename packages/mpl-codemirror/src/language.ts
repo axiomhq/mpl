@@ -1,6 +1,6 @@
 import { ViewPlugin, ViewUpdate, Decoration, DecorationSet, EditorView } from "@codemirror/view";
 import { RangeSetBuilder } from "@codemirror/state";
-import * as mpl from "@axiomhq/mpl";
+import * as mpl from "@axiomhq/mpl-lang";
 
 type TokenType = "variable" | "string" | "number" | "bool" | "regexp" | "operator" | "punctuation" | "keyword" | "type";
 
@@ -10,13 +10,13 @@ interface Token {
   type: TokenType;
 }
 
-const MPL_KEYWORDS = /\b(filter|where|map|group|by|using|align|to|over|from|bucket|join|compute|set|replace|as|and|or|not|is|param|rate|increase|histogram|interpolate_delta_histogram|interpolate_cumulative_histogram|count|avg|sum|min|max)\b/g;
+const MPL_KEYWORDS = /\b(filter|where|map|group|by|using|align|to|over|from|bucket|join|compute|set|replace|as|and|or|not|is|param|ifdef|rate|increase|histogram|interpolate_delta_histogram|interpolate_cumulative_histogram|count|avg|sum|min|max)\b/g;
 const COMMENT_RE = /\/\/[^\n]*/g;
 const STRING_RE = /"(?:[^"\\]|\\.)*"/g;
 const REGEX_RE = /#s?\/(?:[^/\\]|\\.)*(?:\/(?:[^/\\]|\\.)*)?\//g;
 const NUMBER_RE = /\b\d+(\.\d*)?([eE][+-]?\d+)?[smhdwMy]?\b/g;
 const BOOL_RE = /\b(true|false)\b/g;
-const TYPE_RE = /\b(string|int|float|bool|dataset|metric|duration|regex)\b/g;
+const TYPE_RE = /\b(Option|Dataset|Duration|Regex|Metric|string|int|float|bool|dataset|metric|duration|regex)\b/g;
 
 const decos: Record<string, Decoration> = {
   keyword: Decoration.mark({ class: "mpl-keyword" }),

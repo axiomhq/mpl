@@ -514,9 +514,9 @@ HTTP query parameters can be passed into the query.
 
 ```mpl
 // expose step query parameter with the type: duration
-param $__interval: duration;
-param $ds: dataset;
-param $re: regex;
+param $__interval: Duration;
+param $ds: Dataset;
+param $re: Regex;
 param $str: string;
 ```
 
@@ -527,3 +527,46 @@ The prior example a valid query string would be:
 ```
 ?param____interval=42s&param__ds=%60my-dataset%60&param__re=%23%2F.*%2F&param__str=%22string+goes+here%22
 ```
+
+#### Optional Parameters
+
+A parameter type can be wrapped in `Option<…>` to mark it optional. An optional parameter
+may be omitted from the request; required parameters (the unwrapped form) must always be
+supplied. The inner type may be any of the regular parameter types: `Regex`, `string`, `int`, `float`, or `bool`.
+
+```mpl
+param $env: Option<string>;
+param $window: Duration;
+```
+
+Optional parameters cannot be referenced directly anywhere in the query — they may only
+appear inside an [`ifdef`](#ifdef) block that gates on them. This guarantees the query
+is well-formed regardless of whether the caller supplied the parameter.
+
+#### ifdef
+
+`ifdef` conditionally applies a filter when an optional parameter is supplied. If the
+gating parameter is omitted from the request, the entire `ifdef` block is skipped; if it
+is supplied, the inner `where` clause is applied like any other filter.
+
+```mpl
+| ifdef($param) { where <filter-expr> }
+```
+
+The argument to `ifdef` must be a parameter declared with an `Option<…>` type. Inside the
+braces, the optional parameter behaves like its unwrapped inner type and may be referenced
+in the filter expression.
+
+```mpl
+param $env: Option<string>;
+
+`k8s-metrics-dev`:cpu_usage[1h..]
+| ifdef($env) { where environment == $env }
+| map rate
+| align to 5m using avg
+```
+
+In this example, when `param__env` is provided the query filters by the requested
+environment; when it is omitted the filter is dropped and all environments are returned.
+`ifdef` blocks are part of the filter section and can be freely interleaved with regular
+`where` clauses.

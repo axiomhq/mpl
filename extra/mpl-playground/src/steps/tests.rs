@@ -4,7 +4,8 @@ use mpl_lang::{
     enc_regex::EncodableRegex,
     linker::{AlignFunction, ComputeFunction, GroupFunction, MapFunction},
     query::{
-        Aggregate, Align, As, BucketBy, Cmp, Filter, GroupBy, Mapping, MetricId, Source, TagType,
+        Aggregate, Align, As, BucketBy, Cmp, Filter, GroupBy, Mapping, MetricId, ParamDeclaration,
+        ParamType, Source, TagType, TerminalParamType,
     },
     tags::TagValue,
     types::{BucketSpec, BucketType, ComputeType, Dataset, MapType, Metric},
@@ -101,10 +102,10 @@ fn source_parameterized_error() {
         metric_id: MetricId {
             dataset: Parameterized::Param {
                 span: span(),
-                param: mpl_lang::query::Param {
+                param: ParamDeclaration {
                     span: span(),
                     name: "ds".into(),
-                    typ: mpl_lang::query::ParamType::Dataset,
+                    typ: ParamType::Terminal(TerminalParamType::Dataset),
                 },
             },
             metric: Metric::new("m").unwrap(),
@@ -457,7 +458,7 @@ fn filter_is_types() {
         assert_eq!(result[1].as_ref().unwrap().len(), expected_count);
     };
 
-    check(TagType::None, 1);
+    check(TagType::Null, 1);
     check(TagType::Bool, 1);
     check(TagType::Int, 1);
     check(TagType::Float, 2); // "42" and "3.14" both parse as f64
@@ -510,7 +511,7 @@ fn sample_filters_series() {
 
 #[test]
 fn raw_tag_variants() {
-    assert_eq!(raw_tag(&TagValue::None), "");
+    assert_eq!(raw_tag(&TagValue::Null), "");
     assert_eq!(raw_tag(&TagValue::Bool(true)), "true");
     assert_eq!(raw_tag(&TagValue::Int(42)), "42");
     assert_eq!(raw_tag(&TagValue::Float(3.125)), "3.125");
@@ -1253,4 +1254,62 @@ fn spec_name_variants() {
     assert_eq!(spec_name(&BucketSpec::Min), "Min");
     assert_eq!(spec_name(&BucketSpec::Max), "Max");
     assert_eq!(spec_name(&BucketSpec::Percentile(0.99)), "p99");
+}
+
+// The playground cannot supply runtime values for optional params, so any
+// `ifdef` step must be a no-op: the gated filter never fires, and the upstream
+// series passes through unchanged. Without this, a query that references the
+// gated param (e.g. `where container == $container`) would hit
+// `get_param`'s "Parameterized values are not supported" error.
+#[test]
+fn ifdef_step_is_a_no_op() {
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(&[("host", "a")], vec![0.0], vec![1.0]),
+            s(&[("host", "b")], vec![0.0], vec![2.0]),
+        ],
+    );
+    let param = ParamDeclaration {
+        span: span(),
+        name: "container".into(),
+        typ: ParamType::Optional(TerminalParamType::Tag(TagType::String)),
+    };
+    let filter = Filter::Cmp {
+        field: "host".into(),
+        rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+            strumbra::SharedString::try_from("a").unwrap(),
+        ))),
+    };
+    let steps = vec![
+        step(source_node("ds", "m")),
+        step(StepNode::Ifdef { param, filter }),
+    ];
+    let result = interpret(&steps, &datasets);
+
+    // Both series survive the ifdef step because the gate never opens.
+    assert_eq!(result[1].as_ref().unwrap().len(), 2);
+}
+
+#[test]
+fn ifdef_step_canonical_text() {
+    let param = ParamDeclaration {
+        span: span(),
+        name: "container".into(),
+        typ: ParamType::Optional(TerminalParamType::Tag(TagType::String)),
+    };
+    let filter = Filter::Cmp {
+        field: "host".into(),
+        rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+            strumbra::SharedString::try_from("a").unwrap(),
+        ))),
+    };
+    let node = StepNode::Ifdef { param, filter };
+    let text = node.to_string();
+    assert!(
+        text.starts_with("| ifdef($container) { where "),
+        "unexpected prefix: {text}"
+    );
+    assert!(text.ends_with(" }"), "unexpected suffix: {text}");
 }

@@ -103,6 +103,7 @@ pub enum GroupError {
 #[derive(Default)]
 struct OptionCheckVisitor {
     ifdef_param: Option<ParamDeclaration>,
+    seen_param: Option<ParamDeclaration>,
 }
 
 /// Ifdef error
@@ -111,6 +112,15 @@ pub enum IfdefError {
     /// Usage of optional parameter outside of ifdef
     #[error("{} is optional and used outside of ifdef", param.name)]
     OptionalOutsideOfIfdef {
+        /// The source location
+        #[label("{}", param.name)]
+        span: SourceSpan,
+        /// The param declaration
+        param: ParamDeclaration,
+    },
+    /// Usage of optional parameter outside of ifdef
+    #[error("{} is used in a ifdef guard but not referenced inside of it", param.name)]
+    OptionalNotUsed {
         /// The source location
         #[label("{}", param.name)]
         span: SourceSpan,
@@ -127,13 +137,20 @@ impl QueryVisitor for OptionCheckVisitor {
         _filter: &mut Filter,
     ) -> Result<VisitRes, Self::Error> {
         self.ifdef_param = Some(param.clone());
+        self.seen_param = None;
         Ok(VisitRes::Walk)
     }
     fn leave_ifdef(
         &mut self,
-        _param: &mut ParamDeclaration,
+        param: &mut ParamDeclaration,
         _filter: &mut Filter,
     ) -> Result<(), Self::Error> {
+        if self.ifdef_param != self.seen_param {
+            return Err(IfdefError::OptionalNotUsed {
+                span: param.span,
+                param: param.clone(),
+            });
+        }
         self.ifdef_param = None;
         Ok(())
     }
@@ -143,12 +160,14 @@ impl QueryVisitor for OptionCheckVisitor {
     ) -> Result<VisitRes, Self::Error> {
         if let Parameterized::Param { span, param } = value
             && param.is_optional()
-            && Some(&*param) != self.ifdef_param.as_ref()
         {
-            return Err(IfdefError::OptionalOutsideOfIfdef {
-                span: *span,
-                param: param.clone(),
-            });
+            self.seen_param = Some(param.clone());
+            if self.seen_param != self.ifdef_param {
+                return Err(IfdefError::OptionalOutsideOfIfdef {
+                    span: *span,
+                    param: param.clone(),
+                });
+            }
         }
         Ok(VisitRes::Walk)
     }
@@ -158,12 +177,14 @@ impl QueryVisitor for OptionCheckVisitor {
     ) -> Result<VisitRes, Self::Error> {
         if let Parameterized::Param { span, param } = regex
             && param.is_optional()
-            && Some(&*param) != self.ifdef_param.as_ref()
         {
-            return Err(IfdefError::OptionalOutsideOfIfdef {
-                span: *span,
-                param: param.clone(),
-            });
+            self.seen_param = Some(param.clone());
+            if self.seen_param != self.ifdef_param {
+                return Err(IfdefError::OptionalOutsideOfIfdef {
+                    span: *span,
+                    param: param.clone(),
+                });
+            }
         }
         Ok(VisitRes::Walk)
     }
@@ -383,13 +404,14 @@ pub mod examples {
     pub const SPEC: &str = include_str!("../spec.md");
 
     /// MPL examples used in tests and documentation
-    pub const MPL: [(&str, &str); 17] = [
+    pub const MPL: [(&str, &str); 18] = [
         example!("align-rate"),
         example!("as"),
         example!("enrich"),
         example!("filtered-histogram"),
         example!("histogram_rate"),
         example!("histogram"),
+        example!("ifdef"),
         example!("map-gt"),
         example!("map-mul"),
         example!("nested-enrich"),

@@ -5,7 +5,7 @@ use strsim::jaro;
 use wasm_bindgen::prelude::*;
 
 use crate::errors::Suggestion;
-use crate::{CompileError, GroupError, ParseError, TypeError, compile};
+use crate::{CompileError, GroupError, IfdefError, ParseError, TypeError, compile};
 
 use super::Span;
 use super::completions::{
@@ -64,6 +64,7 @@ pub fn diagnostics(query: &str) -> JsValue {
         }
         Err(CompileError::Type(error)) => error.diagnostic_items(),
         Err(CompileError::Group(error)) => error.diagnostic_items(),
+        Err(CompileError::Ifdef(error)) => error.diagnostic_items(),
     };
     super::to_js_value(&items)
 }
@@ -181,6 +182,26 @@ impl TypeError {
                 actions: vec![],
             }]
         }
+    }
+}
+
+impl IfdefError {
+    pub(super) fn diagnostic_items(&self) -> Vec<DiagnosticItem> {
+        let message = self.to_string();
+        let help = self.help().map(|h| h.to_string());
+        let span = match self {
+            IfdefError::OptionalOutsideOfIfdef { span, .. }
+            | IfdefError::OptionalNotUsed { span, .. } => {
+                Span::new(span.offset(), span.offset() + span.len())
+            }
+        };
+        vec![DiagnosticItem {
+            span,
+            severity: Severity::Error,
+            message,
+            help,
+            actions: vec![],
+        }]
     }
 }
 

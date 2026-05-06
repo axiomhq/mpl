@@ -38,7 +38,7 @@ describe("parse + interpret end-to-end", () => {
     });
 
     it("errors on parameterized dataset", () => {
-      const result = run("param $ds: dataset;\n$ds:metric");
+      const result = run("param $ds: Dataset;\n$ds:metric");
       expect(err(result[0])).toContain("Parameterized");
     });
   });
@@ -221,9 +221,13 @@ describe("parse + interpret end-to-end", () => {
   });
 
   describe("error recovery", () => {
-    it("parse error step passes through", () => {
+    // The playground rejects time units the in-memory interpreter cannot
+    // honour (Month, Year). The query parses cleanly via `compile()` but
+    // bails at interpret time, exercising the "carry forward on step error"
+    // property through the align path rather than the map path.
+    it("unsupported time unit step passes through", () => {
       const result = run(
-        "test:http_requests_total\n| align to 5m using unknown_fn\n| group using sum",
+        "test:http_requests_total\n| align to 1M using avg\n| group using sum",
       );
       expect("Err" in result[1].result).toBe(true);
       // Group still runs on carried-forward series
@@ -272,6 +276,22 @@ describe("parse + interpret end-to-end", () => {
     it("set.mpl (directives ignored)", () => {
       const result = run("set strict;\nset x = 42;\nsample_dataset:metric");
       expect(result.length).toBe(1);
+    });
+  });
+
+  // The playground does not provide runtime values for optional params, so an
+  // `ifdef` step should always pass the upstream series through unchanged
+  // (rather than evaluating its inner filter, which would fail when it tries
+  // to read the unbound param).
+  describe("ifdef step", () => {
+    it("skips the gated filter and propagates the source series", () => {
+      const result = run(
+        'param $container: Option<string>;\n\ntest:http_requests_total\n| ifdef($container) { where method == $container }',
+      );
+      expect(result.length).toBe(2);
+      const source = ok(result[0]);
+      const afterIfdef = ok(result[1]);
+      expect(afterIfdef.length).toBe(source.length);
     });
   });
 });

@@ -1,8 +1,21 @@
-import { autocompletion, CompletionContext, CompletionResult } from "@codemirror/autocomplete";
+import { autocompletion, CompletionContext, CompletionResult, snippet } from "@codemirror/autocomplete";
 import { EditorState } from "@codemirror/state";
-import * as mpl from "@axiomhq/mpl";
+import * as mpl from "@axiomhq/mpl-lang";
 import { type WasmArgType, formatArgs } from "./wasm-types";
 import { CompletionCache } from "./completion-cache";
+
+/**
+ * Snippet template for the `ifdef` keyword. Inserts the full canonical
+ * surface form — `ifdef($<name>) { where <cursor> }` — with tab stops at
+ * the param name and the body. Teaches the canonical shape (always `where`,
+ * never `filter`) in one stroke; users tab through the placeholders rather
+ * than discovering each piece via three sequential completions.
+ *
+ * The leading `$` is a literal because the snippet parser only treats
+ * `${...}` (or `#{...}`) as a placeholder; a bare `$` followed by another
+ * `$` falls through as text.
+ */
+export const IFDEF_SNIPPET = snippet("ifdef($${name}) { where ${} }");
 
 /**
  * Registers `` ` `` and `$` as word characters so that CodeMirror's
@@ -63,6 +76,7 @@ type WasmParamType = "dataset" | "metric" | "duration" | "string" | "int" | "flo
 interface WasmParamItem {
   label: string;
   type: WasmParamType;
+  optional: boolean;
 }
 
 interface WasmParamResult {
@@ -105,7 +119,7 @@ function mplCompletionSource(context: CompletionContext): CompletionResult | nul
       options: result.options.map(item => ({
         label: item.label,
         type: "variable" as const,
-        detail: item.type,
+        detail: item.optional ? `Option<${item.type}>` : item.type,
       })),
       filter: false,
     };
@@ -156,12 +170,7 @@ function mplCompletionSource(context: CompletionContext): CompletionResult | nul
     return {
       from: result.from,
       to: result.to,
-      options: result.options.map(item => ({
-        label: item.label,
-        ...(item.apply ? { apply: item.apply } : {}),
-        type: "keyword" as const,
-        info: item.info,
-      })),
+      options: result.options.map(mapKeywordItem),
       filter: false,
     };
   }
@@ -176,6 +185,31 @@ function mplCompletionSource(context: CompletionContext): CompletionResult | nul
       info: item.info,
     })),
     filter: false,
+  };
+}
+
+/**
+ * Builds a CodeMirror `Completion` from a wasm `KeywordItem`.
+ *
+ * Special-cases `ifdef` to use a snippet that inserts the full canonical
+ * surface form (param name + `where` body). Every other keyword gets the
+ * literal `apply` text from the wasm payload, or no `apply` at all when the
+ * wasm side did not supply one.
+ */
+function mapKeywordItem(item: WasmKeywordItem) {
+  if (item.label === "ifdef") {
+    return {
+      label: item.label,
+      apply: IFDEF_SNIPPET,
+      type: "keyword" as const,
+      info: item.info,
+    };
+  }
+  return {
+    label: item.label,
+    ...(item.apply ? { apply: item.apply } : {}),
+    type: "keyword" as const,
+    info: item.info,
   };
 }
 
@@ -221,7 +255,7 @@ function createMplCompletionSource(config: MplCompletionConfig) {
         options: result.options.map(item => ({
           label: item.label,
           type: "variable" as const,
-          detail: item.type,
+          detail: item.optional ? `Option<${item.type}>` : item.type,
         })),
         filter: false,
       };
@@ -308,12 +342,7 @@ function createMplCompletionSource(config: MplCompletionConfig) {
       return {
         from: result.from,
         to: result.to,
-        options: result.options.map(item => ({
-          label: item.label,
-          ...(item.apply ? { apply: item.apply } : {}),
-          type: "keyword" as const,
-          info: item.info,
-        })),
+        options: result.options.map(mapKeywordItem),
         filter: false,
       };
     }
