@@ -5,7 +5,7 @@
  * Centralised here to avoid duplication across mpl-completions, mpl-hover,
  * and mpl-signature-help.
  */
-import * as mpl from "@axiomhq/mpl-lang";
+import * as mpl from "@axiomhq/mpl";
 
 // ── WASM type definitions ──────────────────────────────────────
 

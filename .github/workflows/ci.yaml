@@ -125,3 +125,40 @@ jobs:
         working-directory: extra/mpl-playground/pkg
       - name: Test playground build against sample queries
         run: node tests/wasm/test-playground.mjs
+  # Mirrors the publish-npm build steps in .github/workflows/release.yaml up to
+  # (but not including) `npm publish`. Catches drift between the codemirror
+  # source's import names and the published `@axiomhq/mpl` package name on PRs,
+  # so a name mismatch fails review instead of failing release after the tag is
+  # already pushed (see PR #44 / v0.4.0).
+  release-build-codemirror:
+    name: release dry-run (mpl-codemirror build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: wasm32-unknown-unknown
+      - run: cargo install --locked wasm-pack
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Build WASM (release flags)
+        run: wasm-pack build --out-name mpl --out-dir packages/mpl --scope axiomhq --target web --profile wasm-release --no-opt --features wasm
+      - name: Apply release rename to packages/mpl/package.json
+        # Must stay byte-identical to the equivalent step in release.yaml.
+        run: |
+          set -euo pipefail
+          jq '
+            .name = "@axiomhq/mpl"
+            | .files = ["mpl.js", "mpl.d.ts", "mpl_bg.wasm", "mpl_bg.wasm.d.ts", "LICENSE-MIT", "LICENSE-APACHE"]
+            | .repository.url = "git+https://github.com/axiomhq/mpl.git"
+          ' packages/mpl/package.json > packages/mpl/package.json.tmp
+          mv packages/mpl/package.json.tmp packages/mpl/package.json
+      - name: Type-check WASM bindings
+        working-directory: packages/mpl
+        run: |
+          npm install --no-save typescript
+          npx tsc --noEmit -t esnext mpl.d.ts
+      - name: Build mpl-codemirror (the step that fails on name drift)
+        working-directory: packages/mpl-codemirror
+        run: npm install && npm run build
