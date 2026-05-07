@@ -300,9 +300,17 @@ Times can be defined as:
 
 ## String
 
-Strings begin with a double quote `"` and end with a double quote `"`. Strings can contain any ASCII
-character except for the double quote `"` and the backslash `\`. The backslash is used to escape
-special characters.
+Strings begin with a double quote `"` and end with a double quote `"`. Strings may contain any
+character (Unicode is permitted) except for the double quote `"` and the backslash `\`. The
+backslash is used to introduce an escape sequence. The supported escape sequences are:
+
+- `\"` — double quote
+- `\\` — backslash
+- `\b` — backspace
+- `\f` — form feed
+- `\n` — line feed
+- `\r` — carriage return
+- `\t` — tab
 
 ## Integer
 
@@ -313,6 +321,9 @@ Integers are a sequence of digits. They can be positive or negative.
 Floats are a sequence of digits with a decimal point. They can be positive or negative.
 They support exponent notation using `e` or `E` followed by an optional sign and a sequence of
 digits.
+
+The special tokens `inf`, `+inf`, and `-inf` denote positive and negative infinity and are
+accepted anywhere a number is expected.
 
 ## Bool
 
@@ -418,7 +429,7 @@ The format operator takes a format string and expands it with the metric informa
 
 ```mpl
 // formats the metric as a string for HTTP requests to something like "GET[200]: /api/v1/metrics"
-| format "{{.method}}[{.code}}: {{.path}}"
+| format "{{.method}}[{{.code}}]: {{.path}}"
 ```
 
 ## Enriching
@@ -444,6 +455,8 @@ They are referenced with a `$` prefix.
 ## Meta Content
 
 Modifiers supply meta information to the query. They are single-line comments starting with a bang and must appear at the start of the query.
+
+The overall file ordering is strict: any `set` directives come first, then any `param` declarations, then the query body. Placing a `set` directive after a `param`, or any `param` after the query has begun, is a parse error.
 
 ### Strictness (not implemented)
 
