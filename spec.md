@@ -237,7 +237,7 @@ The `compute` operator queries two metrics and combines the results into a new m
  | where code >= 400
  | group by method, path using sum,
  `k8s-metrics-dev`:http_requests_total
- | group by method, path using sum;
+ | group by method, path using sum
 )
 | compute error_rate using /
 | align to 5m using avg
@@ -361,7 +361,7 @@ MPL supports distinct types for tag values: string, integer, float, and bool. Th
  | group by code, method, path using sum,
  `k8s-metrics-dev`:http_requests_total as failure
  | where code >= 400
- | group by code, method, path using sum;
+ | group by code, method, path using sum
 )
 | compute error_rate using / 
 | align to 5m using avg
@@ -554,8 +554,10 @@ is supplied, the inner `where` clause is applied like any other filter.
 ```
 
 The argument to `ifdef` must be a parameter declared with an `Option<…>` type. Inside the
-braces, the optional parameter behaves like its unwrapped inner type and may be referenced
-in the filter expression.
+braces, the optional parameter behaves like its unwrapped inner type and **must** be
+referenced in the filter expression — an `ifdef` block whose guarding parameter is not
+used inside the `where` clause is rejected at compile time. This prevents a guard from
+silently having no effect on the filter it gates.
 
 ```mpl
 param $env: Option<string>;
