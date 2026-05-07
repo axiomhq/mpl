@@ -681,7 +681,7 @@ dependencies = [
 
 [[package]]
 name = "mpl-lang"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "arborium",
  "bincode",
@@ -707,7 +707,7 @@ dependencies = [
 
 [[package]]
 name = "mpl-playground"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "derive_more",
  "eyre",
