@@ -1,6 +1,7 @@
-use std::{num::ParseFloatError, str::FromStr};
+use std::{collections::HashMap, num::ParseFloatError, str::FromStr};
 
 use chrono::DateTime;
+use miette::SourceSpan;
 use pest::iterators::{Pair, Pairs};
 use pest_derive::Parser;
 use regex::Regex;
@@ -28,6 +29,8 @@ mod tests;
 #[derive(Parser)]
 #[grammar = "mpl.pest"] // relative to src
 pub(crate) struct MPLParser;
+
+const SYSTEM_PARAM_PREFIX: &str = "__";
 
 type Result<T> = std::result::Result<T, ParseError>;
 
@@ -1030,12 +1033,30 @@ fn parse_function_id(source: Pair<Rule>) -> Result<Function> {
 }
 
 impl Parser {
-    pub(crate) fn parse_query(&self, pairs: &mut Pairs<Rule>) -> Result<Query> {
+    pub(crate) fn parse_query(
+        &self,
+        pairs: &mut Pairs<Rule>,
+        system_params: HashMap<String, ParamType>,
+    ) -> Result<Query> {
         let mut next = pairs.next().ok_or(ParseError::EOF {
             span: miette::SourceSpan::new(0.into(), 0),
         })?;
+
         let mut directives = Directives::default();
         let mut params = Params::default();
+
+        // add system params
+        for (name, typ) in system_params {
+            if !name.starts_with(SYSTEM_PARAM_PREFIX) {
+                return Err(ParseError::SystemParamMissingPrefix { param: name });
+            }
+            params.push(ParamDeclaration {
+                span: SourceSpan::new(0.into(), 0),
+                name,
+                typ,
+            });
+        }
+
         loop {
             match next.as_rule() {
                 Rule::directive => {
@@ -1081,6 +1102,11 @@ impl Parser {
         let span = pair_to_source_span(&next);
 
         let name = parse_param_ident(next)?;
+
+        if name.starts_with(SYSTEM_PARAM_PREFIX) {
+            return Err(ParseError::ParamUsingSystemPrefix { span, param: name });
+        }
+
         if params.iter().any(|p| p.name == name) {
             return Err(ParseError::ParamDefinedMultipleTimes { span, param: name });
         }

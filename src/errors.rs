@@ -255,6 +255,31 @@ pub enum ParseError {
         param: String,
     },
 
+    /// Param is using the prefix reserved for system params
+    #[error("The param ${param} is using a prefix reserved for system params")]
+    #[diagnostic(
+        code(mpl_lang::param_reserved_prefix),
+        help("The prefix `__` is reserved for system parameters")
+    )]
+    ParamUsingSystemPrefix {
+        /// The source location of the param
+        #[label("invalid prefix")]
+        span: SourceSpan,
+        /// The param
+        param: String,
+    },
+
+    /// The system param is not using the prefix
+    #[error("The system param ${param} is missing the system prefix")]
+    #[diagnostic(
+        code(mpl_lan::system_param_missing_prefix),
+        help("The system param is missing the `__` prefix")
+    )]
+    SystemParamMissingPrefix {
+        /// The param
+        param: String,
+    },
+
     /// Param is not defined
     #[error("The param ${param} is not defined")]
     #[diagnostic(code(mpl_lang::undefined_param))]

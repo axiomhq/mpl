@@ -27,7 +27,7 @@ mod tests;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub use errors::ParseError;
 use miette::{Diagnostic, SourceOffset, SourceSpan};
@@ -70,7 +70,7 @@ pub enum CompileError {
 pub fn compile(query: &str) -> Result<Query, CompileError> {
     // stage 1: parse
     let mut parse = MPLParser::parse(Rule::file, query).map_err(ParseError::from)?;
-    let mut query = parser::Parser::default().parse_query(&mut parse)?;
+    let mut query = parser::Parser::default().parse_query(&mut parse, HashMap::new())?;
     // stage 2: typecheck
     let mut visitor = ParamTypecheckVisitor {};
     visitor.walk(&mut query)?;
