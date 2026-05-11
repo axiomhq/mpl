@@ -5,6 +5,10 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+  id-token: write
+
 # Make sure release jobs are only ever run once at a time (and are never
 # cancelled when new jobs for the same group are queued).
 concurrency:
@@ -67,13 +71,9 @@ jobs:
         run: npm install && npm run build
       - name: Publish mpl to npmjs.org
         working-directory: packages/mpl
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_AUTOMATION_TOKEN }}
         run: npm publish --access public
       - name: Publish mpl-codemirror to npmjs.org
         working-directory: packages/mpl-codemirror
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_AUTOMATION_TOKEN }}
         run: npm publish --access public
   publish-crates-io:
     runs-on: ubuntu-latest
