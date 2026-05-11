@@ -1140,6 +1140,16 @@ fn bucket_agg(tags: Vec<String>, secs: u64, spec: Vec<BucketSpec>) -> StepNode {
     }))
 }
 
+fn bucket_agg_whole(tags: Vec<String>, spec: Vec<BucketSpec>) -> StepNode {
+    StepNode::Aggregate(Aggregate::Bucket(BucketBy {
+        span: span(),
+        function: BucketType::Histogram,
+        time: None,
+        tags,
+        spec,
+    }))
+}
+
 #[test]
 fn bucket_count() {
     let datasets = ds(
@@ -1225,6 +1235,61 @@ fn bucket_sum_avg_min_max() {
         let result = interpret(&steps, &datasets);
         assert!(result[1].is_ok(), "failed for {spec:?}");
     }
+}
+
+#[test]
+fn align_whole_window_reduces_to_single_point_series() {
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![s(
+            &[("h", "a")],
+            vec![0.0, 60.0, 120.0],
+            vec![1.0, 2.0, 3.0],
+        )],
+    );
+    let node = StepNode::Aggregate(Aggregate::Align(Align {
+        function: AlignFunction::Builtin(TimeType::Sum),
+        time: None,
+    }));
+    let result = interpret(&[step(source_node("ds", "m")), step(node)], &datasets);
+    let aligned = result[1].as_ref().unwrap();
+    assert_eq!(aligned.len(), 1);
+    assert_eq!(aligned[0].timestamps, vec![120.0]);
+    assert_eq!(aligned[0].values, vec![6.0]);
+}
+
+#[test]
+fn bucket_whole_window_reduces_to_single_point_per_spec() {
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(
+                &[("handler", "ingest"), ("le", "0.5")],
+                vec![0.0, 60.0],
+                vec![1.0, 2.0],
+            ),
+            s(
+                &[("handler", "ingest"), ("le", "1.0")],
+                vec![0.0, 60.0],
+                vec![3.0, 4.0],
+            ),
+        ],
+    );
+    let steps = vec![
+        step(source_node("ds", "m")),
+        step(bucket_agg_whole(
+            vec!["handler".into()],
+            vec![BucketSpec::Count, BucketSpec::Avg],
+        )),
+    ];
+    let result = interpret(&steps, &datasets);
+    let bucketed = result[1].as_ref().unwrap();
+    assert_eq!(bucketed.len(), 2);
+    assert!(bucketed.iter().all(|s| s.timestamps == vec![60.0]));
+    assert_eq!(bucketed[0].values.len(), 1);
+    assert_eq!(bucketed[1].values.len(), 1);
 }
 
 #[test]

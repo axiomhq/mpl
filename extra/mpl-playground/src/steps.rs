@@ -698,6 +698,50 @@ fn reduce_time_pts(pts: &[f64], func: TimeType) -> f64 {
     }
 }
 
+fn whole_window_pts(s: &Series) -> Vec<f64> {
+    s.values.iter().copied().filter(|v| !v.is_nan()).collect()
+}
+
+fn last_timestamp(series: &[Series]) -> Result<f64> {
+    series
+        .iter()
+        .filter_map(|s| s.timestamps.last().copied())
+        .reduce(f64::max)
+        .ok_or_else(|| eyre!("Cannot aggregate series with no timestamps"))
+}
+
+fn reduce_whole_window(s: &Series, func: TimeType) -> Result<f64> {
+    let pts = whole_window_pts(s);
+    if func == TimeType::Rate {
+        let samples: Vec<(f64, f64)> = s
+            .timestamps
+            .iter()
+            .copied()
+            .zip(s.values.iter().copied())
+            .filter(|(_, v)| !v.is_nan())
+            .collect();
+        if samples.len() < 2 {
+            return Ok(f64::NAN);
+        }
+        let duration = samples.last().expect("len checked above").0 - samples[0].0;
+        if duration <= 0.0 {
+            bail!("Non-positive duration for whole-window rate");
+        }
+        let mut increase = 0.0;
+        for j in 1..samples.len() {
+            let delta = samples[j].1 - samples[j - 1].1;
+            increase += if delta < 0.0 { samples[j].1 } else { delta };
+        }
+        return Ok(increase / duration);
+    }
+
+    if pts.is_empty() {
+        Ok(f64::NAN)
+    } else {
+        Ok(reduce_time_pts(&pts, func))
+    }
+}
+
 fn apply_align(series: &[Series], align: &Align) -> Result<Vec<Series>> {
     let func = match &align.function {
         AlignFunction::Builtin(t) => *t,
@@ -706,7 +750,25 @@ fn apply_align(series: &[Series], align: &Align) -> Result<Vec<Series>> {
         }
     };
     let Some(time) = align.time.as_ref() else {
-        bail!("align without `to` is not supported in the playground");
+        // align over the whole window
+        let t = last_timestamp(series)?;
+        return series
+            .iter()
+            .map(|s| {
+                if s.timestamps.is_empty() {
+                    bail!("Cannot align series with no timestamps");
+                }
+                // use one shared timestamp for the whole step so the chart
+                // renders a single aligned column
+                let v = reduce_whole_window(s, func)?;
+                Ok(Series {
+                    name: s.name.clone(),
+                    tags: s.tags.clone(),
+                    timestamps: vec![t],
+                    values: vec![v],
+                })
+            })
+            .collect();
     };
     let window_sec = time_to_seconds(get_param(time)?)?;
 
@@ -878,6 +940,50 @@ fn compute_bucket_spec(
     }
 }
 
+fn compute_bucket_spec_whole(
+    spec: &BucketSpec,
+    group_series: &[&Series],
+    by_le: &[(f64, &Series)],
+) -> f64 {
+    match spec {
+        BucketSpec::Percentile(p) => {
+            let bucket_vals: Vec<(f64, f64)> = by_le
+                .iter()
+                .map(|(le, s)| {
+                    let pts = whole_window_pts(s);
+                    let val = if pts.is_empty() {
+                        0.0
+                    } else {
+                        pts.iter().sum::<f64>() / pts.len() as f64
+                    };
+                    (*le, val)
+                })
+                .collect();
+            if bucket_vals.iter().all(|(_, v)| *v == 0.0) {
+                return f64::NAN;
+            }
+            compute_percentile(&bucket_vals, *p).unwrap_or(f64::NAN)
+        }
+        _ => {
+            let all_pts: Vec<f64> = group_series
+                .iter()
+                .flat_map(|s| whole_window_pts(s))
+                .collect();
+            if all_pts.is_empty() {
+                return f64::NAN;
+            }
+            match spec {
+                BucketSpec::Count => all_pts.len() as f64,
+                BucketSpec::Avg => all_pts.iter().sum::<f64>() / all_pts.len() as f64,
+                BucketSpec::Sum => all_pts.iter().sum(),
+                BucketSpec::Min => all_pts.iter().copied().fold(f64::INFINITY, f64::min),
+                BucketSpec::Max => all_pts.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                BucketSpec::Percentile(_) => unreachable!(),
+            }
+        }
+    }
+}
+
 fn spec_name(spec: &BucketSpec) -> String {
     match spec {
         BucketSpec::Percentile(p) => format!("p{}", p * 100.0),
@@ -907,10 +1013,6 @@ fn apply_bucket(series: &[Series], bucket: &BucketBy) -> Result<Vec<Series>> {
     if series.is_empty() {
         bail!("Cannot bucket empty series");
     }
-    let Some(time) = bucket.time.as_ref() else {
-        bail!("bucket without `to` is not supported in the playground");
-    };
-    let window_sec = time_to_seconds(get_param(time)?)?;
     let group_tags = &bucket.tags;
 
     let mut groups: HashMap<String, Vec<&Series>> = HashMap::new();
@@ -924,6 +1026,11 @@ fn apply_bucket(series: &[Series], bucket: &BucketBy) -> Result<Vec<Series>> {
     }
 
     let mut result = Vec::new();
+    let window_sec = if let Some(time) = bucket.time.as_ref() {
+        Some(time_to_seconds(get_param(time)?)?)
+    } else {
+        None
+    };
 
     for group_series in groups.values() {
         let mut by_le: Vec<(f64, &Series)> = Vec::new();
@@ -940,17 +1047,28 @@ fn apply_bucket(series: &[Series], bucket: &BucketBy) -> Result<Vec<Series>> {
         if group_series[0].timestamps.is_empty() {
             bail!("Cannot bucket series with no timestamps");
         }
-        let start = group_series[0].timestamps[0];
-        let end = *group_series[0]
-            .timestamps
-            .last()
-            .expect("checked non-empty above");
-        let mut new_ts = Vec::new();
-        let mut t = start;
-        while t <= end {
-            new_ts.push(t);
-            t += window_sec;
-        }
+        let end = if window_sec.is_some() {
+            *group_series[0]
+                .timestamps
+                .last()
+                .expect("checked non-empty above")
+        } else {
+            // use one shared timestamp for the whole step so the chart
+            // renders a single aligned column
+            last_timestamp(series)?
+        };
+        let new_ts = if let Some(window_sec) = window_sec {
+            let start = group_series[0].timestamps[0];
+            let mut new_ts = Vec::new();
+            let mut t = start;
+            while t <= end {
+                new_ts.push(t);
+                t += window_sec;
+            }
+            new_ts
+        } else {
+            vec![end]
+        };
 
         let mut group_tag_values = HashMap::new();
         for tag in group_tags {
@@ -958,10 +1076,14 @@ fn apply_bucket(series: &[Series], bucket: &BucketBy) -> Result<Vec<Series>> {
         }
 
         for spec in &bucket.spec {
-            let values: Vec<f64> = new_ts
-                .iter()
-                .map(|&t| compute_bucket_spec(spec, group_series, &by_le, t, window_sec))
-                .collect();
+            let values: Vec<f64> = if let Some(window_sec) = window_sec {
+                new_ts
+                    .iter()
+                    .map(|&t| compute_bucket_spec(spec, group_series, &by_le, t, window_sec))
+                    .collect()
+            } else {
+                vec![compute_bucket_spec_whole(spec, group_series, &by_le)]
+            };
 
             let sn = spec_name(spec);
             let mut tags = group_tag_values.clone();
