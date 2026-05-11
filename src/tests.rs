@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{
     CompileError, ParseError, TypeError,
     query::{Cmp, Filter, TagType, TerminalParamType},
@@ -13,7 +15,7 @@ fn parse_group_by() -> Result<(), Box<dyn std::error::Error>> {
 | align to 3m using prom::rate
 | group by method, path, code using sum
     ";
-    super::compile(s)?;
+    super::compile(s, HashMap::new())?;
     Ok(())
 }
 
@@ -26,7 +28,7 @@ fn parse_group_ts() -> Result<(), Box<dyn std::error::Error>> {
 | align to 3m using prom::rate
 | group by method, path, code using sum
     ";
-    super::compile(s)?;
+    super::compile(s, HashMap::new())?;
     Ok(())
 }
 
@@ -39,7 +41,7 @@ fn parse_group_rfc() -> Result<(), Box<dyn std::error::Error>> {
 | align to 3m using prom::rate
 | group by method, path, code using sum
     ";
-    super::compile(s)?;
+    super::compile(s, HashMap::new())?;
     Ok(())
 }
 
@@ -52,7 +54,7 @@ fn parse_group_rate() -> Result<(), Box<dyn std::error::Error>> {
 | align to 3m using prom::rate
 | group by method, path, code using sum
     ";
-    super::compile(s)?;
+    super::compile(s, HashMap::new())?;
     Ok(())
 }
 
@@ -65,7 +67,7 @@ fn parse_re_escape() -> Result<(), Box<dyn std::error::Error>> {
 | align to 3m using prom::rate
 | group by method, path, code using sum
     ";
-    super::compile(s)?;
+    super::compile(s, HashMap::new())?;
     Ok(())
 }
 
@@ -75,7 +77,7 @@ fn parse_logic_0() -> Result<(), Box<dyn std::error::Error>> {
 dataset:metric
 | filter a == "snot"
     "#;
-    let (res, _) = super::compile(s)?;
+    let (res, _) = super::compile(s, HashMap::new())?;
     let expected = Filter::Cmp {
         field: "a".into(),
         rhs: Cmp::Eq(Parameterized::Concrete("snot".try_into()?)),
@@ -97,7 +99,7 @@ fn parse_logic_1() -> Result<(), Box<dyn std::error::Error>> {
 dataset:metric
 | filter a == 7.0 and not b == 8
     ";
-    let (res, _) = super::compile(s)?;
+    let (res, _) = super::compile(s, HashMap::new())?;
     let expected = Filter::And(vec![
         Filter::Cmp {
             field: "a".into(),
@@ -125,7 +127,7 @@ fn parse_logic_2() -> Result<(), Box<dyn std::error::Error>> {
 dataset:metric
 | filter a == 7 and b == 8 or c == 9 and ( d == 10 or e == 11 )
     ";
-    let (res, _) = super::compile(s)?;
+    let (res, _) = super::compile(s, HashMap::new())?;
     let expected = Filter::Or(vec![
         Filter::And(vec![
             Filter::Cmp {
@@ -184,7 +186,7 @@ $dataset:metric
 | filter matches == $re
 | align to $resolution using avg
 ";
-    let (res, _) = super::compile(s)?;
+    let (res, _) = super::compile(s, HashMap::new())?;
     match res {
         crate::Query::Simple { source, .. } => {
             assert!(source.metric_id.dataset.is_param());
@@ -204,7 +206,7 @@ param $dataset: Duration;
 $dataset:metric
 ";
 
-    match super::compile(s) {
+    match super::compile(s, HashMap::new()) {
         Err(CompileError::Parse(ParseError::ParamDefinedMultipleTimes { span: _, param })) => {
             assert_eq!("dataset", param);
         }
@@ -216,7 +218,7 @@ $dataset:metric
 fn parse_params_undefined() {
     let s = "$dataset:metric";
 
-    match super::compile(s) {
+    match super::compile(s, HashMap::new()) {
         Err(CompileError::Parse(ParseError::UndefinedParam { span: _, param })) => {
             assert_eq!("dataset", param);
         }
@@ -232,7 +234,7 @@ param $dataset: Duration;
 $dataset:metric
 ";
 
-    match super::compile(s) {
+    match super::compile(s, HashMap::new()) {
         Err(CompileError::Type(TypeError::TypeMismatch {
             use_span,
             declaration_span,
@@ -261,7 +263,7 @@ dataset:metric
 | where key == $value
 ";
 
-    match super::compile(s) {
+    match super::compile(s, HashMap::new()) {
         Err(CompileError::Type(TypeError::TypeMismatch {
             use_span,
             declaration_span,
@@ -298,7 +300,7 @@ dataset:metric
 | align to $duration using avg
 ";
 
-    match super::compile(s) {
+    match super::compile(s, HashMap::new()) {
         Err(CompileError::Type(TypeError::TypeMismatch {
             use_span,
             declaration_span,
@@ -328,7 +330,7 @@ fn group_by_two() -> Result<(), Box<dyn std::error::Error>> {
 | group by method, path, code using sum
 | group by method, path using sum
     ";
-    super::compile(s)?;
+    super::compile(s, HashMap::new())?;
     Ok(())
 }
 
@@ -342,7 +344,7 @@ fn group_by_two_same() -> Result<(), Box<dyn std::error::Error>> {
 | group by method, path, code using sum
 | group by method, path, code using sum
     ";
-    super::compile(s)?;
+    super::compile(s, HashMap::new())?;
     Ok(())
 }
 
@@ -356,7 +358,7 @@ fn group_by_two_error() {
 | group by method, path using sum
 | group by method, path, code using sum
     ";
-    assert!(super::compile(s).is_err());
+    assert!(super::compile(s, HashMap::new()).is_err());
 }
 
 #[test]
@@ -369,7 +371,7 @@ fn bucket_group_by() -> Result<(), Box<dyn std::error::Error>> {
 | bucket by method, path, code to 5m using histogram(max)
 | group by method, path using sum
     ";
-    super::compile(s)?;
+    super::compile(s, HashMap::new())?;
     Ok(())
 }
 
@@ -383,7 +385,7 @@ fn bucket_group_by_error() {
 | group by method, path using sum
 | bucket by method, path, code to 5m using histogram(max)
     ";
-    assert!(super::compile(s).is_err());
+    assert!(super::compile(s, HashMap::new()).is_err());
 }
 #[test]
 fn group_by_compute() -> Result<(), Box<dyn std::error::Error>> {
@@ -396,6 +398,6 @@ fn group_by_compute() -> Result<(), Box<dyn std::error::Error>> {
 )
 | compute test using +
     ";
-    super::compile(s)?;
+    super::compile(s, HashMap::new())?;
     Ok(())
 }

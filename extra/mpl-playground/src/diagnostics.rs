@@ -73,12 +73,15 @@ fn line_context(source: &str, offset: usize) -> (usize, usize, &str, usize) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::message;
 
     #[test]
     fn compile_errors_include_location_and_expected_tokens() {
         let source = "test:metric\n| map + ";
-        let err = mpl_lang::compile(source).expect_err("query should fail to compile");
+        let err =
+            mpl_lang::compile(source, HashMap::new()).expect_err("query should fail to compile");
         let message = message(source, &err);
 
         assert!(message.contains("MPL syntax error"), "{message}");

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 
 #[test]
@@ -11,7 +12,7 @@ fn parse_examples() {
             let file_name = path.file_name().unwrap().to_str().unwrap();
             println!("Running example: {file_name}");
             let content = fs::read_to_string(path).unwrap();
-            match mpl_lang::compile(&content) {
+            match mpl_lang::compile(&content, HashMap::new()) {
                 Ok(_) => println!("Parsed successfully"),
                 Err(mpl_lang::CompileError::Parse(mpl_lang::ParseError::NotSupported {
                     span,
@@ -45,7 +46,7 @@ fn parse_unimplemented_examples() {
             let file_name = path.file_name().unwrap().to_str().unwrap();
             println!("Running example: {file_name}");
             let content = fs::read_to_string(path).unwrap();
-            match mpl_lang::compile(&content) {
+            match mpl_lang::compile(&content, HashMap::new()) {
                 Ok(_) => panic!("Unexpected successfully parsing"),
                 Err(mpl_lang::CompileError::Parse(mpl_lang::ParseError::NotSupported {
                     span,
@@ -69,7 +70,7 @@ fn parse_error_examples() {
             let file_name = path.file_name().unwrap().to_str().unwrap();
             println!("Running error case: {file_name}");
             let content = fs::read_to_string(path).unwrap();
-            match mpl_lang::compile(&content) {
+            match mpl_lang::compile(&content, HashMap::new()) {
                 Ok(_) => panic!("Unexpected successfully parsing"),
                 Err(_) => println!("Failing as expected."),
             }

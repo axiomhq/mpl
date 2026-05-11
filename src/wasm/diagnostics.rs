@@ -1,4 +1,6 @@
 //! Diagnostics and code actions for `MPL` queries.
+use std::collections::HashMap;
+
 use miette::Diagnostic as _;
 use serde::Serialize;
 use strsim::jaro;
@@ -57,7 +59,7 @@ pub(super) struct DiagnosticItem {
 #[must_use]
 #[wasm_bindgen]
 pub fn diagnostics(query: &str) -> JsValue {
-    let items = match compile(query) {
+    let items = match compile(query, HashMap::new()) {
         Ok((_, warnings)) => {
             let mut items: Vec<DiagnosticItem> = warnings
                 .as_slice()

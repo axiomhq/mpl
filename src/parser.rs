@@ -1,4 +1,4 @@
-use std::{collections::HashMap, num::ParseFloatError, str::FromStr};
+use std::{collections::HashMap, hash::BuildHasher, num::ParseFloatError, str::FromStr};
 
 use chrono::DateTime;
 use miette::SourceSpan;
@@ -1043,10 +1043,10 @@ pub(crate) struct State {
 }
 
 impl Parser {
-    pub(crate) fn parse_query(
+    pub(crate) fn parse_query<H: BuildHasher>(
         &self,
         pairs: &mut Pairs<Rule>,
-        system_params: HashMap<String, ParamType>,
+        system_params: HashMap<String, ParamType, H>,
     ) -> Result<(Query, Warnings)> {
         let mut next = pairs.next().ok_or(ParseError::EOF {
             span: miette::SourceSpan::new(0.into(), 0),

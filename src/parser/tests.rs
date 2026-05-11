@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use ordered_float::OrderedFloat;
 use pest::Parser;
 
@@ -68,7 +70,7 @@ fn test_compute_query_post_compute_aggregates()
     | align to 5m using last
     ";
 
-    let (parsed, _) = crate::compile(query)?;
+    let (parsed, _) = crate::compile(query, HashMap::new())?;
     let Query::Compute { aggregates, .. } = &parsed else {
         panic!("expected Query::Compute, got {parsed:?}");
     };
@@ -94,7 +96,7 @@ fn optional_ok() {
         | ifdef($t) { where tag == $t }
     ";
 
-    assert!(crate::compile(query).is_ok());
+    assert!(crate::compile(query, HashMap::new()).is_ok());
 }
 
 #[test]
@@ -104,7 +106,7 @@ fn optional_use_without_ifdef() {
         dataset:metric
         | where tag == $t
     ";
-    assert!(crate::compile(query).is_err());
+    assert!(crate::compile(query, HashMap::new()).is_err());
 }
 
 #[test]
@@ -115,5 +117,5 @@ fn optional_ifdef_without_optional() {
         | ifdef($t) { where tag == $t }
     ";
 
-    assert!(crate::compile(query).is_err());
+    assert!(crate::compile(query, HashMap::new()).is_err());
 }

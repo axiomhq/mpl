@@ -1,9 +1,11 @@
+use std::collections::HashMap;
+
 use crate::query::{Warning, WarningReason, Warnings};
 use crate::wasm::diagnostics::{DiagnosticItem, Severity, maybe_rewrite_escaped_dataset_error};
 use crate::{CompileError, compile};
 
 fn diagnostic_items(q: &str) -> Vec<DiagnosticItem> {
-    match compile(q) {
+    match compile(q, HashMap::new()) {
         Ok(_) => vec![],
         Err(CompileError::Parse(error)) => error.diagnostic_items(),
         Err(CompileError::Type(error)) => error.diagnostic_items(),
@@ -14,7 +16,7 @@ fn diagnostic_items(q: &str) -> Vec<DiagnosticItem> {
 
 /// Run the full success-path pipeline: compile -> warnings -> diagnostic items.
 fn warning_items(q: &str) -> Vec<DiagnosticItem> {
-    let (_, warnings) = compile(q).expect("query should compile");
+    let (_, warnings) = compile(q, HashMap::new()).expect("query should compile");
     warnings
         .as_slice()
         .iter()
@@ -88,7 +90,7 @@ fn action_targets_function_name_range() {
 fn type_error_puts_error_on_use_and_info_on_declaration() {
     // $tag is declared as string but used where duration is expected
     let query = "param $tag: string;\nds:metric | align to $tag using avg";
-    let items = match compile(query) {
+    let items = match compile(query, HashMap::new()) {
         Ok(_) => panic!("should produce a type error"),
         Err(CompileError::Parse(_)) => panic!("should be a type error, not parse error"),
         Err(CompileError::Type(error)) => error.diagnostic_items(),
@@ -123,7 +125,7 @@ fn type_error_puts_error_on_use_and_info_on_declaration() {
 #[test]
 fn optional_param_outside_ifdef_is_error() {
     let query = "param $f: Option<string>;\nds:metric | where tag == $f";
-    let items = match compile(query) {
+    let items = match compile(query, HashMap::new()) {
         Ok(_) => panic!("optional usage outside ifdef should not compile"),
         Err(CompileError::Ifdef(error)) => error.diagnostic_items(),
         Err(other) => panic!("expected ifdef error, got: {other}"),
@@ -150,7 +152,7 @@ fn ifdef_body_does_not_reference_param_is_error() {
     // means the ifdef is structurally pointless. The visitor catches this on
     // leave_ifdef.
     let query = "param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" }";
-    let items = match compile(query) {
+    let items = match compile(query, HashMap::new()) {
         Ok(_) => panic!("ifdef body without param reference should not compile"),
         Err(CompileError::Ifdef(error)) => error.diagnostic_items(),
         Err(other) => panic!("expected ifdef error, got: {other}"),
@@ -170,7 +172,7 @@ fn ifdef_body_referencing_param_compiles() {
     // Sanity: an ifdef whose body DOES reference the gating param compiles.
     let query = "param $f: Option<string>;\nds:metric | ifdef($f) { where tag == $f }";
     assert!(
-        compile(query).is_ok(),
+        compile(query, HashMap::new()).is_ok(),
         "ifdef body referencing the gating param should compile"
     );
 }
@@ -180,7 +182,7 @@ fn optional_regex_param_outside_ifdef_is_error() {
     // Triggers OptionCheckVisitor::visit_parameterized_regex (the second emit
     // site of IfdefError::OptionalOutsideOfIfdef), distinct from the value path.
     let query = "param $r: Option<Regex>;\nds:metric | where tag == $r";
-    let items = match compile(query) {
+    let items = match compile(query, HashMap::new()) {
         Ok(_) => panic!("optional regex usage outside ifdef should not compile"),
         Err(CompileError::Ifdef(error)) => error.diagnostic_items(),
         Err(other) => panic!("expected ifdef error, got: {other}"),
@@ -204,7 +206,7 @@ fn optional_param_in_other_ifdef_is_error() {
         "param $b: Option<string>;\n",
         "ds:metric | ifdef($a) { where tag == $b }",
     );
-    let err = match compile(query) {
+    let err = match compile(query, HashMap::new()) {
         Ok(_) => panic!("cross-ifdef optional should not compile"),
         Err(CompileError::Ifdef(error)) => error,
         Err(other) => panic!("expected ifdef error, got: {other}"),
@@ -322,7 +324,7 @@ fn multiple_old_duration_warnings() {
 // ── dataset given, no metric ─────────────────────────────────────
 
 fn assert_parse_error(query: &str, expected_from: usize, expected_to: usize) {
-    let items = match compile(query) {
+    let items = match compile(query, HashMap::new()) {
         Ok(_) => panic!("'{query}' should not compile"),
         Err(CompileError::Parse(error)) => error.diagnostic_items(),
         Err(CompileError::Type(_) | CompileError::Group(_) | CompileError::Ifdef(_)) => {
@@ -399,7 +401,7 @@ fn dataset_no_metric_with_time_range_error_at_bracket() {
 
 /// Runs `compile` → `diagnostic_items` → `maybe_rewrite` (the full wasm path).
 fn diagnostics_for(query: &str) -> Vec<DiagnosticItem> {
-    match compile(query) {
+    match compile(query, HashMap::new()) {
         Ok(_) => panic!("'{query}' should not compile"),
         Err(CompileError::Parse(error)) => {
             maybe_rewrite_escaped_dataset_error(query, error.diagnostic_items())

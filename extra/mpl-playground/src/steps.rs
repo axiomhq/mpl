@@ -187,7 +187,8 @@ impl Interpreter {
 
     /// Parse and interpret an MPL query.
     pub fn run(&self, code: &str) -> Result<RunOutput, String> {
-        let (query, _) = compile(code).map_err(|e| crate::diagnostics::message(code, &e))?;
+        let (query, _) =
+            compile(code, HashMap::new()).map_err(|e| crate::diagnostics::message(code, &e))?;
         let steps = query_steps(query);
         let results = interpret(&steps, &self.datasets);
 
