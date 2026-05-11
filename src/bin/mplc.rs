@@ -4,10 +4,11 @@
 //! `mplc` is a command-line tool for working with mpl-lang, the Axion Metrics
 //! Processing Language or MPL for short
 
-use std::fs;
+use std::{collections::HashMap, fs};
 
 use clap::Parser;
 use miette::{IntoDiagnostic, NamedSource, Report, Result};
+use mpl_lang::query::{ParamType, TerminalParamType};
 
 /// Output format
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -59,9 +60,16 @@ fn main() -> Result<()> {
                 .into_diagnostic()
                 .map_err(|e| e.context(format!("Failed to read file '{file}'")))?;
 
-            let parsed_query = mpl_lang::compile(&content).map_err(|e| {
-                Report::new(e).with_source_code(NamedSource::new(&file, content.clone()))
-            })?;
+            let mut system_params = HashMap::new();
+            system_params.insert(
+                "__interval".to_string(),
+                ParamType::Terminal(TerminalParamType::Duration),
+            );
+
+            let (parsed_query, _warnings) =
+                mpl_lang::compile(&content, system_params).map_err(|e| {
+                    Report::new(e).with_source_code(NamedSource::new(&file, content.clone()))
+                })?;
 
             let output_str = match format {
                 Format::Json => serde_json::to_string_pretty(&parsed_query)
