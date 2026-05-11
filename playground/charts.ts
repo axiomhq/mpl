@@ -111,7 +111,9 @@ function tooltipPlugin(): uPlot.Plugin {
 function alignSeries(series: Series[]): uPlot.AlignedData {
   const tsSet = new Set<number>();
   for (const s of series) {
-    for (const t of s.timestamps) tsSet.add(t);
+    // Playground series timestamps are Unix seconds; uPlot's time scale
+    // expects Unix milliseconds.
+    for (const t of s.timestamps) tsSet.add(t * 1000);
   }
   const allTs = Float64Array.from([...tsSet].sort((a, b) => a - b));
 
@@ -119,7 +121,7 @@ function alignSeries(series: Series[]): uPlot.AlignedData {
   for (const s of series) {
     const lookup = new Map<number, number>();
     for (let i = 0; i < s.timestamps.length; i++) {
-      lookup.set(s.timestamps[i], s.values[i]);
+      lookup.set(s.timestamps[i] * 1000, s.values[i]);
     }
     const vals: (number | null)[] = Array.from({ length: allTs.length });
     for (let i = 0; i < allTs.length; i++) {
@@ -132,10 +134,16 @@ function alignSeries(series: Series[]): uPlot.AlignedData {
   return aligned as uPlot.AlignedData;
 }
 
-function createChart(container: HTMLElement, series: Series[], width: number): uPlot {
+function createChart(
+  container: HTMLElement,
+  series: Series[],
+  width: number,
+): uPlot {
   const dark = isDarkTheme();
   const palette = dark ? COLORS_DARK : COLORS_LIGHT;
   const data = alignSeries(series);
+  const hasSingleTimestamp = data[0].length === 1;
+  const singleTimestamp = hasSingleTimestamp ? Number(data[0][0]) : null;
 
   const seriesConfig: uPlot.Series[] = [
     { label: "Time" },
@@ -166,7 +174,17 @@ function createChart(container: HTMLElement, series: Series[], width: number): u
         },
       },
       legend: { show: false },
-      scales: { x: { time: true } },
+      scales: {
+        x: {
+          time: true,
+          // When a step produces a single whole-window point, uPlot's default
+          // autorange pins it awkwardly near one edge. Give it a symmetric
+          // one-hour window so the point renders in the middle.
+          range: hasSingleTimestamp && singleTimestamp != null
+            ? () => [singleTimestamp - 30 * 60 * 1000, singleTimestamp + 30 * 60 * 1000]
+            : undefined,
+        },
+      },
       axes: [
         {
           show: true,

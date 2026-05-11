@@ -141,6 +141,16 @@ describe("parse + interpret end-to-end", () => {
       const result = run("test:http_requests_total\n| align to 10m using avg");
       expect(ok(result[1]).length).toBeGreaterThan(0);
     });
+
+    it("align using avg for the whole query window", () => {
+      const result = run("test:http_requests_total\n| align using avg");
+      const aligned = ok(result[1]);
+      expect(aligned.length).toBeGreaterThan(0);
+      for (const s of aligned) {
+        expect(s.timestamps).toHaveLength(1);
+        expect(s.values).toHaveLength(1);
+      }
+    });
   });
 
   describe("group", () => {
@@ -187,6 +197,18 @@ describe("parse + interpret end-to-end", () => {
         "test:http_server_request_duration_seconds_bucket\n| bucket to 1m using interpolate_delta_histogram(0.99)",
       );
       expect(result.length).toBe(2);
+    });
+
+    it("bucket over the whole query window", () => {
+      const result = run(
+        "test:http_server_request_duration_seconds_bucket\n| bucket using interpolate_delta_histogram(0.99)",
+      );
+      const bucketed = ok(result[1]);
+      expect(bucketed.length).toBeGreaterThan(0);
+      for (const s of bucketed) {
+        expect(s.timestamps).toHaveLength(1);
+        expect(s.values).toHaveLength(1);
+      }
     });
   });
 
