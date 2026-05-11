@@ -105,13 +105,15 @@ impl Warning {
                     insert: "Duration".to_string(),
                 }],
             },
-            WarningReason::ParamNotDeclared(_) => DiagnosticItem {
-                span,
-                severity: Severity::Warning,
-                message: self.warning().to_string(),
-                help: None,
-                actions: vec![],
-            },
+            WarningReason::ParamNotDeclared(_) | WarningReason::ParamUsingSystemPrefix { .. } => {
+                DiagnosticItem {
+                    span,
+                    severity: Severity::Warning,
+                    message: self.warning().to_string(),
+                    help: None,
+                    actions: vec![],
+                }
+            }
         }
     }
 }

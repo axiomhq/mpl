@@ -1124,7 +1124,12 @@ impl Parser {
         let name = parse_param_ident(next)?;
 
         if name.starts_with(SYSTEM_PARAM_PREFIX) {
-            return Err(ParseError::ParamUsingSystemPrefix { span, param: name });
+            state.warnings.push_span(
+                span,
+                WarningReason::ParamUsingSystemPrefix {
+                    param: name.clone(),
+                },
+            );
         }
 
         if state.params.iter().any(|p| p.name == name) {

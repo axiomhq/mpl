@@ -573,6 +573,11 @@ pub enum ParseProvidedParamsError {
 pub enum WarningReason {
     /// Provided but not declared  param
     ParamNotDeclared(Vec<String>),
+    /// System parameter declared
+    ParamUsingSystemPrefix {
+        /// The param
+        param: String,
+    },
     /// lowercase duration
     OldDuration,
 }
@@ -587,6 +592,12 @@ impl Display for WarningReason {
             ),
             WarningReason::OldDuration => {
                 write!(f, "`duration` is depricated, please ues `Duration`")
+            }
+            WarningReason::ParamUsingSystemPrefix { param } => {
+                write!(
+                    f,
+                    "The param ${param} is using a prefix reserved for system params"
+                )
             }
         }
     }
