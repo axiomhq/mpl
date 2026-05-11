@@ -1,3 +1,4 @@
+use crate::query::{Warning, WarningReason, Warnings};
 use crate::wasm::diagnostics::{DiagnosticItem, Severity, maybe_rewrite_escaped_dataset_error};
 use crate::{CompileError, compile};
 
@@ -9,6 +10,16 @@ fn diagnostic_items(q: &str) -> Vec<DiagnosticItem> {
         Err(CompileError::Group(error)) => error.diagnostic_items(),
         Err(CompileError::Ifdef(error)) => error.diagnostic_items(),
     }
+}
+
+/// Run the full success-path pipeline: compile -> warnings -> diagnostic items.
+fn warning_items(q: &str) -> Vec<DiagnosticItem> {
+    let (_, warnings) = compile(q).expect("query should compile");
+    warnings
+        .as_slice()
+        .iter()
+        .map(Warning::to_diagnostic_item)
+        .collect()
 }
 
 // ── code actions / diagnostics ────────────────────────────────────
@@ -220,6 +231,92 @@ fn compute_function_typo_suggests_replacement() {
         "should suggest min, got actions: {:?}",
         item.actions.iter().map(|a| &a.insert).collect::<Vec<_>>()
     );
+}
+
+// ── parser-emitted warnings (OldDuration) ──────────────────────────
+
+#[test]
+fn old_duration_warning_emitted_as_diagnostic() {
+    let query = "param $t: duration;\nds:metric | align to $t using avg";
+    let items = warning_items(query);
+    assert_eq!(items.len(), 1, "expected exactly one OldDuration warning");
+    let item = &items[0];
+    assert!(matches!(item.severity, Severity::Warning));
+    assert!(
+        item.message.contains("`duration`") && item.message.contains("Duration"),
+        "warning message should mention both forms, got: {:?}",
+        item.message
+    );
+    assert_eq!(
+        &query[item.span.from..item.span.to],
+        "duration",
+        "warning span should cover the lowercase `duration` token"
+    );
+}
+
+#[test]
+fn old_duration_warning_has_replace_action() {
+    let query = "param $t: duration;\nds:metric | align to $t using avg";
+    let items = warning_items(query);
+    let item = &items[0];
+    assert_eq!(
+        item.actions.len(),
+        1,
+        "OldDuration should have one quick-fix"
+    );
+    let action = &item.actions[0];
+    assert_eq!(action.insert, "Duration");
+    // The action's span must cover the exact `duration` token so applying it
+    // is a straight substring replacement, not an offset shift.
+    assert_eq!(&query[action.span.from..action.span.to], "duration");
+    assert!(
+        action.name.contains("Duration"),
+        "action label should mention Duration, got: {:?}",
+        action.name
+    );
+}
+
+#[test]
+fn uppercase_duration_emits_no_warning() {
+    let query = "param $t: Duration;\nds:metric | align to $t using avg";
+    let items = warning_items(query);
+    assert!(items.is_empty(), "canonical `Duration` must not warn");
+}
+
+#[test]
+fn param_not_declared_warning_is_plain_warning_without_actions() {
+    // `ParamNotDeclared` is emitted from the runtime-param parsing path, not
+    // from `compile`. We still translate it through the same conversion to
+    // keep diagnostic surfaces uniform: severity=Warning, no quick-fix.
+    let mut warnings = Warnings::new();
+    warnings.push(WarningReason::ParamNotDeclared(vec!["$foo".to_string()]));
+    let items: Vec<DiagnosticItem> = warnings
+        .as_slice()
+        .iter()
+        .map(Warning::to_diagnostic_item)
+        .collect();
+    assert_eq!(items.len(), 1);
+    assert!(matches!(items[0].severity, Severity::Warning));
+    assert!(items[0].actions.is_empty());
+    assert!(items[0].message.contains("$foo"));
+}
+
+#[test]
+fn multiple_old_duration_warnings() {
+    // Each occurrence of `duration` produces its own warning so the editor
+    // can pin a quick-fix to every site, not just the first.
+    let query = concat!(
+        "param $t: duration;\n",
+        "param $u: duration;\n",
+        "ds:metric | align to $t using avg",
+    );
+    let items = warning_items(query);
+    assert_eq!(items.len(), 2, "one warning per `duration` token");
+    for item in &items {
+        assert!(matches!(item.severity, Severity::Warning));
+        assert_eq!(&query[item.span.from..item.span.to], "duration");
+        assert_eq!(item.actions[0].insert, "Duration");
+    }
 }
 
 // ── dataset given, no metric ─────────────────────────────────────

@@ -5,6 +5,7 @@ use strsim::jaro;
 use wasm_bindgen::prelude::*;
 
 use crate::errors::Suggestion;
+use crate::query::{Warning, WarningReason};
 use crate::{CompileError, GroupError, IfdefError, ParseError, TypeError, compile};
 
 use super::Span;
@@ -57,7 +58,15 @@ pub(super) struct DiagnosticItem {
 #[wasm_bindgen]
 pub fn diagnostics(query: &str) -> JsValue {
     let items = match compile(query) {
-        Ok(_) => super::lints::detect_hints(query),
+        Ok((_, warnings)) => {
+            let mut items: Vec<DiagnosticItem> = warnings
+                .as_slice()
+                .iter()
+                .map(Warning::to_diagnostic_item)
+                .collect();
+            items.extend(super::lints::detect_hints(query));
+            items
+        }
         Err(CompileError::Parse(error)) => {
             let items = error.diagnostic_items();
             maybe_rewrite_escaped_dataset_error(query, items)
@@ -67,6 +76,44 @@ pub fn diagnostics(query: &str) -> JsValue {
         Err(CompileError::Ifdef(error)) => error.diagnostic_items(),
     };
     super::to_js_value(&items)
+}
+
+impl Warning {
+    /// Convert a parser-emitted warning to a `DiagnosticItem`.
+    ///
+    /// Each `WarningReason` variant is responsible for crafting its own
+    /// user-facing message, help text, and (where applicable) quick-fix
+    /// action — the parser's `Display` impl is intentionally not reused, so
+    /// editor-surfaced copy can be tuned without touching the core types.
+    pub(super) fn to_diagnostic_item(&self) -> DiagnosticItem {
+        let span = self.source().map_or_else(
+            || Span::new(0, 0),
+            |s| Span::new(s.offset(), s.offset() + s.len()),
+        );
+
+        match self.warning() {
+            WarningReason::OldDuration => DiagnosticItem {
+                span,
+                severity: Severity::Warning,
+                message: "`duration` is deprecated; use `Duration`".to_string(),
+                help: Some(
+                    "Param types use PascalCase: `Duration`, `Dataset`, `Regex`".to_string(),
+                ),
+                actions: vec![DiagnosticAction {
+                    name: "Replace with `Duration`".to_string(),
+                    span,
+                    insert: "Duration".to_string(),
+                }],
+            },
+            WarningReason::ParamNotDeclared(_) => DiagnosticItem {
+                span,
+                severity: Severity::Warning,
+                message: self.warning().to_string(),
+                help: None,
+                actions: vec![],
+            },
+        }
+    }
 }
 
 /// When the query starts with a backtick-escaped identifier containing `.`
