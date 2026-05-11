@@ -621,7 +621,7 @@ impl Warning {
     pub fn warning(&self) -> &WarningReason {
         &self.warning
     }
-    /// The location of the waring (if any)
+    /// The location of the warning (if any)
     #[must_use]
     pub fn source(&self) -> Option<SourceSpan> {
         self.source
