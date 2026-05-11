@@ -601,7 +601,7 @@ impl Display for WarningReason {
             WarningReason::ParamUsingSystemPrefix { param } => {
                 write!(
                     f,
-                    "The param ${param} is using a prefix reserved for system params"
+                    "The param ${param} uses the `__` prefix reserved for system params"
                 )
             }
         }
