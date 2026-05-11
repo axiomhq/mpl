@@ -219,7 +219,7 @@ pub struct Align {
     /// The function to apply
     pub function: AlignFunction,
     /// The time to align to
-    pub time: Parameterized<RelativeTime>,
+    pub time: Option<Parameterized<RelativeTime>>,
 }
 
 /// A Grouping function
@@ -247,7 +247,7 @@ pub struct BucketBy {
     /// The function to apply
     pub function: BucketType,
     /// The time to align to
-    pub time: Parameterized<RelativeTime>,
+    pub time: Option<Parameterized<RelativeTime>>,
     /// The tags to group by
     pub tags: Vec<String>,
     /// The buckets to produce

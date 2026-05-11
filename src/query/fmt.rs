@@ -208,7 +208,11 @@ impl Display for Aggregate {
             }) => write!(f, "map rate"),
             Aggregate::Map(map) => write!(f, "map {map}"),
             Aggregate::Align(Align { function, time }) => {
-                write!(f, "align to {time} using {function}")
+                if let Some(time) = time {
+                    write!(f, "align to {time} using {function}")
+                } else {
+                    write!(f, "align using {function}")
+                }
             }
             Aggregate::GroupBy(GroupBy {
                 span: _,
@@ -244,7 +248,11 @@ impl Display for Aggregate {
                 } else {
                     write!(f, "bucket ")?;
                 }
-                write!(f, " to {time} using {function}")?;
+                if let Some(time) = time {
+                    write!(f, " to {time} using {function}")?;
+                } else {
+                    write!(f, " using {function}")?;
+                }
                 // For cumulative histogram, include the mode before bucket specs
                 let mode_prefix = if let BucketType::InterpolateCumulativeHistogram(mode) = function
                 {

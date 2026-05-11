@@ -74,10 +74,10 @@ fn group_agg(func: TagsType, tags: Vec<String>) -> StepNode {
 fn align_agg(func: TimeType, secs: u64) -> StepNode {
     StepNode::Aggregate(Aggregate::Align(Align {
         function: AlignFunction::Builtin(func),
-        time: Parameterized::Concrete(RelativeTime {
+        time: Some(Parameterized::Concrete(RelativeTime {
             value: secs,
             unit: TimeUnit::Second,
-        }),
+        })),
     }))
 }
 
@@ -345,10 +345,10 @@ fn align_month_error() {
     let datasets = ds("ds", "m", vec![s(&[], vec![0.0], vec![1.0])]);
     let node = StepNode::Aggregate(Aggregate::Align(Align {
         function: AlignFunction::Builtin(TimeType::Sum),
-        time: Parameterized::Concrete(RelativeTime {
+        time: Some(Parameterized::Concrete(RelativeTime {
             value: 1,
             unit: TimeUnit::Month,
-        }),
+        })),
     }));
     let result = interpret(&[step(source_node("ds", "m")), step(node)], &datasets);
     assert!(
@@ -1131,10 +1131,10 @@ fn bucket_agg(tags: Vec<String>, secs: u64, spec: Vec<BucketSpec>) -> StepNode {
     StepNode::Aggregate(Aggregate::Bucket(BucketBy {
         span: span(),
         function: BucketType::Histogram,
-        time: Parameterized::Concrete(RelativeTime {
+        time: Some(Parameterized::Concrete(RelativeTime {
             value: secs,
             unit: TimeUnit::Second,
-        }),
+        })),
         tags,
         spec,
     }))

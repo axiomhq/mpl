@@ -325,16 +325,24 @@ impl QueryVisitor for ParamTypecheckVisitor {
     }
 
     fn visit_align(&mut self, align: &mut query::Align) -> Result<VisitRes, Self::Error> {
-        Self::assert_param_type(&align.time, vec![TerminalParamType::Duration])
-            .map(|()| VisitRes::Walk)
+        if let Some(time) = &align.time {
+            Self::assert_param_type(time, vec![TerminalParamType::Duration])
+                .map(|()| VisitRes::Walk)
+        } else {
+            Ok(VisitRes::Walk)
+        }
     }
 
     fn visit_bucket_by(
         &mut self,
         bucket_by: &mut query::BucketBy,
     ) -> Result<VisitRes, Self::Error> {
-        Self::assert_param_type(&bucket_by.time, vec![TerminalParamType::Duration])
-            .map(|()| VisitRes::Walk)
+        if let Some(time) = &bucket_by.time {
+            Self::assert_param_type(time, vec![TerminalParamType::Duration])
+                .map(|()| VisitRes::Walk)
+        } else {
+            Ok(VisitRes::Walk)
+        }
     }
 
     fn visit_cmp(&mut self, _field: &mut String, cmp: &mut Cmp) -> Result<VisitRes, Self::Error> {

@@ -1198,22 +1198,23 @@ fn suggest_pipe_rule(
             _ => {
                 let has_to = words.contains(&"to");
                 let has_over = words.contains(&"over");
+                let has_using = words.contains(&"using");
                 let mut options = Vec::new();
-                if !has_to {
+                if !has_to && !has_using {
                     options.push(KeywordItem {
                         label: "to",
                         apply: Some("to "),
                         info: "Align to a time interval",
                     });
                 }
-                if has_to && !has_over {
+                if has_to && !has_over && !has_using {
                     options.push(KeywordItem {
                         label: "over",
                         apply: Some("over "),
                         info: "Specify the lookback window",
                     });
                 }
-                if has_to {
+                if !has_using {
                     options.push(KeywordItem {
                         label: "using",
                         apply: Some("using "),
@@ -1287,26 +1288,36 @@ fn suggest_bucket_pipe(
             span,
             options: BUCKET_COMPLETIONS.clone(),
         }),
-        _ => Some(CompletionResult::Keywords {
-            span,
-            options: vec![
-                KeywordItem {
+        _ => {
+            let has_by = words.contains(&"by");
+            let has_to = words.contains(&"to");
+            let has_using = words.contains(&"using");
+            let mut options = Vec::new();
+
+            if !has_by && !has_to && !has_using {
+                options.push(KeywordItem {
                     label: "by",
                     apply: Some("by "),
                     info: "Bucket by a label",
-                },
-                KeywordItem {
+                });
+            }
+            if !has_to && !has_using {
+                options.push(KeywordItem {
                     label: "to",
                     apply: Some("to "),
                     info: "Bucket to a target size",
-                },
-                KeywordItem {
+                });
+            }
+            if !has_using {
+                options.push(KeywordItem {
                     label: "using",
                     apply: Some("using "),
                     info: "Specify the bucket function",
-                },
-            ],
-        }),
+                });
+            }
+
+            Some(CompletionResult::Keywords { span, options })
+        }
     }
 }
 

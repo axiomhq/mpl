@@ -125,7 +125,7 @@ param             =  { "param" ~ param_ident ~ ":" ~ param_type ~ ";" }
 param_value       =  { time_relative | string | float | int | bool | regex | ident }
 // used for parsing provided params
 
-align = { "align" ~ "to" ~ time_relative_parameterized ~ ("over" ~ time_relative_parameterized)? ~ "using" ~ func }
+align = { "align" ~ ("to" ~ time_relative_parameterized)? ~ ("over" ~ time_relative_parameterized)? ~ "using" ~ func }
 
 group_by = { "group" ~ ("by" ~ tags)? ~ "using" ~ func }
 
@@ -142,7 +142,7 @@ bucket_specs                   = { bucket_spec ~ ("," ~ bucket_spec)* }
 bucket_fn_call_with_conversion = { bucket_by_with_conversion_fn ~ "(" ~ bucket_conversion ~ "," ~ bucket_specs ~ ")" }
 bucket_fn_call_simple          = { bucket_by_fn ~ "(" ~ bucket_specs ~ ")" }
 bucket_fn_call                 = { bucket_fn_call_with_conversion | bucket_fn_call_simple }
-bucket_by                      = { "bucket" ~ ("by" ~ tags)? ~ "to" ~ time_relative_parameterized ~ "using" ~ bucket_fn_call }
+bucket_by                      = { "bucket" ~ ("by" ~ tags)? ~ ("to" ~ time_relative_parameterized)? ~ "using" ~ bucket_fn_call }
 join                           = { "join" ~ tags ~ "from" ~ metric_id ~ "by" ~ tags }
 pipe_rule                      = { pipe_keyword ~ (align | map | group_by | replace | bucket_by | join | as) }
 

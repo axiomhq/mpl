@@ -7,6 +7,31 @@ use crate::{
 };
 
 #[test]
+fn parse_align_without_time() -> Result<(), Box<dyn std::error::Error>> {
+    let s = r"
+`dev.metrics`:http_requests_total[1h..]
+| where path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
+| filter code == #/[123]../
+| align using sum
+| group by method, path, code using sum
+    ";
+    super::compile(s, HashMap::new())?;
+    Ok(())
+}
+
+#[test]
+fn parse_bucket_without_time() -> Result<(), Box<dyn std::error::Error>> {
+    let s = r"
+`dev.metrics`:http_requests_duration[1h..]
+| where path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
+| filter code == #/[123]../
+| bucket by method, path, code using histogram(max)
+    ";
+    super::compile(s, HashMap::new())?;
+    Ok(())
+}
+
+#[test]
 fn parse_group_by() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
 `dev.metrics`:http_requests_total[1h..]

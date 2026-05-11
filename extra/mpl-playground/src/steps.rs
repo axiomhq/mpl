@@ -705,7 +705,10 @@ fn apply_align(series: &[Series], align: &Align) -> Result<Vec<Series>> {
             bail!("User-defined align functions are not supported");
         }
     };
-    let window_sec = time_to_seconds(get_param(&align.time)?)?;
+    let Some(time) = align.time.as_ref() else {
+        bail!("align without `to` is not supported in the playground");
+    };
+    let window_sec = time_to_seconds(get_param(time)?)?;
 
     series
         .iter()
@@ -904,7 +907,10 @@ fn apply_bucket(series: &[Series], bucket: &BucketBy) -> Result<Vec<Series>> {
     if series.is_empty() {
         bail!("Cannot bucket empty series");
     }
-    let window_sec = time_to_seconds(get_param(&bucket.time)?)?;
+    let Some(time) = bucket.time.as_ref() else {
+        bail!("bucket without `to` is not supported in the playground");
+    };
+    let window_sec = time_to_seconds(get_param(time)?)?;
     let group_tags = &bucket.tags;
 
     let mut groups: HashMap<String, Vec<&Series>> = HashMap::new();

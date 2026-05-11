@@ -1004,17 +1004,31 @@ fn parse_bucket_by(source: Pair<Rule>, state: &State) -> Result<BucketBy> {
     } else {
         (Vec::new(), next)
     };
-    let time = parse_parameterized_relative_time(next, state)?;
-    let (function, spec) = parse_bucket_fn_call(inner.n()?)?;
 
-    inner.assert_empty()?;
-    Ok(BucketBy {
-        span,
-        function,
-        time,
-        tags,
-        spec,
-    })
+    if next.as_rule() == Rule::bucket_fn_call {
+        let (function, spec) = parse_bucket_fn_call(next)?;
+        inner.assert_empty()?;
+
+        Ok(BucketBy {
+            span,
+            function,
+            time: None,
+            tags,
+            spec,
+        })
+    } else {
+        let time = parse_parameterized_relative_time(next, state)?;
+        let (function, spec) = parse_bucket_fn_call(inner.n()?)?;
+
+        inner.assert_empty()?;
+        Ok(BucketBy {
+            span,
+            function,
+            time: Some(time),
+            tags,
+            spec,
+        })
+    }
 }
 
 fn parse_function_id(source: Pair<Rule>) -> Result<Function> {
@@ -1388,7 +1402,18 @@ impl Parser {
     fn parse_align(&self, source: Pair<Rule>, state: &State) -> Result<Align> {
         source.assert_type(Rule::align)?;
         let mut inner = source.into_inner();
-        let time = parse_parameterized_relative_time(inner.n()?, state)?;
+
+        let next = inner.n()?;
+        if next.as_rule() == Rule::func {
+            let function = self.parse_align_fn(next)?;
+            inner.assert_empty()?;
+            return Ok(Align {
+                function,
+                time: None,
+            });
+        }
+
+        let time = parse_parameterized_relative_time(next, state)?;
         let next = inner.n()?;
         if next.as_rule() == Rule::time_relative_parameterized {
             let _sliding_window = parse_parameterized_relative_time(next, state)?;
@@ -1398,7 +1423,10 @@ impl Parser {
         } else {
             let function = self.parse_align_fn(next)?;
             inner.assert_empty()?;
-            Ok(Align { function, time })
+            Ok(Align {
+                function,
+                time: Some(time),
+            })
         }
     }
 
