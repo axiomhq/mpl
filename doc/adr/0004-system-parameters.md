@@ -24,4 +24,4 @@ These system parameters have to be declared types and passed at parse-time.
 
 ## Consequences
 
-User-declared parameters that start with `__` will result in a parse error.
+User-declared parameters that start with `__` will result in a parse warnings. They later will become erros after a transition period
