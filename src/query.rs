@@ -107,6 +107,11 @@ pub struct Source {
     /// The time range
     pub time: Option<TimeRange>,
 }
+impl Source {
+    fn time(&self) -> Option<&TimeRange> {
+        self.time.as_ref()
+    }
+}
 
 /// An error related to value parsing
 #[derive(Debug, thiserror::Error)]
@@ -978,6 +983,14 @@ pub enum Query {
 }
 
 impl Query {
+    /// Gets the time range for the query
+    #[must_use]
+    pub fn time_range(&self) -> Option<&TimeRange> {
+        match self {
+            Query::Simple { source, .. } => source.time(),
+            Query::Compute { left, .. } => left.time_range(),
+        }
+    }
     /// Get a ref to the params of the query.
     #[must_use]
     pub fn params(&self) -> &Params {
