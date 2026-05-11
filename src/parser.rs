@@ -1144,9 +1144,7 @@ impl Parser {
                     param: name.clone(),
                 },
             );
-        }
-
-        if state.params.iter().any(|p| p.name == name) {
+        } else if state.params.iter().any(|p| p.name == name) {
             return Err(ParseError::ParamDefinedMultipleTimes { span, param: name });
         }
 
