@@ -131,7 +131,7 @@ fn parse_ident(source: &Pair<'_, Rule>) -> Result<String> {
     }
 }
 
-fn resolve_param<'p>(source: &Pair<'_, Rule>, params: &'p Params) -> Result<&'p ParamDeclaration> {
+fn resolve_param<'p>(source: &Pair<'_, Rule>, state: &'p State) -> Result<&'p ParamDeclaration> {
     let name = match source.as_rule() {
         Rule::plain_ident => source.as_str(),
         rule => {
@@ -143,7 +143,8 @@ fn resolve_param<'p>(source: &Pair<'_, Rule>, params: &'p Params) -> Result<&'p 
         }
     };
 
-    let param = params
+    let param = state
+        .params
         .iter()
         .find(|p| p.name == name)
         .ok_or(ParseError::UndefinedParam {
@@ -168,7 +169,7 @@ fn parse_source_ident(source: &Pair<'_, Rule>) -> Result<String> {
 
 fn parse_source_ident_param(
     source: Pair<'_, Rule>,
-    params: &Params,
+    state: &State,
 ) -> Result<Parameterized<String>> {
     match source.as_rule() {
         Rule::plain_ident => Ok(Parameterized::Concrete(source.as_str().to_string())),
@@ -179,7 +180,7 @@ fn parse_source_ident_param(
             let span = pair_to_source_span(&source);
             let mut inner = source.into_inner();
             let next = inner.n()?;
-            let param = resolve_param(&next, params)?;
+            let param = resolve_param(&next, state)?;
             Ok(Parameterized::Param {
                 span,
                 param: param.clone(),
@@ -215,12 +216,12 @@ fn parse_param_ident(source: Pair<'_, Rule>) -> Result<String> {
     }
 }
 
-fn parse_dataset(source: Pair<Rule>, params: &Params) -> Result<Parameterized<Dataset>> {
+fn parse_dataset(source: Pair<Rule>, state: &State) -> Result<Parameterized<Dataset>> {
     source.assert_type(Rule::dataset)?;
     let mut inner = source.into_inner();
 
     let source = inner.n()?;
-    let dataset = parse_source_ident_param(source, params)?.map_concrete(Dataset::new);
+    let dataset = parse_source_ident_param(source, state)?.map_concrete(Dataset::new);
     Ok(dataset)
 }
 
@@ -233,10 +234,10 @@ fn parse_metric_name(source: Pair<Rule>) -> Result<Metric> {
     Ok(metric)
 }
 
-fn parse_metric_id(source: Pair<Rule>, params: &Params) -> Result<MetricId> {
+fn parse_metric_id(source: Pair<Rule>, state: &State) -> Result<MetricId> {
     source.assert_type(Rule::metric_id)?;
     let mut inner = source.into_inner();
-    let dataset = parse_dataset(inner.n()?, params)?;
+    let dataset = parse_dataset(inner.n()?, state)?;
     let metric = parse_metric_name(inner.n()?)?;
     inner.assert_empty()?;
     Ok(MetricId { dataset, metric })
@@ -244,7 +245,7 @@ fn parse_metric_id(source: Pair<Rule>, params: &Params) -> Result<MetricId> {
 
 fn parse_parameterized_relative_time(
     source: Pair<Rule>,
-    params: &Params,
+    state: &State,
 ) -> Result<Parameterized<RelativeTime>> {
     source.assert_type(Rule::time_relative_parameterized)?;
     let mut inner = source.into_inner();
@@ -256,7 +257,7 @@ fn parse_parameterized_relative_time(
         let span = pair_to_source_span(&next);
         let mut inner = next.into_inner();
         let next = inner.n()?;
-        let param = resolve_param(&next, params)?;
+        let param = resolve_param(&next, state)?;
         return Ok(Parameterized::Param {
             span,
             param: param.clone(),
@@ -344,11 +345,11 @@ fn parse_time_range(source: Pair<Rule>) -> Result<TimeRange> {
     Ok(TimeRange { start, end })
 }
 
-pub(crate) fn parse_source(source: Pair<Rule>, params: &Params) -> Result<(Source, Option<As>)> {
+pub(crate) fn parse_source(source: Pair<Rule>, state: &State) -> Result<(Source, Option<As>)> {
     source.assert_type(Rule::source)?;
     let mut inner = source.into_inner();
 
-    let metric_id = parse_metric_id(inner.n()?, params)?;
+    let metric_id = parse_metric_id(inner.n()?, state)?;
     let next = inner.next();
 
     match next {
@@ -536,7 +537,7 @@ fn parse_regex(source: &Pair<'_, Rule>) -> Result<Regex> {
     Ok(regex::Regex::new(&unescape(&source.as_str()[1..], '/'))?)
 }
 
-fn parse_value_filter(field: String, source: Pair<Rule>, params: &Params) -> Result<Filter> {
+fn parse_value_filter(field: String, source: Pair<Rule>, state: &State) -> Result<Filter> {
     source.assert_type(Rule::value_filter)?;
     let mut inner = source.into_inner();
     let operator_pair = inner.n()?;
@@ -552,7 +553,7 @@ fn parse_value_filter(field: String, source: Pair<Rule>, params: &Params) -> Res
         let span = pair_to_source_span(&next);
         let mut inner = next.into_inner();
         let next = inner.n()?;
-        let param = resolve_param(&next, params)?;
+        let param = resolve_param(&next, state)?;
         Parameterized::Param {
             span,
             param: param.clone(),
@@ -731,7 +732,7 @@ fn parse_is_filter(field: String, source: Pair<Rule>) -> Result<Filter> {
     Ok(Filter::Cmp { field, rhs })
 }
 
-fn parse_filter_atom(source: Pair<Rule>, params: &Params) -> Result<Filter> {
+fn parse_filter_atom(source: Pair<Rule>, state: &State) -> Result<Filter> {
     source.assert_type(Rule::filter_atom)?;
     let mut inner = source.into_inner();
 
@@ -741,7 +742,7 @@ fn parse_filter_atom(source: Pair<Rule>, params: &Params) -> Result<Filter> {
     let next = inner.n()?;
     let res = match next.as_rule() {
         Rule::regex_filter => parse_regex_filter(field, next),
-        Rule::value_filter => parse_value_filter(field, next, params),
+        Rule::value_filter => parse_value_filter(field, next, state),
         Rule::is_filter => parse_is_filter(field, next),
         rule => Err(ParseError::Unexpected {
             span: pair_to_source_span(&next),
@@ -754,13 +755,13 @@ fn parse_filter_atom(source: Pair<Rule>, params: &Params) -> Result<Filter> {
     Ok(res)
 }
 
-fn parse_filter_clause(source: Pair<'_, Rule>, params: &Params) -> Result<Filter> {
+fn parse_filter_clause(source: Pair<'_, Rule>, state: &State) -> Result<Filter> {
     source.assert_type(Rule::filter_clause)?;
     let mut inner = source.into_inner();
     let next = inner.n()?;
     let res = match next.as_rule() {
-        Rule::filter_atom => parse_filter_atom(next, params),
-        Rule::filter_or => parse_or(next, params),
+        Rule::filter_atom => parse_filter_atom(next, state),
+        Rule::filter_or => parse_or(next, state),
         rule => Err(ParseError::Unexpected {
             span: pair_to_source_span(&next),
             rule,
@@ -772,24 +773,24 @@ fn parse_filter_clause(source: Pair<'_, Rule>, params: &Params) -> Result<Filter
     Ok(res)
 }
 
-fn parse_filter_not(source: Pair<'_, Rule>, params: &Params) -> Result<Filter> {
+fn parse_filter_not(source: Pair<'_, Rule>, state: &State) -> Result<Filter> {
     source.assert_type(Rule::filter_not)?;
     let mut inner = source.into_inner();
     let next = inner.n()?;
     let res = if next.as_rule() == Rule::kw_not {
-        Filter::Not(Box::new(parse_filter_clause(inner.n()?, params)?))
+        Filter::Not(Box::new(parse_filter_clause(inner.n()?, state)?))
     } else {
-        parse_filter_clause(next, params)?
+        parse_filter_clause(next, state)?
     };
     inner.assert_empty()?;
     Ok(res)
 }
-fn parse_and(source: Pair<Rule>, params: &Params) -> Result<Filter> {
+fn parse_and(source: Pair<Rule>, state: &State) -> Result<Filter> {
     source.assert_type(Rule::filter_and)?;
     let inner = source.into_inner();
     let mut res = inner
         .into_iter()
-        .map(|source| parse_filter_not(source, params))
+        .map(|source| parse_filter_not(source, state))
         .collect::<Result<Vec<_>>>()?;
     if res.len() == 1 {
         res.pop().ok_or(ParseError::Unreachable(
@@ -799,12 +800,12 @@ fn parse_and(source: Pair<Rule>, params: &Params) -> Result<Filter> {
         Ok(Filter::And(res))
     }
 }
-fn parse_or(source: Pair<Rule>, params: &Params) -> Result<Filter> {
+fn parse_or(source: Pair<Rule>, state: &State) -> Result<Filter> {
     source.assert_type(Rule::filter_or)?;
     let inner = source.into_inner();
     let mut res = inner
         .into_iter()
-        .map(|source| parse_and(source, params))
+        .map(|source| parse_and(source, state))
         .collect::<Result<Vec<_>>>()?;
     if res.len() == 1 {
         res.pop().ok_or(ParseError::Unreachable(
@@ -815,28 +816,25 @@ fn parse_or(source: Pair<Rule>, params: &Params) -> Result<Filter> {
     }
 }
 
-pub(crate) fn parse_filter(source: Pair<Rule>, params: &Params) -> Result<Filter> {
+pub(crate) fn parse_filter(source: Pair<Rule>, state: &State) -> Result<Filter> {
     source.assert_type(Rule::filter_rule)?;
     let mut inner = source.into_inner();
 
     let keyword = inner.n()?;
     keyword.assert_type(Rule::pipe_keyword)?;
 
-    parse_where_part(inner, params)
+    parse_where_part(inner, state)
 }
 
-fn parse_where_part(mut source: Pairs<Rule>, params: &Params) -> Result<Filter> {
+fn parse_where_part(mut source: Pairs<Rule>, state: &State) -> Result<Filter> {
     let _filter_kw = source.n()?; // kw_filter / kw_where
     let next = source.n()?;
-    let res = parse_or(next, params)?;
+    let res = parse_or(next, state)?;
     source.assert_empty()?;
     Ok(res)
 }
 
-pub(crate) fn parse_ifdef(
-    source: Pair<Rule>,
-    params: &Params,
-) -> Result<(ParamDeclaration, Filter)> {
+pub(crate) fn parse_ifdef(source: Pair<Rule>, state: &State) -> Result<(ParamDeclaration, Filter)> {
     source.assert_type(Rule::ifdef_rule)?;
     let mut inner = source.into_inner();
 
@@ -851,7 +849,7 @@ pub(crate) fn parse_ifdef(
     let param = if matches!(param.as_rule(), Rule::param_ident) {
         let mut inner = param.into_inner();
         let next = inner.n()?;
-        let param = resolve_param(&next, params)?.clone();
+        let param = resolve_param(&next, state)?.clone();
         if !param.is_optional() {
             return Err(ParseError::IfdefNotOptional { span, param });
         }
@@ -864,7 +862,7 @@ pub(crate) fn parse_ifdef(
         });
     };
 
-    let filter = parse_where_part(inner, params)?;
+    let filter = parse_where_part(inner, state)?;
     Ok((param, filter))
 }
 
@@ -985,7 +983,7 @@ fn parse_bucket_fn_call(source: Pair<Rule>) -> Result<(BucketType, Vec<BucketSpe
     result
 }
 
-fn parse_bucket_by(source: Pair<Rule>, params: &Params) -> Result<BucketBy> {
+fn parse_bucket_by(source: Pair<Rule>, state: &State) -> Result<BucketBy> {
     source.assert_type(Rule::bucket_by)?;
     let span = pair_to_source_span(&source);
     let mut inner = source.into_inner();
@@ -1000,7 +998,7 @@ fn parse_bucket_by(source: Pair<Rule>, params: &Params) -> Result<BucketBy> {
     } else {
         (Vec::new(), next)
     };
-    let time = parse_parameterized_relative_time(next, params)?;
+    let time = parse_parameterized_relative_time(next, state)?;
     let (function, spec) = parse_bucket_fn_call(inner.n()?)?;
 
     inner.assert_empty()?;
@@ -1030,6 +1028,12 @@ fn parse_function_id(source: Pair<Rule>) -> Result<Function> {
         name,
         module_path: module,
     })
+}
+
+pub(crate) struct State {
+    params: Params,
+    directives: Directives,
+    // warnings: Warnings,
 }
 
 impl Parser {
@@ -1073,8 +1077,13 @@ impl Parser {
                 _ => break,
             }
         }
+        let state = State {
+            params,
+            directives,
+            // warnings: Warnings::new(),
+        };
 
-        self.parse_query_(directives, params, next)
+        self.parse_query_(&state, next)
     }
 
     pub(crate) fn parse_directive(source: Pair<'_, Rule>) -> Result<(String, DirectiveValue)> {
@@ -1116,20 +1125,15 @@ impl Parser {
         Ok(ParamDeclaration { span, name, typ })
     }
 
-    fn parse_query_(
-        &self,
-        directives: Directives,
-        params: Params,
-        query: Pair<Rule>,
-    ) -> Result<Query> {
+    fn parse_query_(&self, state: &State, query: Pair<Rule>) -> Result<Query> {
         match query.as_rule() {
             Rule::simple_query => {
                 let inner = query.into_inner();
-                self.parse_simple_query(directives, params, inner)
+                self.parse_simple_query(state, inner)
             }
             Rule::compute_query => {
                 let inner = query.into_inner();
-                self.parse_compute_query(directives, params, inner)
+                self.parse_compute_query(state, inner)
             }
             rule => Err(ParseError::Unexpected {
                 span: pair_to_source_span(&query),
@@ -1139,20 +1143,15 @@ impl Parser {
         }
     }
 
-    fn parse_compute_query(
-        &self,
-        directives: Directives,
-        params: Params,
-        mut pairs: Pairs<Rule>,
-    ) -> Result<Query> {
+    fn parse_compute_query(&self, state: &State, mut pairs: Pairs<Rule>) -> Result<Query> {
         let next = pairs.next().ok_or(ParseError::EOF {
             span: miette::SourceSpan::new(0.into(), 0),
         })?;
-        let left = Box::new(self.parse_query_(directives.clone(), params.clone(), next)?);
+        let left = Box::new(self.parse_query_(state, next)?);
         let next = pairs.next().ok_or(ParseError::EOF {
             span: miette::SourceSpan::new(0.into(), 0),
         })?;
-        let right = Box::new(self.parse_query_(directives.clone(), params.clone(), next)?);
+        let right = Box::new(self.parse_query_(state, next)?);
 
         let next = pairs.next().ok_or(ParseError::EOF {
             span: miette::SourceSpan::new(0.into(), 0),
@@ -1194,7 +1193,7 @@ impl Parser {
         for next in &mut pairs {
             match next.as_rule() {
                 Rule::EOI => break,
-                Rule::pipe_rule => aggregates.push(self.parse_pipe(next, &params)?),
+                Rule::pipe_rule => aggregates.push(self.parse_pipe(next, state)?),
                 rule => {
                     return Err(ParseError::Unexpected {
                         span: pair_to_source_span(&next),
@@ -1211,21 +1210,16 @@ impl Parser {
             name,
             op,
             aggregates,
-            directives,
-            params,
+            directives: state.directives.clone(),
+            params: state.params.clone(),
         })
     }
-    fn parse_simple_query(
-        &self,
-        directives: Directives,
-        params: Params,
-        mut pairs: Pairs<Rule>,
-    ) -> Result<Query> {
+    fn parse_simple_query(&self, state: &State, mut pairs: Pairs<Rule>) -> Result<Query> {
         let (source, as_) = parse_source(
             pairs.next().ok_or(ParseError::EOF {
                 span: miette::SourceSpan::new(0.into(), 0),
             })?,
-            &params,
+            state,
         )?;
         let mut sample = None;
         let mut filters = Vec::new();
@@ -1241,13 +1235,13 @@ impl Parser {
                 Rule::sample_rule if sample.is_some() => {}
                 Rule::sample_rule => sample = Some(parse_sample(next)?),
                 Rule::ifdef_rule => {
-                    let (param, filter) = parse_ifdef(next, &params)?;
+                    let (param, filter) = parse_ifdef(next, state)?;
                     filters.push(FilterOrIfDef::Ifdef { param, filter });
                 }
                 Rule::filter_rule => {
-                    filters.push(FilterOrIfDef::Filter(parse_filter(next, &params)?));
+                    filters.push(FilterOrIfDef::Filter(parse_filter(next, state)?));
                 }
-                Rule::pipe_rule => aggregates.push(self.parse_pipe(next, &params)?),
+                Rule::pipe_rule => aggregates.push(self.parse_pipe(next, state)?),
                 rule => {
                     return Err(ParseError::Unexpected {
                         span: pair_to_source_span(&next),
@@ -1263,12 +1257,12 @@ impl Parser {
             source,
             filters,
             aggregates,
-            directives,
-            params,
+            directives: state.directives.clone(),
+            params: state.params.clone(),
         })
     }
 
-    pub(crate) fn parse_pipe(&self, source: Pair<Rule>, params: &Params) -> Result<Aggregate> {
+    pub(crate) fn parse_pipe(&self, source: Pair<Rule>, state: &State) -> Result<Aggregate> {
         source.assert_type(Rule::pipe_rule)?;
         let mut inner = source.into_inner();
 
@@ -1279,9 +1273,9 @@ impl Parser {
         inner.assert_empty()?;
         match next.as_rule() {
             Rule::map => Ok(Aggregate::Map(self.parse_map(next)?)),
-            Rule::align => Ok(Aggregate::Align(self.parse_align(next, params)?)),
+            Rule::align => Ok(Aggregate::Align(self.parse_align(next, state)?)),
             Rule::group_by => Ok(Aggregate::GroupBy(self.parse_group_by(next)?)),
-            Rule::bucket_by => Ok(Aggregate::Bucket(parse_bucket_by(next, params)?)),
+            Rule::bucket_by => Ok(Aggregate::Bucket(parse_bucket_by(next, state)?)),
             rule @ (Rule::join | Rule::replace) => Err(ParseError::NotSupported {
                 span: pair_to_source_span(&next),
                 rule,
@@ -1375,13 +1369,13 @@ impl Parser {
         })
     }
 
-    fn parse_align(&self, source: Pair<Rule>, params: &Params) -> Result<Align> {
+    fn parse_align(&self, source: Pair<Rule>, state: &State) -> Result<Align> {
         source.assert_type(Rule::align)?;
         let mut inner = source.into_inner();
-        let time = parse_parameterized_relative_time(inner.n()?, params)?;
+        let time = parse_parameterized_relative_time(inner.n()?, state)?;
         let next = inner.n()?;
         if next.as_rule() == Rule::time_relative_parameterized {
-            let _sliding_window = parse_parameterized_relative_time(next, params)?;
+            let _sliding_window = parse_parameterized_relative_time(next, state)?;
             let _function = self.parse_align_fn(inner.n()?)?;
             inner.assert_empty()?;
             Err(ParseError::NotImplemented("sliding windows"))
