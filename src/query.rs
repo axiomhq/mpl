@@ -1,6 +1,7 @@
 //! The query structures
 use std::{
     collections::{HashMap, HashSet},
+    fmt::Display,
     num::TryFromIntError,
 };
 
@@ -567,19 +568,42 @@ pub enum ParseProvidedParamsError {
     #[error("The number of params provided exceeds the upper limit of {0}")]
     TooManyParamsProvided(usize),
 }
+/// List of warning reasons
+#[derive(Debug)]
+pub enum WarningReason {
+    /// Provided but not declared  param
+    ParamNotDeclared(Vec<String>),
+    /// lowercase duration
+    OldDuration,
+}
+
+impl Display for WarningReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WarningReason::ParamNotDeclared(items) => write!(
+                f,
+                "These params were provided but not declared: {}",
+                items.join(", ")
+            ),
+            WarningReason::OldDuration => {
+                write!(f, "`duration` is depricated, please ues `Duration`")
+            }
+        }
+    }
+}
 
 /// Warning we want to surface to the user instead of failing the request.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Warning {
     source: Option<SourceSpan>,
-    msg: String,
+    warning: WarningReason,
 }
 
 impl Warning {
     /// The warning message
     #[must_use]
-    pub fn msg(&self) -> &str {
-        &self.msg
+    pub fn warning(&self) -> &WarningReason {
+        &self.warning
     }
     /// The location of the waring (if any)
     #[must_use]
@@ -602,17 +626,17 @@ impl Warnings {
     }
 
     /// Add a new warning.
-    pub fn push(&mut self, warning: impl Into<String>) {
+    pub fn push(&mut self, warning: WarningReason) {
         self.inner.push(Warning {
             source: None,
-            msg: warning.into(),
+            warning,
         });
     }
     /// Add a new warning.
-    pub fn push_span(&mut self, span: SourceSpan, warning: impl Into<String>) {
+    pub fn push_span(&mut self, span: SourceSpan, warning: WarningReason) {
         self.inner.push(Warning {
             source: Some(span),
-            msg: warning.into(),
+            warning,
         });
     }
 
@@ -728,10 +752,7 @@ impl ProvidedParams {
             items.sort();
 
             // add to warnings, no need to error
-            warnings.push(format!(
-                "These params were provided but not declared: {}",
-                items.join(", ")
-            ));
+            warnings.push(WarningReason::ParamNotDeclared(items));
         }
 
         if !defined_more_than_once.is_empty() {

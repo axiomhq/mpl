@@ -16,7 +16,8 @@ use crate::{
     query::{
         Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter, FilterOrIfDef,
         GroupBy, Mapping, MetricId, ParamDeclaration, ParamType, ParamValue, Params, Query,
-        RelativeTime, Source, TagType, TerminalParamType, Time, TimeRange, TimeUnit, Warnings,
+        RelativeTime, Source, TagType, TerminalParamType, Time, TimeRange, TimeUnit, WarningReason,
+        Warnings,
     },
     stdlib::STDLIB,
     tags::TagValue,
@@ -471,9 +472,7 @@ fn parse_param_native_type(state: &mut State, source: &Pair<Rule>) -> Result<Ter
         "Dataset" => Ok(TerminalParamType::Dataset),
         "Duration" => Ok(TerminalParamType::Duration),
         "duration" => {
-            state
-                .warnings
-                .push_span(span, "`duration` is depricated, please ues `Duration`");
+            state.warnings.push_span(span, WarningReason::OldDuration);
             Ok(TerminalParamType::Duration)
         }
         "Regex" => Ok(TerminalParamType::Regex),

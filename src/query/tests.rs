@@ -177,7 +177,8 @@ fn provided_params_not_declared() {
         .expect("expected a warning, i just checked?");
     assert!(
         warning
-            .msg()
+            .warning()
+            .to_string()
             .contains("provided but not declared: $dataset")
     );
 }
