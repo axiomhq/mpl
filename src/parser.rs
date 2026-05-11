@@ -464,11 +464,18 @@ fn parse_directive_value(source: Pair<Rule>) -> Result<DirectiveValue> {
         }),
     }
 }
-fn parse_param_native_type(source: &Pair<Rule>) -> Result<TerminalParamType> {
+fn parse_param_native_type(state: &mut State, source: &Pair<Rule>) -> Result<TerminalParamType> {
     source.assert_type(Rule::param_native_type)?;
+    let span = pair_to_source_span(source);
     match source.as_str() {
         "Dataset" => Ok(TerminalParamType::Dataset),
-        "duration" | "Duration" => Ok(TerminalParamType::Duration),
+        "Duration" => Ok(TerminalParamType::Duration),
+        "duration" => {
+            state
+                .warnings
+                .push_span(span, "`duration` is depricated, please ues `Duration`");
+            Ok(TerminalParamType::Duration)
+        }
         "Regex" => Ok(TerminalParamType::Regex),
         _ => Err(ParseError::Unexpected {
             span: pair_to_source_span(source),
@@ -478,13 +485,13 @@ fn parse_param_native_type(source: &Pair<Rule>) -> Result<TerminalParamType> {
     }
 }
 
-fn parse_param_type(source: Pair<Rule>) -> Result<ParamType> {
+fn parse_param_type(state: &mut State, source: Pair<Rule>) -> Result<ParamType> {
     source.assert_type(Rule::param_type)?;
     let mut inner = source.into_inner();
     let next = inner.n()?;
     let r = match next.as_rule() {
         Rule::tag_type => ParamType::Terminal(TerminalParamType::Tag(parse_tag_type(&next)?)),
-        Rule::param_native_type => ParamType::Terminal(parse_param_native_type(&next)?),
+        Rule::param_native_type => ParamType::Terminal(parse_param_native_type(state, &next)?),
         Rule::optional_type => {
             let mut inner = next.into_inner();
             let next = inner.n()?;
@@ -492,7 +499,7 @@ fn parse_param_type(source: Pair<Rule>) -> Result<ParamType> {
                 Rule::tag_type => {
                     ParamType::Optional(TerminalParamType::Tag(parse_tag_type(&next)?))
                 }
-                Rule::param_native_type => match parse_param_native_type(&next)? {
+                Rule::param_native_type => match parse_param_native_type(state, &next)? {
                     TerminalParamType::Duration | TerminalParamType::Dataset => {
                         return Err(ParseError::Unexpected {
                             span: pair_to_source_span(&next),
@@ -1046,7 +1053,6 @@ impl Parser {
             span: miette::SourceSpan::new(0.into(), 0),
         })?;
 
-        let mut directives = Directives::default();
         let mut params = Params::default();
 
         // add system params
@@ -1061,27 +1067,29 @@ impl Parser {
             });
         }
 
+        let mut state = State {
+            params,
+            directives: Directives::default(),
+            warnings: Warnings::new(),
+        };
+
         loop {
             match next.as_rule() {
                 Rule::directive => {
                     let span = pair_to_source_span(&next);
                     let (directive, value) = Parser::parse_directive(next)?;
-                    directives.insert(directive, value);
+                    state.directives.insert(directive, value);
                     next = pairs.next().ok_or(ParseError::EOF { span })?;
                 }
                 Rule::param => {
                     let span = pair_to_source_span(&next);
-                    params.push(Parser::parse_param(&params, next)?);
+                    let param = Parser::parse_param(&mut state, next)?;
+                    state.params.push(param);
                     next = pairs.next().ok_or(ParseError::EOF { span })?;
                 }
                 _ => break,
             }
         }
-        let state = State {
-            params,
-            directives,
-            warnings: Warnings::new(),
-        };
 
         let r = self.parse_query_(&state, next)?;
         Ok((r, state.warnings))
@@ -1106,7 +1114,10 @@ impl Parser {
         Ok((directive, value))
     }
 
-    pub(crate) fn parse_param(params: &Params, source: Pair<'_, Rule>) -> Result<ParamDeclaration> {
+    pub(crate) fn parse_param(
+        state: &mut State,
+        source: Pair<'_, Rule>,
+    ) -> Result<ParamDeclaration> {
         let mut inner = source.into_inner();
         let next = inner.n()?;
         let span = pair_to_source_span(&next);
@@ -1117,11 +1128,11 @@ impl Parser {
             return Err(ParseError::ParamUsingSystemPrefix { span, param: name });
         }
 
-        if params.iter().any(|p| p.name == name) {
+        if state.params.iter().any(|p| p.name == name) {
             return Err(ParseError::ParamDefinedMultipleTimes { span, param: name });
         }
 
-        let typ = parse_param_type(inner.n()?)?;
+        let typ = parse_param_type(state, inner.n()?)?;
 
         Ok(ParamDeclaration { span, name, typ })
     }
