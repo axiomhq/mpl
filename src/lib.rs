@@ -38,7 +38,7 @@ pub use query::Query;
 pub use stdlib::STDLIB;
 
 use crate::{
-    query::{Cmp, Filter, ParamDeclaration, TagType, TerminalParamType},
+    query::{Cmp, Filter, ParamDeclaration, TagType, TerminalParamType, Warnings},
     types::{Dataset, Parameterized},
     visitor::{QueryVisitor, QueryWalker, VisitRes},
 };
@@ -67,10 +67,11 @@ pub enum CompileError {
 
 /// Parses and typechecks an MPL query into a Query object.
 #[allow(clippy::result_large_err)]
-pub fn compile(query: &str) -> Result<Query, CompileError> {
+pub fn compile(query: &str) -> Result<(Query, Warnings), CompileError> {
     // stage 1: parse
     let mut parse = MPLParser::parse(Rule::file, query).map_err(ParseError::from)?;
-    let mut query = parser::Parser::default().parse_query(&mut parse, HashMap::new())?;
+    let (mut query, warnings) =
+        parser::Parser::default().parse_query(&mut parse, HashMap::new())?;
     // stage 2: typecheck
     let mut visitor = ParamTypecheckVisitor {};
     visitor.walk(&mut query)?;
@@ -81,7 +82,7 @@ pub fn compile(query: &str) -> Result<Query, CompileError> {
     let mut visitor = OptionCheckVisitor::default();
     visitor.walk(&mut query)?;
 
-    Ok(query)
+    Ok((query, warnings))
 }
 /// Type error
 #[derive(Debug, thiserror::Error, Diagnostic)]

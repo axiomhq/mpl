@@ -68,7 +68,7 @@ fn test_compute_query_post_compute_aggregates()
     | align to 5m using last
     ";
 
-    let parsed = crate::compile(query)?;
+    let (parsed, _) = crate::compile(query)?;
     let Query::Compute { aggregates, .. } = &parsed else {
         panic!("expected Query::Compute, got {parsed:?}");
     };

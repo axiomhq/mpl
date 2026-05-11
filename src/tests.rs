@@ -75,7 +75,7 @@ fn parse_logic_0() -> Result<(), Box<dyn std::error::Error>> {
 dataset:metric
 | filter a == "snot"
     "#;
-    let res = super::compile(s)?;
+    let (res, _) = super::compile(s)?;
     let expected = Filter::Cmp {
         field: "a".into(),
         rhs: Cmp::Eq(Parameterized::Concrete("snot".try_into()?)),
@@ -97,7 +97,7 @@ fn parse_logic_1() -> Result<(), Box<dyn std::error::Error>> {
 dataset:metric
 | filter a == 7.0 and not b == 8
     ";
-    let res = super::compile(s)?;
+    let (res, _) = super::compile(s)?;
     let expected = Filter::And(vec![
         Filter::Cmp {
             field: "a".into(),
@@ -125,7 +125,7 @@ fn parse_logic_2() -> Result<(), Box<dyn std::error::Error>> {
 dataset:metric
 | filter a == 7 and b == 8 or c == 9 and ( d == 10 or e == 11 )
     ";
-    let res = super::compile(s)?;
+    let (res, _) = super::compile(s)?;
     let expected = Filter::Or(vec![
         Filter::And(vec![
             Filter::Cmp {
@@ -184,7 +184,7 @@ $dataset:metric
 | filter matches == $re
 | align to $resolution using avg
 ";
-    let res = super::compile(s)?;
+    let (res, _) = super::compile(s)?;
     match res {
         crate::Query::Simple { source, .. } => {
             assert!(source.metric_id.dataset.is_param());

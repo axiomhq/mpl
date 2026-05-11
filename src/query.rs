@@ -568,10 +568,30 @@ pub enum ParseProvidedParamsError {
     TooManyParamsProvided(usize),
 }
 
+/// Warning we want to surface to the user instead of failing the request.
+#[derive(Debug, Default)]
+pub struct Warning {
+    source: Option<SourceSpan>,
+    msg: String,
+}
+
+impl Warning {
+    /// The warning message
+    #[must_use]
+    pub fn msg(&self) -> &str {
+        &self.msg
+    }
+    /// The location of the waring (if any)
+    #[must_use]
+    pub fn source(&self) -> Option<SourceSpan> {
+        self.source
+    }
+}
+
 /// Warnings we want to surface to the user instead of failing the request.
 #[derive(Debug, Default)]
 pub struct Warnings {
-    inner: Vec<String>,
+    inner: Vec<Warning>,
 }
 
 impl Warnings {
@@ -583,7 +603,17 @@ impl Warnings {
 
     /// Add a new warning.
     pub fn push(&mut self, warning: impl Into<String>) {
-        self.inner.push(warning.into());
+        self.inner.push(Warning {
+            source: None,
+            msg: warning.into(),
+        });
+    }
+    /// Add a new warning.
+    pub fn push_span(&mut self, span: SourceSpan, warning: impl Into<String>) {
+        self.inner.push(Warning {
+            source: Some(span),
+            msg: warning.into(),
+        });
     }
 
     /// Returns true if there are no warnings.
@@ -594,13 +624,13 @@ impl Warnings {
 
     /// Get the warnings as slice.
     #[must_use]
-    pub fn as_slice(&self) -> &[String] {
+    pub fn as_slice(&self) -> &[Warning] {
         &self.inner
     }
 
     /// Turn into a vector.
     #[must_use]
-    pub fn into_vec(self) -> Vec<String> {
+    pub fn into_vec(self) -> Vec<Warning> {
         self.inner
     }
 }

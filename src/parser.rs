@@ -16,7 +16,7 @@ use crate::{
     query::{
         Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter, FilterOrIfDef,
         GroupBy, Mapping, MetricId, ParamDeclaration, ParamType, ParamValue, Params, Query,
-        RelativeTime, Source, TagType, TerminalParamType, Time, TimeRange, TimeUnit,
+        RelativeTime, Source, TagType, TerminalParamType, Time, TimeRange, TimeUnit, Warnings,
     },
     stdlib::STDLIB,
     tags::TagValue,
@@ -1033,7 +1033,7 @@ fn parse_function_id(source: Pair<Rule>) -> Result<Function> {
 pub(crate) struct State {
     params: Params,
     directives: Directives,
-    // warnings: Warnings,
+    warnings: Warnings,
 }
 
 impl Parser {
@@ -1041,7 +1041,7 @@ impl Parser {
         &self,
         pairs: &mut Pairs<Rule>,
         system_params: HashMap<String, ParamType>,
-    ) -> Result<Query> {
+    ) -> Result<(Query, Warnings)> {
         let mut next = pairs.next().ok_or(ParseError::EOF {
             span: miette::SourceSpan::new(0.into(), 0),
         })?;
@@ -1080,10 +1080,11 @@ impl Parser {
         let state = State {
             params,
             directives,
-            // warnings: Warnings::new(),
+            warnings: Warnings::new(),
         };
 
-        self.parse_query_(&state, next)
+        let r = self.parse_query_(&state, next)?;
+        Ok((r, state.warnings))
     }
 
     pub(crate) fn parse_directive(source: Pair<'_, Rule>) -> Result<(String, DirectiveValue)> {
