@@ -4,6 +4,7 @@ import {
   formatArgType,
   getFunctionInfo,
 } from "./wasm-types";
+import { mplSystemParams, type MplSystemParam } from "./system-params";
 
 interface KeywordDoc {
   description: string;
@@ -285,11 +286,11 @@ function renderKeywordTooltip(keyword: string, doc: KeywordDoc): HTMLElement {
 }
 
 function hoverSource(
-  _view: EditorView,
+  view: EditorView,
   pos: number,
   _side: -1 | 1,
 ): Tooltip | null {
-  const doc = _view.state.doc.toString();
+  const doc = view.state.doc.toString();
 
   // Param references take priority over the generic word path. `$ident`
   // tokens are not picked up by `extractWordAt` (the leading `$` short-
@@ -297,7 +298,12 @@ function hoverSource(
   // hovering a `$container` reference would render no tooltip at all.
   const param = extractParamAt(doc, pos);
   if (param) {
-    const decl = parseParamDeclarations(doc).get(param.name);
+    // Inline declarations override host-supplied system params on name
+    // collision — same precedence the completion source enforces.
+    const decls = parseParamDeclarations(doc);
+    const systemParams = view.state.facet(mplSystemParams);
+    mergeSystemParamsInto(decls, systemParams);
+    const decl = decls.get(param.name);
     if (decl) {
       return {
         pos: param.from,
@@ -345,3 +351,23 @@ function hoverSource(
 }
 
 export const mplHover = hoverTooltip(hoverSource, { hideOnChange: true });
+
+/**
+ * Splices host-supplied system params into a declaration map produced by
+ * `parseParamDeclarations`, without overwriting inline declarations that
+ * share a name. Names supplied without the leading `$` are normalised so
+ * the map key matches what `extractParamAt` returns from the document.
+ *
+ * Exported for unit tests; production consumers go through `mplHover` and
+ * the `mplSystemParams` facet.
+ */
+export function mergeSystemParamsInto(
+  decls: Map<string, ParamDecl>,
+  systemParams: readonly MplSystemParam[],
+): void {
+  for (const sp of systemParams) {
+    const key = sp.name.startsWith("$") ? sp.name : `$${sp.name}`;
+    if (decls.has(key)) continue;
+    decls.set(key, { type: sp.type, optional: sp.optional ?? false });
+  }
+}

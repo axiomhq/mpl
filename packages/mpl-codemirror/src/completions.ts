@@ -3,6 +3,7 @@ import { EditorState } from "@codemirror/state";
 import * as mpl from "@axiomhq/mpl";
 import { type WasmArgType, formatArgs } from "./wasm-types";
 import { CompletionCache } from "./completion-cache";
+import { mplSystemParams } from "./system-params";
 
 /**
  * Snippet template for the `ifdef` keyword. Inserts the full canonical
@@ -96,9 +97,10 @@ type WasmCompletionResult =
 
 function mplCompletionSource(context: CompletionContext): CompletionResult | null {
   const doc = context.state.doc.toString();
+  const systemParams = context.state.facet(mplSystemParams);
   let result: WasmCompletionResult | null = null;
   try {
-    result = mpl.completions(doc, context.pos) as WasmCompletionResult | null;
+    result = mpl.completions(doc, context.pos, systemParams) as WasmCompletionResult | null;
   } catch {
     // WASM not ready or error
     return null;
@@ -234,9 +236,10 @@ function createMplCompletionSource(config: MplCompletionConfig) {
 
   return async (context: CompletionContext): Promise<CompletionResult | null> => {
     const doc = context.state.doc.toString();
+    const systemParams = context.state.facet(mplSystemParams);
     let result: WasmCompletionResult | null = null;
     try {
-      result = mpl.completions(doc, context.pos) as WasmCompletionResult | null;
+      result = mpl.completions(doc, context.pos, systemParams) as WasmCompletionResult | null;
     } catch {
       return null;
     }

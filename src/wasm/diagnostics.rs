@@ -1,6 +1,4 @@
 //! Diagnostics and code actions for `MPL` queries.
-use std::collections::HashMap;
-
 use miette::Diagnostic as _;
 use serde::Serialize;
 use strsim::jaro;
@@ -56,10 +54,19 @@ pub(super) struct DiagnosticItem {
 }
 
 /// Returns diagnostics (errors/warnings) for the given query string.
+///
+/// `system_params` (optional) is an array of `{ name, type, optional? }`
+/// objects describing parameters the host injects at runtime (e.g.
+/// `$__interval`). They are merged into the compiler's param table so
+/// references no longer trip the `UndefinedParam` parse error or the
+/// `ParamNotDeclared` warning. Pass `null`/`undefined` or omit to keep the
+/// historical behaviour of "no system params".
 #[must_use]
 #[wasm_bindgen]
-pub fn diagnostics(query: &str) -> JsValue {
-    let items = match compile(query, HashMap::new()) {
+pub fn diagnostics(query: &str, system_params: JsValue) -> JsValue {
+    let specs = super::system_params::decode(system_params);
+    let params = super::system_params::to_compile_params(&specs);
+    let items = match compile(query, params) {
         Ok((_, warnings)) => {
             let mut items: Vec<DiagnosticItem> = warnings
                 .as_slice()

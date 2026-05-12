@@ -5,7 +5,7 @@ import wasmInitPlayground, { Interpreter, RunOutput } from "@axiomhq/mpl-playgro
 import Alpine from "alpinejs";
 import { renderCharts, type ChartEntry } from "./charts";
 import { datasets } from "./datasets";
-import { createEditor, type EditorInstance } from "./editor";
+import { createEditor, substituteSystemParams, type EditorInstance } from "./editor";
 
 const exampleModules = import.meta.glob("./examples/*.mpl", {
   query: "?raw",
@@ -49,10 +49,16 @@ function onEditorChange() {
   if (!panel) return;
 
   const doc = editor.view.state.doc.toString();
+  // Splice concrete values in for host-supplied system params (e.g.
+  // `$__interval` → `1m`). The interpreter has no binding step and would
+  // otherwise bail on every `Parameterized::Param` node; the editor still
+  // sees the original text (with the param reference) for linting and
+  // hover, courtesy of the `mplSystemParams` facet.
+  const resolved = substituteSystemParams(doc);
   let steps: RunOutput;
 
   try {
-    steps = interpreter.run(doc);
+    steps = interpreter.run(resolved);
   } catch (e) {
     renderCharts(panel, [{ label: doc.trim(), series: [], error: String(e) }]);
     return;

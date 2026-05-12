@@ -1,9 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
 import type { EditorView } from "@codemirror/view";
+import { EditorState } from "@codemirror/state";
+import * as mpl from "@axiomhq/mpl";
 import {
   mapDiagnostics,
+  mplLintSource,
   type WasmDiagnosticItem,
 } from "./diagnostics";
+import { mplSystemParams } from "./system-params";
 
 describe("mapDiagnostics", () => {
   it("returns an empty array when given no items", () => {
@@ -131,5 +135,70 @@ describe("mapDiagnostics", () => {
     expect(d.actions).toHaveLength(2);
     expect(d.actions![0].name).toBe("Replace with `rate`");
     expect(d.actions![1].name).toBe("Replace with `irate`");
+  });
+});
+
+describe("mplLintSource system_params forwarding", () => {
+  // Builds a minimal `EditorView` shaped object backed by a real
+  // `EditorState`. `mplLintSource` only touches `view.state`, so this is
+  // sufficient to exercise the facet read + wasm-call wiring without
+  // attaching to the DOM.
+  function fakeView(
+    doc: string,
+    extensions: readonly unknown[] = [],
+  ): EditorView {
+    const state = EditorState.create({
+      doc,
+      extensions: extensions as never,
+    });
+    return { state } as unknown as EditorView;
+  }
+
+  it("passes the empty facet value to mpl.diagnostics by default", () => {
+    // No facet provider registered — the wasm bridge must still receive
+    // `[]` (not `undefined`), so the wire shape is stable.
+    const spy = vi.spyOn(mpl, "diagnostics").mockReturnValue([] as never);
+    try {
+      mplLintSource(fakeView("ds:m"));
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith("ds:m", []);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("forwards the registered system params from the facet", () => {
+    // Contract: whatever lives in the `mplSystemParams` facet is the
+    // exact value passed to `mpl.diagnostics`. This is what makes a host
+    // registration reach the language server.
+    const spy = vi.spyOn(mpl, "diagnostics").mockReturnValue([] as never);
+    try {
+      const sys = [{ name: "__interval", type: "Duration" as const }];
+      const view = fakeView(
+        "ds:m | align to $__interval using avg",
+        [mplSystemParams.of(sys)],
+      );
+      mplLintSource(view);
+      expect(spy).toHaveBeenCalledWith(
+        "ds:m | align to $__interval using avg",
+        sys,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("returns an empty array when the wasm bridge throws", () => {
+    // Existing guarantee — worth preserving alongside the new arg: a
+    // not-yet-loaded WASM module must not surface as a CodeMirror crash.
+    const spy = vi.spyOn(mpl, "diagnostics").mockImplementation(() => {
+      throw new Error("wasm not ready");
+    });
+    try {
+      const out = mplLintSource(fakeView("ds:m"));
+      expect(out).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

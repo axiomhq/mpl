@@ -1,6 +1,7 @@
 import { linter, type Diagnostic, type Action } from "@codemirror/lint";
 import { type EditorView } from "@codemirror/view";
 import * as mpl from "@axiomhq/mpl";
+import { mplSystemParams } from "./system-params";
 
 export type WasmDiagnosticSeverity = "error" | "warning" | "info" | "hint";
 
@@ -49,12 +50,21 @@ export function mapDiagnostics(items: WasmDiagnosticItem[]): Diagnostic[] {
   }));
 }
 
-function mplLintSource(view: EditorView): Diagnostic[] {
+/**
+ * Lint source backing `mplLinter`. Exported for testability — production
+ * consumers should use `mplLinter`, which is the `linter()`-wrapped
+ * extension that CodeMirror schedules.
+ */
+export function mplLintSource(view: EditorView): Diagnostic[] {
   const doc = view.state.doc.toString();
+  // Host-supplied system params (e.g. `$__interval`) live in this facet.
+  // Defaults to `[]` when no provider is present, matching pre-feature
+  // behaviour. The wasm bridge accepts null/undefined/missing as "none".
+  const systemParams = view.state.facet(mplSystemParams);
 
   let items: WasmDiagnosticItem[];
   try {
-    items = (mpl.diagnostics(doc) as WasmDiagnosticItem[] | null) ?? [];
+    items = (mpl.diagnostics(doc, systemParams) as WasmDiagnosticItem[] | null) ?? [];
   } catch {
     return [];
   }

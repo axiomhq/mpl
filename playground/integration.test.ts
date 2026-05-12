@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { StepOutput, Series } from "@axiomhq/mpl-playground";
 import { Interpreter } from "@axiomhq/mpl-playground";
 import { datasets } from "./datasets";
+import { substituteSystemParams } from "./editor";
 
 const interp = new Interpreter(datasets);
 
@@ -314,6 +315,32 @@ describe("parse + interpret end-to-end", () => {
       const source = ok(result[0]);
       const afterIfdef = ok(result[1]);
       expect(afterIfdef.length).toBe(source.length);
+    });
+  });
+
+  describe("system params", () => {
+    // The whole point of the playground's `substituteSystemParams` helper
+    // is that the interpreter — which has no binding step — receives a
+    // query with `$__interval` already resolved. These tests exercise the
+    // same pipeline `main.ts` runs on every editor change, so a regression
+    // that breaks the live preview shows up here first.
+    it("resolves $__interval before the interpreter sees it", () => {
+      const doc = "test:http_requests_total | align to $__interval using avg";
+      const resolved = substituteSystemParams(doc);
+      const result = run(resolved);
+      expect(result.length).toBe(2);
+      const aligned = ok(result[1]);
+      expect(aligned.length).toBeGreaterThan(0);
+    });
+
+    it("runs without errors through a bucket step using $__interval", () => {
+      const doc =
+        "test:http_requests_total | bucket to $__interval using histogram(0.5, 0.95)";
+      const result = run(substituteSystemParams(doc));
+      // Source + bucket = 2 steps; both must produce series, neither errors.
+      expect(result.length).toBe(2);
+      ok(result[0]);
+      ok(result[1]);
     });
   });
 });

@@ -9,6 +9,7 @@
       "@axiomhq/mpl-codemirror": ["../packages/mpl-codemirror/src/index.ts"],
       "@axiomhq/mpl-codemirror/*": ["../packages/mpl-codemirror/*"],
       "@axiomhq/mpl-lang": ["../packages/mpl-lang/mpl_lang.d.ts"],
+      "@axiomhq/mpl": ["../packages/mpl/mpl_lang.d.ts"],
       "@axiomhq/mpl-playground": ["./wasm/mpl_playground.d.ts"]
     },
     "isolatedModules": true,

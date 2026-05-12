@@ -463,3 +463,98 @@ fn backtick_dataset_with_colon_not_rewritten() {
         "should not rewrite when colon is present"
     );
 }
+
+// ── system_params plumbing ───────────────────────────────────────
+
+/// Runs `compile` with caller-provided system params and converts the
+/// resulting error (or empty success) to `DiagnosticItem`s, mirroring what
+/// the wasm `diagnostics` entry point does after decoding the JS payload.
+fn diagnostic_items_with_params(
+    q: &str,
+    params: HashMap<String, crate::query::ParamType>,
+) -> Vec<DiagnosticItem> {
+    match compile(q, params) {
+        Ok(_) => vec![],
+        Err(CompileError::Parse(error)) => error.diagnostic_items(),
+        Err(CompileError::Type(error)) => error.diagnostic_items(),
+        Err(CompileError::Group(error)) => error.diagnostic_items(),
+        Err(CompileError::Ifdef(error)) => error.diagnostic_items(),
+    }
+}
+
+#[test]
+fn system_param_clears_undefined_param_error() {
+    // Without system params, `$__interval` is undeclared and the parser
+    // raises `UndefinedParam`. With it registered, the query compiles
+    // cleanly — that's the whole point of the wiring.
+    use crate::query::{ParamType, TerminalParamType};
+
+    let query = "ds:metric | align to $__interval using avg";
+
+    let without = diagnostic_items(query);
+    assert!(
+        !without.is_empty(),
+        "without system params the reference should error"
+    );
+
+    let mut params = HashMap::new();
+    params.insert(
+        "__interval".to_string(),
+        ParamType::Terminal(TerminalParamType::Duration),
+    );
+    let with = diagnostic_items_with_params(query, params);
+    assert!(
+        with.is_empty(),
+        "with system params declared the query must compile, got {} items",
+        with.len()
+    );
+}
+
+#[test]
+fn system_param_type_mismatch_still_errors() {
+    // Registering a system param with the wrong type does NOT silence type
+    // errors — `align to <duration>` rejects a string param, even when the
+    // host claims `$__interval` is a string.
+    use crate::query::{ParamType, TagType, TerminalParamType};
+
+    let query = "ds:metric | align to $__interval using avg";
+    let mut params = HashMap::new();
+    params.insert(
+        "__interval".to_string(),
+        ParamType::Terminal(TerminalParamType::Tag(TagType::String)),
+    );
+
+    let items = diagnostic_items_with_params(query, params);
+    assert!(
+        !items.is_empty(),
+        "type mismatch on a system param must still produce a diagnostic"
+    );
+    assert!(
+        items.iter().any(|i| matches!(i.severity, Severity::Error)),
+        "expected an error diagnostic, got messages: {:?}",
+        items.iter().map(|i| &i.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn system_param_missing_prefix_is_reported() {
+    // System param names must start with `__` (SYSTEM_PARAM_PREFIX). The
+    // parser surfaces this as a parse error; the editor relies on it to
+    // tell hosts they've mis-registered a name.
+    use crate::query::{ParamType, TerminalParamType};
+
+    let query = "ds:metric";
+    let mut params = HashMap::new();
+    // No `__` prefix — invalid registration.
+    params.insert(
+        "interval".to_string(),
+        ParamType::Terminal(TerminalParamType::Duration),
+    );
+
+    let items = diagnostic_items_with_params(query, params);
+    assert!(
+        items.iter().any(|i| i.message.contains("interval")),
+        "missing-prefix error should mention the offending name, got messages: {:?}",
+        items.iter().map(|i| &i.message).collect::<Vec<_>>()
+    );
+}

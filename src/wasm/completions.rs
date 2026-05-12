@@ -167,10 +167,17 @@ impl CompletionResult {
 }
 
 /// Returns completion suggestions for the given cursor position.
+///
+/// `system_params` (optional) is the same `{ name, type, optional? }` array
+/// accepted by `diagnostics()`. Hosts pass it so suggestions for `$name`
+/// references include externally-supplied params alongside the ones declared
+/// inline. Pass `null`/`undefined` or omit to suggest only inline params.
 #[must_use]
 #[wasm_bindgen]
-pub fn completions(query: &str, cursor_pos: usize) -> JsValue {
-    let result = compute_completions(query, cursor_pos);
+pub fn completions(query: &str, cursor_pos: usize, system_params: JsValue) -> JsValue {
+    let specs = super::system_params::decode(system_params);
+    let extra = super::system_params::to_completion_items(&specs);
+    let result = compute_completions_with_params(query, cursor_pos, &extra);
     super::to_js_value(&result)
 }
 
@@ -525,11 +532,32 @@ fn count_pipes(text: &str) -> usize {
     count
 }
 
+/// Convenience wrapper for the test suite, where no host-supplied system
+/// params are in scope. Production code calls
+/// `compute_completions_with_params` directly from the wasm bridge.
+#[cfg(test)]
 pub(super) fn compute_completions(query: &str, cursor_pos: usize) -> Option<CompletionResult> {
+    compute_completions_with_params(query, cursor_pos, &[])
+}
+
+pub(super) fn compute_completions_with_params(
+    query: &str,
+    cursor_pos: usize,
+    extra_params: &[ParamItem],
+) -> Option<CompletionResult> {
     let cursor = cursor_pos.min(query.len());
     let (word_start, partial) = extract_partial_word(query, cursor);
     let before = &query[..word_start];
-    let params = extract_declared_params(query);
+    // Splice host-supplied system params in alongside inline `param` decls.
+    // Inline declarations win on name collisions: if a user wrote
+    // `param $__interval: int;` inline, that takes precedence over a
+    // host-registered `$__interval: Duration` for the duration of completion.
+    let mut params = extract_declared_params(query);
+    for extra in extra_params {
+        if !params.iter().any(|p| p.label == extra.label) {
+            params.push(extra.clone());
+        }
+    }
 
     let span = Span::new(word_start, cursor);
     let mut result = match locate_query_context(before) {

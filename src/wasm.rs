@@ -5,6 +5,7 @@ use wasm_bindgen::prelude::*;
 mod completions;
 mod diagnostics;
 mod lints;
+mod system_params;
 mod tokenize;
 mod visit;
 

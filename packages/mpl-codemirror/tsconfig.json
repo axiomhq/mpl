@@ -9,7 +9,11 @@
     "moduleDetection": "force",
     "declaration": true,
     "outDir": "dist",
-    "strict": true
+    "strict": true,
+    "baseUrl": ".",
+    "paths": {
+      "@axiomhq/mpl": ["../mpl/mpl_lang.d.ts"]
+    }
   },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"]

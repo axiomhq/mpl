@@ -1703,3 +1703,86 @@ fn test_completion_params_exclude(input: &str, excluded: &[&str]) {
         );
     }
 }
+
+// ── system_params plumbing ───────────────────────────────────────
+
+use super::compute_completions_with_params;
+
+/// Variant of `completions_at` that splices in host-supplied system params,
+/// mirroring what the wasm bridge does after decoding the JS payload.
+fn completions_at_with_params(input: &str, extra: &[ParamItem]) -> Option<CompletionResult> {
+    let cursor = input
+        .find('#')
+        .expect("input must contain a # cursor marker");
+    let query = format!("{}{}", &input[..cursor], &input[cursor + 1..]);
+    compute_completions_with_params(&query, cursor, extra)
+}
+
+fn duration_param(name: &str) -> ParamItem {
+    ParamItem {
+        label: name.to_string(),
+        typ: ParamType::Duration,
+        optional: false,
+    }
+}
+
+#[test]
+fn system_param_is_offered_in_value_position() {
+    // Without the extra, no `$__interval` exists in scope and the param
+    // completion source returns no params. With it, the duration param
+    // shows up in the align value position.
+    let input = "ds:metric | align to #";
+
+    let without = completions_at(input);
+    let baseline_labels: Vec<String> = without
+        .as_ref()
+        .map(|r| r.option_labels().into_iter().map(str::to_string).collect())
+        .unwrap_or_default();
+    assert!(
+        !baseline_labels.iter().any(|l| l == "$__interval"),
+        "$__interval must not appear without a system param registration"
+    );
+
+    let r = completions_at_with_params(input, &[duration_param("$__interval")])
+        .expect("with system_params should produce completions");
+    let labels = r.option_labels();
+    assert!(
+        labels.contains(&"$__interval"),
+        "system param should appear in align value position, got: {labels:?}"
+    );
+}
+
+#[test]
+fn system_param_is_filtered_by_partial() {
+    // Filtering is applied uniformly to inline and system params: typing
+    // `$__i` retains `$__interval` but drops a non-matching `$__resolution`.
+    let input = "ds:metric | align to $__i#";
+    let r = completions_at_with_params(
+        input,
+        &[
+            duration_param("$__interval"),
+            duration_param("$__resolution"),
+        ],
+    )
+    .expect("with system_params should produce completions");
+    let labels = r.option_labels();
+    assert!(labels.contains(&"$__interval"));
+    assert!(!labels.contains(&"$__resolution"));
+}
+
+#[test]
+fn inline_decl_shadows_system_param_with_same_name() {
+    // If the user writes `param $__interval: int;` inline, completion must
+    // not duplicate the entry from the system_params list. The inline decl
+    // wins (string-typed wouldn't suggest in align-to position; here we
+    // simply assert no duplicate `$__interval` is emitted).
+    let input = "param $__interval: Duration;\nds:metric | align to $#";
+    let r = completions_at_with_params(input, &[duration_param("$__interval")])
+        .expect("should produce completions");
+    let labels = r.option_labels();
+    let count = labels.iter().filter(|l| **l == "$__interval").count();
+    assert_eq!(
+        count, 1,
+        "inline decl + system param with same name must yield exactly one entry, got: {labels:?}"
+    );
+}
