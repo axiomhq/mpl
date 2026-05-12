@@ -210,6 +210,71 @@ export interface ChartEntry {
   error?: string;
 }
 
+/**
+ * True when every series in the entry collapses to a single timestamp.
+ *
+ * That's the shape `align using avg` (no time clause) produces — one
+ * whole-window aggregate per series. uPlot can render it, but a single
+ * dot in a 120px-tall chart is wasted space; a row of value tiles
+ * communicates the result an order of magnitude faster.
+ */
+export function isScalarEntry(entry: ChartEntry): boolean {
+  if (entry.series.length === 0) return false;
+  return entry.series.every(s => s.timestamps.length === 1);
+}
+
+/**
+ * Formats a scalar value for tile display. Integers render bare; small
+ * non-integers get two decimals; very large or very small numbers fall
+ * back to scientific notation so the tile width stays bounded.
+ */
+export function formatScalar(val: number): string {
+  if (!Number.isFinite(val)) return String(val);
+  const abs = Math.abs(val);
+  // Scientific notation first so even 1.5e12 (technically an integer)
+  // stays narrow enough not to blow the tile width.
+  if (abs !== 0 && (abs < 1e-3 || abs >= 1e9)) return val.toExponential(2);
+  if (Number.isInteger(val)) return val.toString();
+  return val.toFixed(2);
+}
+
+function renderScalarTiles(parent: HTMLElement, series: Series[]): void {
+  const dark = isDarkTheme();
+  const palette = dark ? COLORS_DARK : COLORS_LIGHT;
+
+  const row = document.createElement("div");
+  row.className = "scalar-tiles";
+
+  series.forEach((s, i) => {
+    const tile = document.createElement("div");
+    tile.className = "scalar-tile";
+
+    // Coloured accent at the top of each tile so series identity is
+    // visible even when the legend below is truncated.
+    const chip = document.createElement("div");
+    chip.className = "scalar-tile-chip";
+    chip.style.background = palette[i % palette.length];
+    tile.appendChild(chip);
+
+    const value = document.createElement("div");
+    value.className = "scalar-tile-value";
+    const raw = s.values[0];
+    value.textContent = raw == null || Number.isNaN(raw) ? "–" : formatScalar(raw);
+    tile.appendChild(value);
+
+    const label = document.createElement("div");
+    label.className = "scalar-tile-label";
+    const displayName = s.name ?? "";
+    label.textContent = displayName;
+    label.title = displayName; // full name on hover when truncated
+    tile.appendChild(label);
+
+    row.appendChild(tile);
+  });
+
+  parent.appendChild(row);
+}
+
 let activeCharts: uPlot[] = [];
 let resizeObserver: ResizeObserver | null = null;
 
@@ -255,6 +320,14 @@ export function renderCharts(container: HTMLElement, entries: ChartEntry[]): voi
       el.className = "chart-empty";
       el.textContent = "No data points";
       container.appendChild(el);
+      continue;
+    }
+
+    // Whole-window aggregates (e.g. `align using avg` with no time)
+    // collapse to one point per series — render value tiles instead of a
+    // single-dot uPlot chart, which is unreadable at typical heights.
+    if (isScalarEntry(entry)) {
+      renderScalarTiles(container, entry.series);
       continue;
     }
 
