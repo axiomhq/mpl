@@ -363,10 +363,16 @@ h1 {
 
 /* Scalar tiles — used when every series in a step collapses to a single
  * datapoint (e.g. `align using avg` with no time clause). One rounded
- * box per series, value on top, name below, coloured chip for identity. */
+ * box per series, value on top, name below, coloured chip for identity.
+ *
+ * Grid with `auto-fit, minmax(...)` distributes tiles evenly across the
+ * available width: every tile in a row is the same size, and rows wrap
+ * only when the next tile would dip below the minimum. Beats `flex` +
+ * `flex-wrap` here, which left-aligns and leaves an ugly empty gutter
+ * on the right of the last row. */
 .scalar-tiles {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 8px;
   padding: 4px 0;
 }
@@ -376,8 +382,7 @@ h1 {
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
-  min-width: 96px;
-  max-width: 200px;
+  min-width: 0; /* allow grid cell to shrink the tile, ellipsis works */
   padding: 8px 12px;
   border: 1px solid var(--border-color);
   border-radius: 8px;
