@@ -342,5 +342,31 @@ describe("parse + interpret end-to-end", () => {
       ok(result[0]);
       ok(result[1]);
     });
+
+    // Pins the user-reported failure: prom::rate at 1m on data sampled at
+    // 1m cadence, then grouped, used to bail with "No valid points at
+    // column N for Sum". The fix has two parts that this test exercises
+    // together — trailing-window rate + group tolerance for all-NaN
+    // columns — so a regression in either would fail this case.
+    it("runs prom::rate + group by end-to-end at $__interval cadence", () => {
+      const doc = `\`dev.metrics\`:http_requests_total
+| filter path == #/.*(elastic\\/_bulk|ingest|(?:v1\\/(traces|logs|metrics))).*/
+| filter code == #/[123]../
+| align to $__interval using prom::rate
+| group by method, path, code using sum`;
+      const result = run(substituteSystemParams(doc));
+      for (const step of result) {
+        if ("Err" in step.result) {
+          throw new Error(`step "${step.text}" failed: ${step.result.Err}`);
+        }
+      }
+      // The final grouped series must carry at least one finite value;
+      // an all-NaN result would mean the chart panel renders blank.
+      const last = result[result.length - 1];
+      const series = ok(last);
+      expect(series.length).toBeGreaterThan(0);
+      const finite = series[0].values.filter(v => Number.isFinite(v)).length;
+      expect(finite).toBeGreaterThan(0);
+    });
   });
 });

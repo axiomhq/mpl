@@ -474,10 +474,17 @@ fn aggregate_columns(values: &[&[f64]], func: TagsType) -> Result<Vec<f64>> {
                 if x.is_nan() { None } else { Some(x) }
             })
             .collect();
-        ensure!(
-            !pts.is_empty(),
-            "No valid points at column {i} for {func:?}"
-        );
+        // Empty columns are common after `align using rate` produces NaN at
+        // the leading edge of every series — emit NaN (or 0 for count) so
+        // the chart renders a gap instead of the whole step erroring out.
+        if pts.is_empty() {
+            result.push(if matches!(func, TagsType::Count) {
+                0.0
+            } else {
+                f64::NAN
+            });
+            continue;
+        }
         result.push(reduce_tags_pts(&pts, func));
     }
     Ok(result)
@@ -686,6 +693,49 @@ fn window_pts(s: &Series, t: f64, window_sec: f64) -> Vec<f64> {
         .collect()
 }
 
+/// Computes a Prometheus-style rate at time `t` over a trailing window.
+///
+/// Uses a lookback of `2 * window_sec` so adjacent samples are reliably
+/// caught even when the source cadence equals `window_sec` and samples
+/// don't align to the iteration grid (the leading-window approach used
+/// for sum/avg/min/max degenerates to all-NaN in that case). The
+/// resulting increase is divided by the *actual* span between the
+/// outermost samples, not by the lookback, so doubling the window
+/// doesn't double the rate.
+///
+/// Counter resets (negative deltas) are treated Prometheus-style: the
+/// new value is taken as the increase since the reset, not the literal
+/// negative delta.
+fn rate_at(s: &Series, t: f64, window_sec: f64) -> f64 {
+    let lookback_start = t - 2.0 * window_sec;
+    let pts: Vec<(f64, f64)> = s
+        .timestamps
+        .iter()
+        .zip(&s.values)
+        .filter_map(|(&ts, &val)| {
+            if ts > lookback_start && ts <= t && !val.is_nan() {
+                Some((ts, val))
+            } else {
+                None
+            }
+        })
+        .collect();
+    if pts.len() < 2 {
+        return f64::NAN;
+    }
+    let mut increase = 0.0;
+    for j in 1..pts.len() {
+        let delta = pts[j].1 - pts[j - 1].1;
+        increase += if delta < 0.0 { pts[j].1 } else { delta };
+    }
+    let span = pts.last().expect("len >= 2").0 - pts.first().expect("len >= 2").0;
+    if span <= 0.0 {
+        f64::NAN
+    } else {
+        increase / span
+    }
+}
+
 fn reduce_time_pts(pts: &[f64], func: TimeType) -> f64 {
     match func {
         TimeType::Sum => pts.iter().sum(),
@@ -786,23 +836,16 @@ fn apply_align(series: &[Series], align: &Align) -> Result<Vec<Series>> {
             let mut t = start;
             while t <= end {
                 new_ts.push(t);
-                let pts = window_pts(s, t, window_sec);
 
                 if func == TimeType::Rate {
-                    if pts.len() < 2 {
+                    new_vals.push(rate_at(s, t, window_sec));
+                } else {
+                    let pts = window_pts(s, t, window_sec);
+                    if pts.is_empty() {
                         new_vals.push(f64::NAN);
                     } else {
-                        let mut increase = 0.0;
-                        for j in 1..pts.len() {
-                            let delta = pts[j] - pts[j - 1];
-                            increase += if delta < 0.0 { pts[j] } else { delta };
-                        }
-                        new_vals.push(increase / window_sec);
+                        new_vals.push(reduce_time_pts(&pts, func));
                     }
-                } else if pts.is_empty() {
-                    new_vals.push(f64::NAN);
-                } else {
-                    new_vals.push(reduce_time_pts(&pts, func));
                 }
 
                 t += window_sec;

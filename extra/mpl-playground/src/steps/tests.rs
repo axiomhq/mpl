@@ -983,6 +983,10 @@ fn align_avg() {
 
 #[test]
 fn align_rate() {
+    // Counter samples with two clusters (0..20s and 60..80s). With the
+    // trailing-window rate semantics, col 0 has no prior data so it's
+    // NaN; col 1 (t=60s) covers a 60s span across the clusters and
+    // must produce a finite per-second rate.
     let datasets = ds(
         "ds",
         "m",
@@ -997,7 +1001,12 @@ fn align_rate() {
         step(align_agg(TimeType::Rate, 60)),
     ];
     let result = interpret(&steps, &datasets);
-    assert!(!result[1].as_ref().unwrap()[0].values[0].is_nan());
+    let values = &result[1].as_ref().unwrap()[0].values;
+    assert!(values[0].is_nan(), "col 0 must be NaN, got {}", values[0]);
+    assert!(
+        values.iter().skip(1).any(|v| !v.is_nan()),
+        "at least one later column must produce a rate"
+    );
 }
 
 #[test]
@@ -1377,4 +1386,98 @@ fn ifdef_step_canonical_text() {
         "unexpected prefix: {text}"
     );
     assert!(text.ends_with(" }"), "unexpected suffix: {text}");
+}
+
+// ── regression: prom::rate + group fails on real-cadence data ─────
+
+/// Reproduces the user-reported failure: counter sampled at the same
+/// cadence as the align window, then grouped. The fix to `align using
+/// rate` switches to a trailing window so adjacent samples produce a
+/// rate at every step after the first, instead of a leading window
+/// that catches at most one sample per 60s bucket.
+#[test]
+fn align_rate_at_window_cadence_produces_rates_after_first_column() {
+    // Samples every 60s, window 60s. The leading-window implementation
+    // produced NaN at every column because `[t, t+60)` only ever held
+    // one of the boundary samples.
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![s(
+            &[],
+            vec![0.0, 60.0, 120.0, 180.0],
+            vec![0.0, 60.0, 120.0, 180.0],
+        )],
+    );
+    let steps = vec![
+        step(source_node("ds", "m")),
+        step(align_agg(TimeType::Rate, 60)),
+    ];
+    let result = interpret(&steps, &datasets);
+    let aligned = result[1].as_ref().expect("align should succeed");
+    let values = &aligned[0].values;
+    // Column 0 is NaN — no prior sample to compute a rate against.
+    assert!(values[0].is_nan(), "col 0 must be NaN, got {}", values[0]);
+    // Columns 1+ must produce the actual rate: 60 / 60 = 1.0 per second.
+    for (i, &v) in values.iter().enumerate().skip(1) {
+        assert!((v - 1.0).abs() < 1e-9, "col {i} expected rate 1.0, got {v}");
+    }
+}
+
+/// Pins the second half of the fix: group aggregates with an all-NaN
+/// column must emit NaN there, not bail. Real query engines render
+/// missing data as gaps; the playground used to crash the whole step.
+#[test]
+fn group_sum_tolerates_all_nan_column() {
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(
+                &[("r", "us")],
+                vec![0.0, 60.0, 120.0],
+                vec![f64::NAN, 1.0, 2.0],
+            ),
+            s(
+                &[("r", "us")],
+                vec![0.0, 60.0, 120.0],
+                vec![f64::NAN, 3.0, 4.0],
+            ),
+        ],
+    );
+    let steps = vec![
+        step(source_node("ds", "m")),
+        step(group_agg(TagsType::Sum, vec!["r".into()])),
+    ];
+    let result = interpret(&steps, &datasets);
+    let grouped = result[1]
+        .as_ref()
+        .expect("group must succeed despite NaN col");
+    assert_eq!(grouped.len(), 1);
+    let values = &grouped[0].values;
+    assert!(values[0].is_nan(), "all-NaN column must emit NaN");
+    assert_eq!(values[1], 4.0);
+    assert_eq!(values[2], 6.0);
+}
+
+/// `count` differs from sum/avg/min/max on an all-NaN column: counting
+/// the non-NaN samples is exactly 0, not NaN. Keeps the semantics
+/// useful for "how many series reported a value here" plots.
+#[test]
+fn group_count_all_nan_column_yields_zero() {
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(&[("r", "us")], vec![0.0, 60.0], vec![f64::NAN, 1.0]),
+            s(&[("r", "us")], vec![0.0, 60.0], vec![f64::NAN, 2.0]),
+        ],
+    );
+    let steps = vec![
+        step(source_node("ds", "m")),
+        step(group_agg(TagsType::Count, vec!["r".into()])),
+    ];
+    let result = interpret(&steps, &datasets);
+    let grouped = result[1].as_ref().expect("group must succeed");
+    assert_eq!(grouped[0].values, vec![0.0, 2.0]);
 }
