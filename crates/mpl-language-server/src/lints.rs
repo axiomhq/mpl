@@ -2,10 +2,10 @@
 
 use pest::Parser as _;
 
-use crate::parser::{MPLParser, Rule};
+use mpl_lang::{MPLParser, Rule};
 
-use super::diagnostics::{DiagnosticAction, DiagnosticItem, Severity};
-use super::visit::{Node, PairVisitor, VisitAction};
+use crate::diagnostics::{DiagnosticAction, DiagnosticItem, Severity};
+use crate::visit::{Node, PairVisitor, VisitAction};
 
 /// A lint rule: when the walker encounters `rule`, `check` is called with
 /// the node and source text. Return `Some` to emit a diagnostic.
@@ -26,7 +26,7 @@ const LINT_RULES: &[LintRule] = &[
 ];
 // Note: lowercase `duration` is now reported by the parser itself as a
 // `WarningReason::OldDuration` and surfaced via `Warning::to_diagnostic_item`.
-// See `wasm/diagnostics.rs`.
+// See `diagnostics.rs`.
 
 #[allow(clippy::unnecessary_wraps)] // signature dictated by LintRule::check
 fn lint_filter_keyword(node: Node, _source: &str) -> Option<DiagnosticItem> {
@@ -96,7 +96,7 @@ impl PairVisitor for LintVisitor<'_> {
 
 /// Runs lint rules against a successfully-parsed query and returns
 /// any hint diagnostics.
-pub(super) fn detect_hints(query: &str) -> Vec<DiagnosticItem> {
+pub(crate) fn detect_hints(query: &str) -> Vec<DiagnosticItem> {
     let Ok(pairs) = MPLParser::parse(Rule::file, query) else {
         return vec![];
     };

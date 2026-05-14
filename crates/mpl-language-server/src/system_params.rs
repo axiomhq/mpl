@@ -13,22 +13,21 @@
 use std::collections::HashMap;
 
 use serde::Deserialize;
-use wasm_bindgen::JsValue;
 
-use crate::query::{ParamType, TagType, TerminalParamType};
+use mpl_lang::query::{ParamType, TagType, TerminalParamType};
 
-use super::completions::{ParamItem, ParamType as CompletionParamType};
+use crate::completions::{ParamItem, ParamType as CompletionParamType};
 
 /// Wire-format entry for a single system-supplied parameter. The `type` field
 /// uses source-level spellings so registrations read like the language they
 /// shadow.
 #[derive(Debug, Deserialize)]
-pub(super) struct SystemParamSpec {
-    pub(super) name: String,
+pub struct SystemParamSpec {
+    pub name: String,
     #[serde(rename = "type")]
-    pub(super) type_name: String,
+    pub type_name: String,
     #[serde(default)]
-    pub(super) optional: bool,
+    pub optional: bool,
 }
 
 impl SystemParamSpec {
@@ -95,21 +94,10 @@ fn ensure_dollar_prefix(name: &str) -> String {
     }
 }
 
-/// Decodes a `JsValue` (expected: array of `SystemParamSpec`, or `null`/
-/// `undefined`/missing) into a `Vec`. Bad shapes degrade to empty rather than
-/// throwing — diagnostics must never disappear because the host shipped a
-/// malformed registration.
-pub(super) fn decode(value: JsValue) -> Vec<SystemParamSpec> {
-    if value.is_null() || value.is_undefined() {
-        return Vec::new();
-    }
-    serde_wasm_bindgen::from_value::<Vec<SystemParamSpec>>(value).unwrap_or_default()
-}
-
 /// Builds the `HashMap` passed to `compile()`. Entries with unknown types are
 /// dropped. Name-prefix validation (`__`) is left to the parser, which surfaces
 /// `SystemParamMissingPrefix` as a diagnostic the host can act on.
-pub(super) fn to_compile_params(specs: &[SystemParamSpec]) -> HashMap<String, ParamType> {
+pub fn to_compile_params(specs: &[SystemParamSpec]) -> HashMap<String, ParamType> {
     specs
         .iter()
         .filter_map(|s| s.to_query_param_type().map(|t| (s.name.clone(), t)))
@@ -118,7 +106,7 @@ pub(super) fn to_compile_params(specs: &[SystemParamSpec]) -> HashMap<String, Pa
 
 /// Builds the `ParamItem` list spliced into `compute_completions`'s declared-
 /// param set. Same drop-unknown semantics as `to_compile_params`.
-pub(super) fn to_completion_items(specs: &[SystemParamSpec]) -> Vec<ParamItem> {
+pub fn to_completion_items(specs: &[SystemParamSpec]) -> Vec<ParamItem> {
     specs
         .iter()
         .filter_map(SystemParamSpec::to_completion_item)

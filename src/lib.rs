@@ -10,6 +10,7 @@
 #![allow(unused_assignments)] // We need this for the type error
 
 mod parser;
+pub use parser::{MPLParser, Rule};
 
 pub mod enc_regex;
 pub mod errors;
@@ -24,9 +25,6 @@ pub mod visitor;
 #[cfg(test)]
 mod tests;
 
-#[cfg(feature = "wasm")]
-pub mod wasm;
-
 use std::{
     collections::{HashMap, HashSet},
     hash::BuildHasher,
@@ -34,7 +32,6 @@ use std::{
 
 pub use errors::ParseError;
 use miette::{Diagnostic, SourceOffset, SourceSpan};
-use parser::{MPLParser, Rule};
 use pest::Parser as _;
 pub use query::Query;
 

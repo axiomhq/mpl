@@ -1,28 +1,25 @@
 //! Autocompletion and function info for `MPL` queries.
-use std::{collections::HashMap, sync::LazyLock};
+use std::sync::LazyLock;
 
 use pest::Parser as _;
 use serde::Serialize;
-use wasm_bindgen::prelude::*;
 
-use crate::{
-    linker::{ArgType, FunctionId, FunctionTrait, Module},
-    parser::{MPLParser, Rule},
-    stdlib::STDLIB,
-};
+use mpl_lang::STDLIB;
+use mpl_lang::linker::{ArgType, FunctionTrait, Module};
+use mpl_lang::{MPLParser, Rule};
 
-use super::Span;
+use crate::Span;
 
 #[derive(Clone, Serialize)]
-pub(super) struct CompletionArg {
-    pub(super) name: &'static str,
+pub struct CompletionArg {
+    pub name: &'static str,
     #[serde(rename = "type")]
-    pub(super) typ: ArgType,
+    pub typ: ArgType,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum ParamType {
+pub enum ParamType {
     Dataset,
     Metric,
     Duration,
@@ -34,31 +31,31 @@ pub(super) enum ParamType {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub(super) struct ParamItem {
-    pub(super) label: std::string::String,
+pub struct ParamItem {
+    pub label: std::string::String,
     #[serde(rename = "type")]
-    pub(super) typ: ParamType,
-    pub(super) optional: bool,
+    pub typ: ParamType,
+    pub optional: bool,
 }
 
 #[derive(Clone, Serialize)]
-pub(super) struct KeywordItem {
-    pub(super) label: &'static str,
+pub struct KeywordItem {
+    pub label: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) apply: Option<&'static str>,
-    pub(super) info: &'static str,
+    pub apply: Option<&'static str>,
+    pub info: &'static str,
 }
 
 #[derive(Clone, Serialize)]
-pub(super) struct FunctionItem {
-    pub(super) label: String,
-    pub(super) args: Vec<CompletionArg>,
-    pub(super) info: String,
+pub struct FunctionItem {
+    pub label: String,
+    pub args: Vec<CompletionArg>,
+    pub info: String,
 }
 
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(super) enum CompletionResult {
+pub enum CompletionResult {
     Keywords {
         #[serde(flatten)]
         span: Span,
@@ -126,7 +123,7 @@ impl CompletionResult {
     }
 
     #[cfg(test)]
-    pub(super) fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> &'static str {
         match self {
             Self::Keywords { .. } => "keywords",
             Self::AlignFunctions { .. } => "align_functions",
@@ -142,7 +139,7 @@ impl CompletionResult {
     }
 
     #[cfg(test)]
-    pub(super) fn option_labels(&self) -> Vec<&str> {
+    pub fn option_labels(&self) -> Vec<&str> {
         match self {
             Self::Keywords { options, .. } => options.iter().map(|o| o.label).collect(),
             Self::AlignFunctions { options, .. }
@@ -158,7 +155,7 @@ impl CompletionResult {
     }
 
     #[cfg(test)]
-    pub(super) fn keyword_apply_texts(&self) -> Vec<Option<&str>> {
+    pub fn keyword_apply_texts(&self) -> Vec<Option<&str>> {
         match self {
             Self::Keywords { options, .. } => options.iter().map(|o| o.apply).collect(),
             _ => vec![],
@@ -166,38 +163,21 @@ impl CompletionResult {
     }
 }
 
-/// Returns completion suggestions for the given cursor position.
-///
-/// `system_params` (optional) is the same `{ name, type, optional? }` array
-/// accepted by `diagnostics()`. Hosts pass it so suggestions for `$name`
-/// references include externally-supplied params alongside the ones declared
-/// inline. Pass `null`/`undefined` or omit to suggest only inline params.
-#[must_use]
-#[wasm_bindgen]
-pub fn completions(query: &str, cursor_pos: usize, system_params: JsValue) -> JsValue {
-    let specs = super::system_params::decode(system_params);
-    let extra = super::system_params::to_completion_items(&specs);
-    let result = compute_completions_with_params(query, cursor_pos, &extra);
-    super::to_js_value(&result)
-}
-
 // ── function info / stdlib querying ─────────────────────────────
 
 /// Information about a single stdlib function, returned by `function_info`.
 #[derive(Serialize)]
-pub(super) struct FunctionInfo {
-    pub(super) label: String,
-    pub(super) args: Vec<CompletionArg>,
-    pub(super) info: Option<String>,
+pub struct FunctionInfo {
+    pub label: String,
+    pub args: Vec<CompletionArg>,
+    pub info: Option<String>,
 }
 
 /// Looks up a stdlib function by its qualified label (e.g. `"avg"` or
 /// `"prom::rate"`) and returns its argument signature and documentation.
 #[must_use]
-#[wasm_bindgen]
-pub fn function_info(label: &str) -> JsValue {
-    let result = STDLIB.lookup_function(label);
-    super::to_js_value(&result)
+pub fn function_info(label: &str) -> Option<FunctionInfo> {
+    lookup_function(&STDLIB, label)
 }
 
 fn collect_args<F: FunctionTrait>(f: &F) -> Vec<CompletionArg> {
@@ -210,173 +190,215 @@ fn collect_args<F: FunctionTrait>(f: &F) -> Vec<CompletionArg> {
         .collect()
 }
 
-fn collect_functions_from_module<F: FunctionTrait>(
-    fns: &HashMap<FunctionId, F>,
-    prefix: Option<&str>,
-) -> Vec<FunctionItem> {
-    fns.iter()
-        .map(|(id, f)| {
-            let label = match prefix {
-                Some(p) => format!("{p}::{}", id.0),
-                None => id.0.clone(),
-            };
-            FunctionItem {
-                label,
-                args: collect_args(f),
-                info: f.doc().to_string(),
-            }
-        })
-        .collect()
+/// Walk `module` and all nested submodules depth-first, invoking `f` with
+/// each module and its `::`-qualified prefix (`None` for the root).
+fn walk_modules(module: &Module, prefix: Option<&str>, f: &mut dyn FnMut(&Module, Option<&str>)) {
+    f(module, prefix);
+    for (sub_name, sub) in module.submodule_iter() {
+        let sub_prefix = match prefix {
+            Some(p) => format!("{p}::{sub_name}"),
+            None => sub_name.to_string(),
+        };
+        walk_modules(sub, Some(&sub_prefix), f);
+    }
 }
 
-impl Module {
-    /// Iterates this module and all nested submodules, calling `f` with each
-    /// module and its optional qualified prefix (e.g. `Some("prom")`).
-    fn for_each_module(&self, mut f: impl FnMut(&Module, Option<&str>)) {
-        Self::for_each_module_rec(self, None, &mut f);
+fn make_function_item<F: FunctionTrait>(name: &str, prefix: Option<&str>, f: &F) -> FunctionItem {
+    let label = match prefix {
+        Some(p) => format!("{p}::{name}"),
+        None => name.to_string(),
+    };
+    FunctionItem {
+        label,
+        args: collect_args(f),
+        info: f.doc().to_string(),
     }
+}
 
-    fn for_each_module_rec(
-        module: &Module,
-        prefix: Option<&str>,
-        f: &mut dyn FnMut(&Module, Option<&str>),
-    ) {
-        f(module, prefix);
-        for sub in module.submodules.values() {
-            let sub_prefix = match prefix {
-                Some(p) => format!("{p}::{}", sub.name.0),
-                None => sub.name.0.clone(),
-            };
-            Self::for_each_module_rec(sub, Some(&sub_prefix), f);
+fn push_qualified_name(name: &str, prefix: Option<&str>, out: &mut Vec<String>) {
+    out.push(match prefix {
+        Some(p) => format!("{p}::{name}"),
+        None => name.to_string(),
+    });
+}
+
+/// Each `collect_<category>_completions` walks the module tree and gathers
+/// `FunctionItem`s for one stdlib category. Five near-identical bodies kept
+/// inline because each category iterates a different concrete iterator type
+/// (`&AlignFunction`, `&MapFunction`, ...), which precludes a generic helper
+/// without boxing.
+fn collect_align_completions(module: &Module) -> Vec<FunctionItem> {
+    let mut out = Vec::new();
+    walk_modules(module, None, &mut |m, prefix| {
+        for (name, f) in m.align_function_iter() {
+            out.push(make_function_item(name, prefix, f));
+        }
+    });
+    out
+}
+fn collect_map_completions(module: &Module) -> Vec<FunctionItem> {
+    let mut out = Vec::new();
+    walk_modules(module, None, &mut |m, prefix| {
+        for (name, f) in m.mapping_function_iter() {
+            out.push(make_function_item(name, prefix, f));
+        }
+    });
+    out
+}
+fn collect_group_completions(module: &Module) -> Vec<FunctionItem> {
+    let mut out = Vec::new();
+    walk_modules(module, None, &mut |m, prefix| {
+        for (name, f) in m.group_function_iter() {
+            out.push(make_function_item(name, prefix, f));
+        }
+    });
+    out
+}
+fn collect_bucket_completions(module: &Module) -> Vec<FunctionItem> {
+    let mut out = Vec::new();
+    walk_modules(module, None, &mut |m, prefix| {
+        for (name, f) in m.bucket_function_iter() {
+            out.push(make_function_item(name, prefix, f));
+        }
+    });
+    out
+}
+fn collect_compute_completions(module: &Module) -> Vec<FunctionItem> {
+    let mut out = Vec::new();
+    walk_modules(module, None, &mut |m, prefix| {
+        for (name, f) in m.compute_function_iter() {
+            out.push(make_function_item(name, prefix, f));
+        }
+    });
+    out
+}
+
+fn collect_align_names(module: &Module) -> Vec<String> {
+    let mut out = Vec::new();
+    walk_modules(module, None, &mut |m, prefix| {
+        for (name, _) in m.align_function_iter() {
+            push_qualified_name(name, prefix, &mut out);
+        }
+    });
+    out
+}
+fn collect_map_names(module: &Module) -> Vec<String> {
+    let mut out = Vec::new();
+    walk_modules(module, None, &mut |m, prefix| {
+        for (name, _) in m.mapping_function_iter() {
+            push_qualified_name(name, prefix, &mut out);
+        }
+    });
+    out
+}
+fn collect_group_names(module: &Module) -> Vec<String> {
+    let mut out = Vec::new();
+    walk_modules(module, None, &mut |m, prefix| {
+        for (name, _) in m.group_function_iter() {
+            push_qualified_name(name, prefix, &mut out);
+        }
+    });
+    out
+}
+fn collect_bucket_names(module: &Module) -> Vec<String> {
+    let mut out = Vec::new();
+    walk_modules(module, None, &mut |m, prefix| {
+        for (name, _) in m.bucket_function_iter() {
+            push_qualified_name(name, prefix, &mut out);
+        }
+    });
+    out
+}
+fn collect_compute_names(module: &Module) -> Vec<String> {
+    let mut out = Vec::new();
+    walk_modules(module, None, &mut |m, prefix| {
+        for (name, _) in m.compute_function_iter() {
+            push_qualified_name(name, prefix, &mut out);
+        }
+    });
+    out
+}
+
+/// Look up a function within `module` by its bare id, checking all five
+/// stdlib categories in priority order.
+fn function_info_by_id(module: &Module, fn_id: &str) -> Option<FunctionInfo> {
+    fn make<F: FunctionTrait>(label: &str, f: &F) -> FunctionInfo {
+        FunctionInfo {
+            label: label.to_string(),
+            args: collect_args(f),
+            info: Some(f.doc().to_string()),
         }
     }
+    None.or_else(|| module.mapping_function(fn_id).map(|f| make(fn_id, f)))
+        .or_else(|| module.align_function(fn_id).map(|f| make(fn_id, f)))
+        .or_else(|| module.group_function(fn_id).map(|f| make(fn_id, f)))
+        .or_else(|| module.compute_function(fn_id).map(|f| make(fn_id, f)))
+        .or_else(|| module.bucket_function(fn_id).map(|f| make(fn_id, f)))
+}
 
-    /// Collects all function names (including qualified submodule names) from
-    /// a specific category across this module tree.
-    fn function_names<V>(
-        &self,
-        accessor: impl Fn(&Module) -> &HashMap<FunctionId, V>,
-    ) -> Vec<String> {
-        let mut names = Vec::new();
-        self.for_each_module(|module, prefix| {
-            for key in accessor(module).keys() {
-                match prefix {
-                    Some(p) => names.push(format!("{p}::{}", key.0)),
-                    None => names.push(key.0.clone()),
-                }
-            }
-        });
-        names
+/// Walk down the submodule tree following the `::`-separated path segments.
+fn resolve_module_path<'a>(module: &'a Module, path: &str) -> Option<&'a Module> {
+    let mut current = module;
+    for segment in path.split("::") {
+        current = current.submodule(segment)?;
     }
+    Some(current)
+}
 
-    /// Collects completion items for a specific function category across this
-    /// module tree.
-    fn completion_items<F: FunctionTrait>(
-        &self,
-        accessor: impl Fn(&Module) -> &HashMap<FunctionId, F>,
-    ) -> Vec<FunctionItem> {
-        let mut items = Vec::new();
-        self.for_each_module(|module, prefix| {
-            let fns = accessor(module);
-            if !fns.is_empty() {
-                items.extend(collect_functions_from_module(fns, prefix));
-            }
-        });
-        items
-    }
-
-    /// Searches all function categories in this module for the given function id.
-    fn function_info_by_id(&self, fn_id: &str) -> Option<FunctionInfo> {
-        fn try_map<F: FunctionTrait>(
-            fns: &HashMap<FunctionId, F>,
-            fn_id: &str,
-            label: &str,
-        ) -> Option<FunctionInfo> {
-            let f = fns.get(fn_id)?;
-            Some(FunctionInfo {
-                label: label.to_string(),
-                args: collect_args(f),
-                info: Some(f.doc().to_string()),
-            })
+/// Search nested submodules for an unqualified function name, returning the
+/// result with a fully qualified label.
+fn lookup_unqualified(module: &Module, fn_name: &str) -> Option<FunctionInfo> {
+    for (sub_name, sub) in module.submodule_iter() {
+        if let Some(mut info) = function_info_by_id(sub, fn_name) {
+            info.label = format!("{sub_name}::{fn_name}");
+            return Some(info);
         }
-
-        None.or_else(|| try_map(&self.mapping_functions, fn_id, fn_id))
-            .or_else(|| try_map(&self.align_functions, fn_id, fn_id))
-            .or_else(|| try_map(&self.group_functions, fn_id, fn_id))
-            .or_else(|| try_map(&self.compute_functions, fn_id, fn_id))
-            .or_else(|| try_map(&self.bucket_functions, fn_id, fn_id))
-    }
-
-    /// Walks down the submodule tree following the `::` separated path segments.
-    fn resolve_module_path(&self, path: &str) -> Option<&Module> {
-        let mut current = self;
-        for segment in path.split("::") {
-            current = current.submodules.get(segment)?;
+        if let Some(mut info) = lookup_unqualified(sub, fn_name) {
+            info.label = format!("{sub_name}::{}", info.label);
+            return Some(info);
         }
-        Some(current)
     }
+    None
+}
 
-    /// Searches all nested submodules for an unqualified function name,
-    /// returning the result with a fully qualified label.
-    fn lookup_unqualified(&self, fn_name: &str) -> Option<FunctionInfo> {
-        for sub in self.submodules.values() {
-            if let Some(mut info) = sub.function_info_by_id(fn_name) {
-                info.label = format!("{}::{fn_name}", sub.name.0);
-                return Some(info);
-            }
-            if let Some(mut info) = sub.lookup_unqualified(fn_name) {
-                info.label = format!("{}::{}", sub.name.0, info.label);
-                return Some(info);
-            }
-        }
-        None
-    }
-
-    /// Looks up a function by qualified label (e.g. `"avg"` or `"prom::rate"`),
-    /// searching this module tree.
-    pub(super) fn lookup_function(&self, label: &str) -> Option<FunctionInfo> {
-        if let Some((module_path, fn_name)) = label.rsplit_once("::") {
-            let module = self.resolve_module_path(module_path)?;
-            let mut info = module.function_info_by_id(fn_name)?;
-            info.label = label.to_string();
-            Some(info)
-        } else {
-            self.function_info_by_id(label)
-                .or_else(|| self.lookup_unqualified(label))
-        }
+/// Look up a stdlib function by qualified label (e.g. `"avg"` or `"prom::rate"`).
+pub fn lookup_function(module: &Module, label: &str) -> Option<FunctionInfo> {
+    if let Some((module_path, fn_name)) = label.rsplit_once("::") {
+        let module = resolve_module_path(module, module_path)?;
+        let mut info = function_info_by_id(module, fn_name)?;
+        info.label = label.to_string();
+        Some(info)
+    } else {
+        function_info_by_id(module, label).or_else(|| lookup_unqualified(module, label))
     }
 }
 
 // ── cached stdlib completion items ──────────────────────────────
 
 static ALIGN_COMPLETIONS: LazyLock<Vec<FunctionItem>> =
-    LazyLock::new(|| STDLIB.completion_items(|m| &m.align_functions));
+    LazyLock::new(|| collect_align_completions(&STDLIB));
 static MAP_COMPLETIONS: LazyLock<Vec<FunctionItem>> =
-    LazyLock::new(|| STDLIB.completion_items(|m| &m.mapping_functions));
+    LazyLock::new(|| collect_map_completions(&STDLIB));
 static GROUP_COMPLETIONS: LazyLock<Vec<FunctionItem>> =
-    LazyLock::new(|| STDLIB.completion_items(|m| &m.group_functions));
+    LazyLock::new(|| collect_group_completions(&STDLIB));
 static BUCKET_COMPLETIONS: LazyLock<Vec<FunctionItem>> =
-    LazyLock::new(|| STDLIB.completion_items(|m| &m.bucket_functions));
+    LazyLock::new(|| collect_bucket_completions(&STDLIB));
 static COMPUTE_COMPLETIONS: LazyLock<Vec<FunctionItem>> =
-    LazyLock::new(|| STDLIB.completion_items(|m| &m.compute_functions));
+    LazyLock::new(|| collect_compute_completions(&STDLIB));
 
 // Cached function name candidate lists for diagnostic fuzzy-matching.
-pub(super) static MAP_FN_NAMES: LazyLock<Vec<String>> =
-    LazyLock::new(|| STDLIB.function_names(|m| &m.mapping_functions));
-pub(super) static ALIGN_FN_NAMES: LazyLock<Vec<String>> =
-    LazyLock::new(|| STDLIB.function_names(|m| &m.align_functions));
-pub(super) static BUCKET_FN_NAMES: LazyLock<Vec<String>> =
-    LazyLock::new(|| STDLIB.function_names(|m| &m.bucket_functions));
-pub(super) static GROUP_FN_NAMES: LazyLock<Vec<String>> =
-    LazyLock::new(|| STDLIB.function_names(|m| &m.group_functions));
-pub(super) static COMPUTE_FN_NAMES: LazyLock<Vec<String>> =
-    LazyLock::new(|| STDLIB.function_names(|m| &m.compute_functions));
+pub static MAP_FN_NAMES: LazyLock<Vec<String>> = LazyLock::new(|| collect_map_names(&STDLIB));
+pub static ALIGN_FN_NAMES: LazyLock<Vec<String>> = LazyLock::new(|| collect_align_names(&STDLIB));
+pub static BUCKET_FN_NAMES: LazyLock<Vec<String>> = LazyLock::new(|| collect_bucket_names(&STDLIB));
+pub static GROUP_FN_NAMES: LazyLock<Vec<String>> = LazyLock::new(|| collect_group_names(&STDLIB));
+pub static COMPUTE_FN_NAMES: LazyLock<Vec<String>> =
+    LazyLock::new(|| collect_compute_names(&STDLIB));
 
 // ── query context & completion engine ───────────────────────────
 
 /// Identifies which part of a query the cursor is in so completions can be
 /// scoped to the relevant subquery text.
-pub(super) enum QueryContext<'a> {
+pub enum QueryContext<'a> {
     /// Inside a simple query, or inside one of the subqueries within compute
     /// braces. The slice covers only the current subquery.
     Subquery(&'a str),
@@ -446,7 +468,7 @@ fn find_line_comment(line: &[u8]) -> Option<usize> {
 /// Uses a stack to track brace nesting, producing a scoped text slice that
 /// `suggest_for_context` and `extract_source_info` can operate on correctly
 /// without needing brace-awareness themselves.
-pub(super) fn locate_query_context(text: &str) -> QueryContext<'_> {
+pub fn locate_query_context(text: &str) -> QueryContext<'_> {
     let bytes = text.as_bytes();
     let len = bytes.len();
 
@@ -536,11 +558,11 @@ fn count_pipes(text: &str) -> usize {
 /// params are in scope. Production code calls
 /// `compute_completions_with_params` directly from the wasm bridge.
 #[cfg(test)]
-pub(super) fn compute_completions(query: &str, cursor_pos: usize) -> Option<CompletionResult> {
+pub fn compute_completions(query: &str, cursor_pos: usize) -> Option<CompletionResult> {
     compute_completions_with_params(query, cursor_pos, &[])
 }
 
-pub(super) fn compute_completions_with_params(
+pub fn compute_completions_with_params(
     query: &str,
     cursor_pos: usize,
     extra_params: &[ParamItem],
@@ -600,7 +622,7 @@ pub(super) fn compute_completions_with_params(
 
 // ── text scanning utilities ─────────────────────────────────────
 
-pub(super) fn extract_partial_word(text: &str, cursor: usize) -> (usize, &str) {
+pub fn extract_partial_word(text: &str, cursor: usize) -> (usize, &str) {
     let bytes = &text.as_bytes()[..cursor];
     let mut i = bytes.len();
 
@@ -668,7 +690,7 @@ pub(super) fn extract_partial_word(text: &str, cursor: usize) -> (usize, &str) {
 
 /// Checks whether the byte at `pos` is preceded by an odd number of
 /// backslashes (i.e., the character is escaped).
-pub(super) fn is_char_escaped(bytes: &[u8], pos: usize) -> bool {
+pub fn is_char_escaped(bytes: &[u8], pos: usize) -> bool {
     let mut count = 0u32;
     let mut j = pos;
     while j > 0 && bytes[j - 1] == b'\\' {
@@ -849,7 +871,7 @@ fn extract_ident_name(pair: pest::iterators::Pair<'_, Rule>) -> String {
 /// Extracts declared parameters from the query preamble. Scans for
 /// `param $name: type;` declarations that appear before the query body,
 /// tolerating directives (`set ... ;`) and comments.
-pub(super) fn extract_declared_params(text: &str) -> Vec<ParamItem> {
+pub fn extract_declared_params(text: &str) -> Vec<ParamItem> {
     let mut params = Vec::new();
     for line in text.lines() {
         let trimmed = line.trim();
@@ -958,7 +980,7 @@ fn suggest_params(
 /// The grammar's `compute_query` uses `pipe_rule*` (no filter) for the tail
 /// after `compute_rule`, while simple queries use the full set.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum FilterPolicy {
+pub enum FilterPolicy {
     Include,
     Exclude,
 }
@@ -1470,7 +1492,7 @@ fn suggest_bucket_args(words: &[&str], span: Span) -> Option<CompletionResult> {
         .next()
         .filter(|s| !s.is_empty())?;
 
-    let func = STDLIB.bucket_functions.get(fn_name)?;
+    let func = STDLIB.bucket_function(fn_name)?;
     let args = func.args();
     if args.is_empty() {
         return None;

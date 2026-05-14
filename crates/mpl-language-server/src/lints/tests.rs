@@ -1,5 +1,5 @@
 use super::detect_hints;
-use crate::wasm::diagnostics::Severity;
+use crate::diagnostics::Severity;
 
 // ── filter keyword hint ─────────────────────────────────────────
 

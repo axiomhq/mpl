@@ -1,21 +1,22 @@
 //! Diagnostics and code actions for `MPL` queries.
+use std::collections::HashMap;
+
 use miette::Diagnostic as _;
 use serde::Serialize;
 use strsim::jaro;
-use wasm_bindgen::prelude::*;
 
-use crate::errors::Suggestion;
-use crate::query::{Warning, WarningReason};
-use crate::{CompileError, GroupError, IfdefError, ParseError, TypeError, compile};
+use mpl_lang::errors::Suggestion;
+use mpl_lang::query::{ParamType, Warning, WarningReason};
+use mpl_lang::{CompileError, GroupError, IfdefError, ParseError, TypeError, compile};
 
-use super::Span;
-use super::completions::{
+use crate::Span;
+use crate::completions::{
     ALIGN_FN_NAMES, BUCKET_FN_NAMES, COMPUTE_FN_NAMES, GROUP_FN_NAMES, MAP_FN_NAMES,
 };
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub(super) enum Severity {
+pub enum Severity {
     Error,
     Warning,
     Info,
@@ -23,14 +24,14 @@ pub(super) enum Severity {
 }
 
 #[derive(Clone, Serialize)]
-pub(super) struct DiagnosticAction {
+pub struct DiagnosticAction {
     /// notification
-    pub(super) name: String,
+    pub name: String,
     /// location to replace/insert
     #[serde(flatten)]
-    pub(super) span: Span,
+    pub span: Span,
     /// the string to insert/replace the span with
-    pub(super) insert: String,
+    pub insert: String,
 }
 
 impl DiagnosticAction {
@@ -44,63 +45,70 @@ impl DiagnosticAction {
 }
 
 #[derive(Serialize)]
-pub(super) struct DiagnosticItem {
+pub struct DiagnosticItem {
     #[serde(flatten)]
-    pub(super) span: Span,
-    pub(super) severity: Severity,
-    pub(super) message: String,
-    pub(super) help: Option<String>,
-    pub(super) actions: Vec<DiagnosticAction>,
+    pub span: Span,
+    pub severity: Severity,
+    pub message: String,
+    pub help: Option<String>,
+    pub actions: Vec<DiagnosticAction>,
 }
 
-/// Returns diagnostics (errors/warnings) for the given query string.
+/// Returns diagnostics (errors, warnings, hints) for `query`.
 ///
-/// `system_params` (optional) is an array of `{ name, type, optional? }`
-/// objects describing parameters the host injects at runtime (e.g.
-/// `$__interval`). They are merged into the compiler's param table so
-/// references no longer trip the `UndefinedParam` parse error or the
-/// `ParamNotDeclared` warning. Pass `null`/`undefined` or omit to keep the
-/// historical behaviour of "no system params".
+/// `system_params` is the `HashMap` produced by
+/// [`crate::to_compile_params`] from a host-supplied registration list
+/// (`{ name, type, optional? }` entries). Pass an empty map to disable
+/// system params — references then trip the regular `UndefinedParam` /
+/// `ParamNotDeclared` warnings.
 #[must_use]
-#[wasm_bindgen]
-pub fn diagnostics(query: &str, system_params: JsValue) -> JsValue {
-    let specs = super::system_params::decode(system_params);
-    let params = super::system_params::to_compile_params(&specs);
-    let items = match compile(query, params) {
+pub fn compute_diagnostics(
+    query: &str,
+    system_params: &HashMap<String, ParamType>,
+) -> Vec<DiagnosticItem> {
+    match compile(query, system_params.clone()) {
         Ok((_, warnings)) => {
             let mut items: Vec<DiagnosticItem> = warnings
                 .as_slice()
                 .iter()
-                .map(Warning::to_diagnostic_item)
+                .map(warning_to_diagnostic_item)
                 .collect();
-            items.extend(super::lints::detect_hints(query));
+            items.extend(crate::lints::detect_hints(query));
             items
         }
         Err(CompileError::Parse(error)) => {
-            let items = error.diagnostic_items();
+            let items = parse_error_diagnostic_items(&error);
             maybe_rewrite_escaped_dataset_error(query, items)
         }
-        Err(CompileError::Type(error)) => error.diagnostic_items(),
-        Err(CompileError::Group(error)) => error.diagnostic_items(),
-        Err(CompileError::Ifdef(error)) => error.diagnostic_items(),
-    };
-    super::to_js_value(&items)
+        Err(CompileError::Type(error)) => type_error_diagnostic_items(&error),
+        Err(CompileError::Group(error)) => group_error_diagnostic_items(&error),
+        Err(CompileError::Ifdef(error)) => ifdef_error_diagnostic_items(&error),
+    }
 }
 
-impl Warning {
-    /// Convert a parser-emitted warning to a `DiagnosticItem`.
-    ///
-    /// Each `WarningReason` variant is responsible for crafting its own
-    /// user-facing message, help text, and (where applicable) quick-fix
-    /// action — the parser's `Display` impl is intentionally not reused, so
-    /// editor-surfaced copy can be tuned without touching the core types.
-    pub(super) fn to_diagnostic_item(&self) -> DiagnosticItem {
-        let span = self.source().map_or_else(
-            || Span::new(0, 0),
-            |s| Span::new(s.offset(), s.offset() + s.len()),
-        );
+/// Variant of [`compute_diagnostics`] that takes ownership of the param
+/// map; convenient for callers that build the map per request.
+#[must_use]
+pub fn compute_diagnostics_raw(
+    query: &str,
+    system_params: HashMap<String, ParamType>,
+) -> Vec<DiagnosticItem> {
+    compute_diagnostics(query, &system_params)
+}
 
-        match self.warning() {
+/// Convert a parser-emitted warning to a `DiagnosticItem`.
+///
+/// Each `WarningReason` variant is responsible for crafting its own
+/// user-facing message, help text, and (where applicable) quick-fix action
+/// — the parser's `Display` impl is intentionally not reused, so
+/// editor-surfaced copy can be tuned without touching the core types.
+pub fn warning_to_diagnostic_item(w: &Warning) -> DiagnosticItem {
+    let span = w.source().map_or_else(
+        || Span::new(0, 0),
+        |s| Span::new(s.offset(), s.offset() + s.len()),
+    );
+    {
+        match w.warning() {
             WarningReason::OldDuration => DiagnosticItem {
                 span,
                 severity: Severity::Warning,
@@ -118,7 +126,7 @@ impl Warning {
                 DiagnosticItem {
                     span,
                     severity: Severity::Warning,
-                    message: self.warning().to_string(),
+                    message: w.warning().to_string(),
                     help: None,
                     actions: vec![],
                 }
@@ -188,12 +196,11 @@ fn find_escaped_ident_end(s: &str, start: usize) -> Option<usize> {
     None
 }
 
-impl TypeError {
-    pub(super) fn diagnostic_items(&self) -> Vec<DiagnosticItem> {
-        let message = self.to_string();
-        let help = self.help().map(|h| h.to_string());
-
-        if let Some(labels) = self.labels() {
+pub fn type_error_diagnostic_items(e: &TypeError) -> Vec<DiagnosticItem> {
+    let message = e.to_string();
+    let help = e.help().map(|h| h.to_string());
+    {
+        if let Some(labels) = e.labels() {
             let items: Vec<_> = labels
                 .map(|label| {
                     let src = label.inner();
@@ -243,11 +250,11 @@ impl TypeError {
     }
 }
 
-impl IfdefError {
-    pub(super) fn diagnostic_items(&self) -> Vec<DiagnosticItem> {
-        let message = self.to_string();
-        let help = self.help().map(|h| h.to_string());
-        let span = match self {
+pub fn ifdef_error_diagnostic_items(e: &IfdefError) -> Vec<DiagnosticItem> {
+    let message = e.to_string();
+    let help = e.help().map(|h| h.to_string());
+    {
+        let span = match e {
             IfdefError::OptionalOutsideOfIfdef { span, .. }
             | IfdefError::OptionalNotUsed { span, .. } => {
                 Span::new(span.offset(), span.offset() + span.len())
@@ -263,11 +270,11 @@ impl IfdefError {
     }
 }
 
-impl GroupError {
-    pub(super) fn diagnostic_items(&self) -> Vec<DiagnosticItem> {
-        let message = self.to_string();
-        let help = self.help().map(|h| h.to_string());
-        let (prev_span, next_span) = match self {
+pub fn group_error_diagnostic_items(e: &GroupError) -> Vec<DiagnosticItem> {
+    let message = e.to_string();
+    let help = e.help().map(|h| h.to_string());
+    {
+        let (prev_span, next_span) = match e {
             GroupError::InvalidGroups {
                 prev_span,
                 next_span,
@@ -296,13 +303,12 @@ impl GroupError {
     }
 }
 
-impl ParseError {
-    pub(super) fn diagnostic_items(&self) -> Vec<DiagnosticItem> {
-        let message = self.to_string();
-        let help = self.help().map(|h| h.to_string());
-        let actions = self.diagnostic_actions();
-
-        if let Some(labels) = self.labels() {
+pub fn parse_error_diagnostic_items(e: &ParseError) -> Vec<DiagnosticItem> {
+    let message = e.to_string();
+    let help = e.help().map(|h| h.to_string());
+    let actions = parse_error_diagnostic_actions(e);
+    {
+        if let Some(labels) = e.labels() {
             let items: Vec<_> = labels
                 .map(|label| {
                     let src = label.inner();
@@ -337,17 +343,22 @@ impl ParseError {
             }]
         }
     }
+}
 
-    /// Extracts quick-fix actions by matching on the error variant and
-    /// fuzzy-matching against known function names or keywords.
-    fn diagnostic_actions(&self) -> Vec<DiagnosticAction> {
-        match self {
+/// Extracts quick-fix actions by matching on the error variant and
+/// fuzzy-matching against known function names or keywords.
+fn parse_error_diagnostic_actions(e: &ParseError) -> Vec<DiagnosticAction> {
+    {
+        match e {
             ParseError::SyntaxError {
                 span,
                 suggestion: Some(suggestion),
                 ..
             } => {
-                vec![suggestion.to_diagnostic(Span::new(span.offset(), span.offset() + span.len()))]
+                vec![suggestion_to_diagnostic(
+                    suggestion,
+                    Span::new(span.offset(), span.offset() + span.len()),
+                )]
             }
 
             ParseError::UnsupportedMapFunction { span, name }
@@ -376,11 +387,9 @@ impl ParseError {
     }
 }
 
-impl Suggestion {
-    /// The suggested text
-    fn to_diagnostic(&self, span: Span) -> DiagnosticAction {
-        DiagnosticAction::replace_with(span, self.suggestion())
-    }
+/// Convert a parser-side suggestion into a code action over `span`.
+fn suggestion_to_diagnostic(s: &Suggestion, span: Span) -> DiagnosticAction {
+    DiagnosticAction::replace_with(span, s.suggestion())
 }
 
 /// Fuzzy-matches `input` against `candidates` using Jaro similarity and returns

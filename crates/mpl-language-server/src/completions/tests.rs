@@ -1,11 +1,12 @@
 use regex::Regex;
 use test_case::test_case;
 
-use crate::stdlib::STDLIB;
+use mpl_lang::STDLIB;
 
 use super::{
     CompletionResult, ParamItem, ParamType, QueryContext, compute_completions,
     extract_declared_params, extract_partial_word, is_char_escaped, locate_query_context,
+    lookup_function,
 };
 
 fn tag_info(r: &CompletionResult) -> Option<(&str, &str)> {
@@ -718,43 +719,38 @@ fn completions_map_subtraction_number() {
 
 #[test]
 fn function_info_known_root_function() {
-    let info = STDLIB.lookup_function("avg").expect("avg should exist");
+    let info = lookup_function(&STDLIB, "avg").expect("avg should exist");
     assert_eq!(info.label, "avg");
     assert!(info.info.is_some());
 }
 
 #[test]
 fn function_info_known_submodule_qualified() {
-    let info = STDLIB
-        .lookup_function("prom::rate")
-        .expect("prom::rate should exist");
+    let info = lookup_function(&STDLIB, "prom::rate").expect("prom::rate should exist");
     assert_eq!(info.label, "prom::rate");
     assert!(info.info.is_some());
 }
 
 #[test]
 fn function_info_unknown_returns_none() {
-    assert!(STDLIB.lookup_function("nonexistent").is_none());
+    assert!(lookup_function(&STDLIB, "nonexistent").is_none());
 }
 
 #[test]
 fn function_info_unknown_qualified_returns_none() {
-    assert!(STDLIB.lookup_function("fake::fn").is_none());
+    assert!(lookup_function(&STDLIB, "fake::fn").is_none());
 }
 
 #[test]
 fn function_info_bucket_function() {
-    let info = STDLIB
-        .lookup_function("histogram")
-        .expect("histogram should exist");
+    let info = lookup_function(&STDLIB, "histogram").expect("histogram should exist");
     assert_eq!(info.label, "histogram");
     assert!(info.info.is_some());
 }
 
 #[test]
 fn function_info_submodule_unqualified_search() {
-    let info = STDLIB
-        .lookup_function("linear")
+    let info = lookup_function(&STDLIB, "linear")
         .expect("linear should be found via submodule search");
     assert_eq!(info.label, "interpolate::linear");
 }

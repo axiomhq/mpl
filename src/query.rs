@@ -28,8 +28,6 @@ mod tests;
 
 /// Metric identifier
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct MetricId {
     /// The dataset identifier or param
     pub dataset: Parameterized<Dataset>,
@@ -39,8 +37,6 @@ pub struct MetricId {
 
 /// Time unit
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum TimeUnit {
     /// Millisecond
     Millisecond,
@@ -62,8 +58,6 @@ pub enum TimeUnit {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 /// Relative time (1h)
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct RelativeTime {
     /// Value
     pub value: u64,
@@ -73,23 +67,19 @@ pub struct RelativeTime {
 
 /// A point in time
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum Time {
     /// A time relative to now
     Relative(RelativeTime),
     /// A timestamp
     Timestamp(i64),
     /// A RFC3339 timestamp
-    RFC3339(#[cfg_attr(feature = "wasm", tsify(type = "string"))] DateTime<FixedOffset>),
+    RFC3339(DateTime<FixedOffset>),
     /// A time modifier
     Modifier(String),
 }
 
 /// A timerange between two times
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct TimeRange {
     /// Start time of the range
     pub start: Time,
@@ -99,8 +89,6 @@ pub struct TimeRange {
 
 /// The source for a query
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct Source {
     /// The metric
     pub metric_id: MetricId,
@@ -123,8 +111,6 @@ pub enum ValueError {
 
 /// A comparison operator for filtering based on a value
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum Cmp {
     /// Equal to the given value
     Eq(Parameterized<TagValue>),
@@ -148,8 +134,6 @@ pub enum Cmp {
 
 /// Rename the output as a new metric
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct As {
     /// The new name for the metric
     pub name: Metric,
@@ -157,8 +141,6 @@ pub struct As {
 
 /// Filter the series
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum Filter {
     /// Logical AND of the given filters
     And(Vec<Filter>),
@@ -177,8 +159,6 @@ pub enum Filter {
 
 /// Ifdef conditionally filters the series
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum FilterOrIfDef {
     /// A plain filter
     Filter(Filter),
@@ -204,8 +184,6 @@ impl FilterOrIfDef {
 
 /// A Mapping function
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct Mapping {
     /// The function to apply
     pub function: MapFunction,
@@ -215,8 +193,6 @@ pub struct Mapping {
 
 /// An Alignment function
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct Align {
     /// The function to apply
     pub function: AlignFunction,
@@ -226,11 +202,8 @@ pub struct Align {
 
 /// A Grouping function
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct GroupBy {
     /// The location of the group by clause
-    #[cfg_attr(feature = "wasm", tsify(type = "{ offset: number, length: number }"))]
     pub span: SourceSpan,
     /// The function to apply
     pub function: GroupFunction,
@@ -240,11 +213,8 @@ pub struct GroupBy {
 
 /// A Bucketing function, applying both tag and time based aggregation
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct BucketBy {
     /// The location of the group by clause
-    #[cfg_attr(feature = "wasm", tsify(type = "{ offset: number, length: number }"))]
     pub span: SourceSpan,
     /// The function to apply
     pub function: BucketType,
@@ -258,8 +228,6 @@ pub struct BucketBy {
 
 /// Possible aggregate functions
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum Aggregate {
     /// Map a function over each value
     Map(Mapping),
@@ -274,7 +242,6 @@ pub enum Aggregate {
 }
 
 /// Values for directives
-#[cfg_attr(feature = "wasm", tsify::declare)]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum DirectiveValue {
@@ -346,7 +313,6 @@ impl DirectiveValue {
 }
 
 /// A parameter type, either Optional or Terminal.
-#[cfg_attr(feature = "wasm", tsify::declare)]
 #[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub enum ParamType {
     /// A type that's defined and present `param p: int`
@@ -371,7 +337,6 @@ impl std::fmt::Display for ParamType {
 }
 
 /// Terminal Types for params.
-#[cfg_attr(feature = "wasm", tsify::declare)]
 #[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub enum TerminalParamType {
     /// Duration (e.g. 25s)
@@ -395,7 +360,6 @@ impl std::fmt::Display for TerminalParamType {
 }
 
 /// Types for params.
-#[cfg_attr(feature = "wasm", tsify::declare)]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[derive(Clone, Copy, Debug, Hash, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub enum TagType {
@@ -438,15 +402,12 @@ impl std::fmt::Display for TagType {
 }
 
 /// Directives given to adjust the behavior of the runtime
-#[cfg_attr(feature = "wasm", tsify::declare)]
 pub type Directives = HashMap<String, DirectiveValue>;
 
 /// A param.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 pub struct ParamDeclaration {
     /// The location of the param
-    #[cfg_attr(feature = "wasm", tsify(type = "{ offset: number, length: number }"))]
     pub span: SourceSpan,
     /// The name of the param
     pub name: String,
@@ -944,13 +905,10 @@ impl ProvidedParams {
 }
 
 /// Parameters that will be set externally.
-#[cfg_attr(feature = "wasm", tsify::declare)]
 pub type Params = Vec<ParamDeclaration>;
 
 /// A Query AST representing a query in the `MPL` language
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum Query {
     /// A simple query that will produce a result
     Simple {

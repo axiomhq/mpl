@@ -23,8 +23,6 @@ use crate::{
     serde::Deserialize,
 )]
 #[cfg_attr(feature = "bincode", derive(bincode::Decode, bincode::Encode))]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct Dataset(String);
 
 impl From<&str> for Dataset {
@@ -68,15 +66,12 @@ impl std::fmt::Display for Dataset {
 
 /// A type that can either be concrete or a param.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Eq, PartialEq)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum Parameterized<T> {
     /// A concrete type
     Concrete(T),
     /// A parameter and the location where it's used (for type checking)
     Param {
         /// The location where the param is used
-        #[cfg_attr(feature = "wasm", tsify(type = "{ offset: number, length: number }"))]
         span: SourceSpan,
         /// The param
         param: ParamDeclaration,
@@ -131,10 +126,7 @@ impl<T> Parameterized<T> {
     Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Deserialize, serde::Serialize,
 )]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct Metric(
-    #[cfg_attr(feature = "wasm", tsify(type = "String"))]
     #[cfg_attr(feature = "bincode", bincode(with_serde))]
     SharedString,
 );
@@ -191,8 +183,6 @@ impl PartialEq<&str> for Metric {
 /// The method for cumulative-to-delta conversion
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum ConversionMethod {
     /// Use rate to convert cumulative to delta
     #[default]
@@ -212,8 +202,6 @@ impl std::fmt::Display for ConversionMethod {
 
 /// Aggregation type
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum BucketType {
     /// Histogram
     Histogram,
@@ -284,8 +272,6 @@ impl std::fmt::Display for BucketType {
 
 /// Aggregation type
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum MapType {
     /// Min
     Min,
@@ -461,8 +447,6 @@ impl std::fmt::Display for MapType {
 
 /// Aggregation type
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum TimeType {
     /// Count
     Count,
@@ -513,8 +497,6 @@ impl std::fmt::Display for TimeType {
 
 /// Aggregation type
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum TagsType {
     /// Count
     Count,
@@ -561,8 +543,6 @@ impl std::fmt::Display for TagsType {
 
 /// Aggregation type used in Compute
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum ComputeType {
     /// Average
     Avg,
@@ -622,8 +602,6 @@ impl std::fmt::Display for ComputeType {
 /// Bucket aggregation Histogram bucket sepcification
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum BucketSpec {
     /// Number of elements
     #[default]

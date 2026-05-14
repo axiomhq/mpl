@@ -2,16 +2,11 @@
 use std::{hash, ops::Deref};
 
 use regex::Regex;
-#[cfg(feature = "wasm")]
-use tsify::Tsify;
 
 /// A wrapper around `regex::Regex` that can be serialized and deserialized via bincode
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
-#[cfg_attr(feature = "wasm", derive(Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct EncodableRegex(
     #[serde(with = "serde_regex")]
-    #[cfg_attr(feature = "wasm", tsify(type = "RegExp"))]
     Regex,
 );
 

@@ -4,13 +4,13 @@
 //! `service::query::request::{visitor, walker}` but adapted for pest's
 //! untyped `Pair<Rule>` tree rather than a typed AST.
 
-use crate::parser::Rule;
+use mpl_lang::Rule;
 
-use super::Span;
+use crate::Span;
 
 /// Controls whether the walker descends into children of the current pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum VisitAction {
+pub(crate) enum VisitAction {
     /// Recurse into children of this pair.
     Walk,
     /// Skip children of this pair, continue to next sibling.
@@ -20,13 +20,13 @@ pub(super) enum VisitAction {
 /// Snapshot of a pest pair's identity, captured before `into_inner()` consumes
 /// it.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct Node {
-    pub(super) rule: Rule,
-    pub(super) span: Span,
+pub(crate) struct Node {
+    pub(crate) rule: Rule,
+    pub(crate) span: Span,
 }
 
 /// Visitor hooks for walking a pest parse tree.
-pub(super) trait PairVisitor {
+pub(crate) trait PairVisitor {
     /// Called when entering a pair. Return [`VisitAction::Walk`] to recurse
     /// into children, or [`VisitAction::Skip`] to move to the next sibling.
     fn enter(&mut self, node: Node) -> VisitAction;

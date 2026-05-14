@@ -1,16 +1,14 @@
 //! Syntax highlighting tokenization for `MPL` queries.
-use pest::Parser as _;
 use serde::Serialize;
-use wasm_bindgen::prelude::*;
+use mpl_lang::{MPLParser, Rule};
+use pest::Parser as _;
 
-use crate::parser::{MPLParser, Rule};
-
-use super::Span;
-use super::visit::{Node, PairVisitor, VisitAction};
+use crate::Span;
+use crate::visit::{Node, PairVisitor, VisitAction};
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub(super) enum TokenType {
+pub enum TokenType {
     Variable,
     String,
     Number,
@@ -23,11 +21,11 @@ pub(super) enum TokenType {
 }
 
 #[derive(Debug, Serialize)]
-pub(super) struct Token {
+pub struct Token {
     #[serde(flatten)]
-    pub(super) span: Span,
+    pub span: Span,
     #[serde(rename = "type")]
-    pub(super) kind: TokenType,
+    pub kind: TokenType,
 }
 
 /// Returns `Option` rather than adding a `None` variant to `TokenType` because
@@ -123,9 +121,10 @@ impl PairVisitor for TokenCollector<'_> {
     }
 }
 
-/// Collects tokens from a query string for testing.
-#[cfg(test)]
-pub(super) fn collect_tokens(query: &str) -> Option<Vec<Token>> {
+/// Tokenises `query` for syntax highlighting. Returns `None` when the query
+/// fails to parse (the host should treat that as "no tokens to show").
+#[must_use]
+pub fn collect_tokens(query: &str) -> Option<Vec<Token>> {
     let pairs = MPLParser::parse(Rule::file, query).ok()?;
     let mut collector = TokenCollector {
         tokens: Vec::new(),
@@ -133,21 +132,6 @@ pub(super) fn collect_tokens(query: &str) -> Option<Vec<Token>> {
     };
     collector.walk_pairs(pairs);
     Some(collector.tokens)
-}
-
-/// Tokenizes a query string and returns an array of tokens for syntax highlighting.
-#[must_use]
-#[wasm_bindgen]
-pub fn tokenize(query: &str) -> JsValue {
-    let Ok(pairs) = MPLParser::parse(Rule::file, query) else {
-        return JsValue::NULL;
-    };
-    let mut collector = TokenCollector {
-        tokens: Vec::new(),
-        source: query,
-    };
-    collector.walk_pairs(pairs);
-    super::to_js_value(&collector.tokens)
 }
 
 #[cfg(test)]

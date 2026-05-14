@@ -146,6 +146,12 @@ impl std::fmt::Display for FunctionId {
     }
 }
 impl FunctionId {
+    /// Return the function's bare name (no module qualification).
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.0
+    }
+
     pub(crate) fn new(name: &str) -> Self {
         FunctionId(name.to_string())
     }
@@ -258,6 +264,74 @@ impl Serialize for Module {
 }
 
 impl Module {
+    /// Iterate over this module's submodules, yielding `(qualified_name, module)`
+    /// pairs. Used by language-server crates that walk the stdlib tree to
+    /// build completion lists and function lookups.
+    pub fn submodule_iter(&self) -> impl Iterator<Item = (&str, &Module)> {
+        self.submodules.iter().map(|(k, v)| (k.0.as_str(), v))
+    }
+
+    /// Resolve a submodule by name (single segment, not `::`-qualified).
+    #[must_use]
+    pub fn submodule(&self, name: &str) -> Option<&Module> {
+        self.submodules.get(name)
+    }
+
+    /// Iterate this module's align functions.
+    pub fn align_function_iter(&self) -> impl Iterator<Item = (&str, &AlignFunction)> {
+        self.align_functions.iter().map(|(k, v)| (k.0.as_str(), v))
+    }
+
+    /// Iterate this module's map functions.
+    pub fn mapping_function_iter(&self) -> impl Iterator<Item = (&str, &MapFunction)> {
+        self.mapping_functions.iter().map(|(k, v)| (k.0.as_str(), v))
+    }
+
+    /// Iterate this module's group functions.
+    pub fn group_function_iter(&self) -> impl Iterator<Item = (&str, &GroupFunction)> {
+        self.group_functions.iter().map(|(k, v)| (k.0.as_str(), v))
+    }
+
+    /// Iterate this module's bucket types.
+    pub fn bucket_function_iter(&self) -> impl Iterator<Item = (&str, &BucketType)> {
+        self.bucket_functions.iter().map(|(k, v)| (k.0.as_str(), v))
+    }
+
+    /// Iterate this module's compute functions.
+    pub fn compute_function_iter(&self) -> impl Iterator<Item = (&str, &ComputeFunction)> {
+        self.compute_functions.iter().map(|(k, v)| (k.0.as_str(), v))
+    }
+
+    /// Look up an align function by bare name.
+    #[must_use]
+    pub fn align_function(&self, name: &str) -> Option<&AlignFunction> {
+        self.align_functions.get(name)
+    }
+
+    /// Look up a map function by bare name.
+    #[must_use]
+    pub fn mapping_function(&self, name: &str) -> Option<&MapFunction> {
+        self.mapping_functions.get(name)
+    }
+
+    /// Look up a group function by bare name.
+    #[must_use]
+    pub fn group_function(&self, name: &str) -> Option<&GroupFunction> {
+        self.group_functions.get(name)
+    }
+
+    /// Look up a bucket type by bare name.
+    #[must_use]
+    pub fn bucket_function(&self, name: &str) -> Option<&BucketType> {
+        self.bucket_functions.get(name)
+    }
+
+    /// Look up a compute function by bare name.
+    #[must_use]
+    pub fn compute_function(&self, name: &str) -> Option<&ComputeFunction> {
+        self.compute_functions.get(name)
+    }
+
     /// Generates the markdown style documentation for the module
     pub fn documentation(&self, level: usize) -> Result<String, std::fmt::Error> {
         let header = "#".repeat(level + 1);
@@ -380,8 +454,6 @@ pub trait MapFunctionTrait:
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 /// A map functio wrapper
 pub enum MapFunction {
     /// A builtin function
@@ -441,8 +513,6 @@ pub trait AlignFunctionTrait:
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 /// A align function wrapper
 pub enum AlignFunction {
     /// A builtin function
@@ -500,8 +570,6 @@ pub trait GroupFunctionTrait:
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 /// A group-by function wrapper
 pub enum GroupFunction {
     /// A builtin function
@@ -558,8 +626,6 @@ pub trait ComputeFunctionTrait:
     fn box_clone(&self) -> Box<dyn ComputeFunctionTrait>;
 }
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 /// A compute function wrapper
 pub enum ComputeFunction {
     /// A builtin function

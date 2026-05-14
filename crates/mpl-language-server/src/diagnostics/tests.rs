@@ -1,16 +1,17 @@
 use std::collections::HashMap;
 
-use crate::query::{Warning, WarningReason, Warnings};
-use crate::wasm::diagnostics::{DiagnosticItem, Severity, maybe_rewrite_escaped_dataset_error};
-use crate::{CompileError, compile};
+use mpl_lang::query::{WarningReason, Warnings};
+use mpl_lang::{CompileError, compile};
+
+use crate::diagnostics::{DiagnosticItem, Severity, maybe_rewrite_escaped_dataset_error};
 
 fn diagnostic_items(q: &str) -> Vec<DiagnosticItem> {
     match compile(q, HashMap::new()) {
         Ok(_) => vec![],
-        Err(CompileError::Parse(error)) => error.diagnostic_items(),
-        Err(CompileError::Type(error)) => error.diagnostic_items(),
-        Err(CompileError::Group(error)) => error.diagnostic_items(),
-        Err(CompileError::Ifdef(error)) => error.diagnostic_items(),
+        Err(CompileError::Parse(error)) => crate::diagnostics::parse_error_diagnostic_items(&error),
+        Err(CompileError::Type(error)) => crate::diagnostics::type_error_diagnostic_items(&error),
+        Err(CompileError::Group(error)) => crate::diagnostics::group_error_diagnostic_items(&error),
+        Err(CompileError::Ifdef(error)) => crate::diagnostics::ifdef_error_diagnostic_items(&error),
     }
 }
 
@@ -20,7 +21,7 @@ fn warning_items(q: &str) -> Vec<DiagnosticItem> {
     warnings
         .as_slice()
         .iter()
-        .map(Warning::to_diagnostic_item)
+        .map(crate::diagnostics::warning_to_diagnostic_item)
         .collect()
 }
 
@@ -93,8 +94,8 @@ fn type_error_puts_error_on_use_and_info_on_declaration() {
     let items = match compile(query, HashMap::new()) {
         Ok(_) => panic!("should produce a type error"),
         Err(CompileError::Parse(_)) => panic!("should be a type error, not parse error"),
-        Err(CompileError::Type(error)) => error.diagnostic_items(),
-        Err(CompileError::Group(error)) => error.diagnostic_items(),
+        Err(CompileError::Type(error)) => crate::diagnostics::type_error_diagnostic_items(&error),
+        Err(CompileError::Group(error)) => crate::diagnostics::group_error_diagnostic_items(&error),
         Err(CompileError::Ifdef(_)) => panic!("should be a type error, not ifdef error"),
     };
 
@@ -127,7 +128,7 @@ fn optional_param_outside_ifdef_is_error() {
     let query = "param $f: Option<string>;\nds:metric | where tag == $f";
     let items = match compile(query, HashMap::new()) {
         Ok(_) => panic!("optional usage outside ifdef should not compile"),
-        Err(CompileError::Ifdef(error)) => error.diagnostic_items(),
+        Err(CompileError::Ifdef(error)) => crate::diagnostics::ifdef_error_diagnostic_items(&error),
         Err(other) => panic!("expected ifdef error, got: {other}"),
     };
 
@@ -154,7 +155,7 @@ fn ifdef_body_does_not_reference_param_is_error() {
     let query = "param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" }";
     let items = match compile(query, HashMap::new()) {
         Ok(_) => panic!("ifdef body without param reference should not compile"),
-        Err(CompileError::Ifdef(error)) => error.diagnostic_items(),
+        Err(CompileError::Ifdef(error)) => crate::diagnostics::ifdef_error_diagnostic_items(&error),
         Err(other) => panic!("expected ifdef error, got: {other}"),
     };
 
@@ -184,7 +185,7 @@ fn optional_regex_param_outside_ifdef_is_error() {
     let query = "param $r: Option<Regex>;\nds:metric | where tag == $r";
     let items = match compile(query, HashMap::new()) {
         Ok(_) => panic!("optional regex usage outside ifdef should not compile"),
-        Err(CompileError::Ifdef(error)) => error.diagnostic_items(),
+        Err(CompileError::Ifdef(error)) => crate::diagnostics::ifdef_error_diagnostic_items(&error),
         Err(other) => panic!("expected ifdef error, got: {other}"),
     };
 
@@ -211,7 +212,7 @@ fn optional_param_in_other_ifdef_is_error() {
         Err(CompileError::Ifdef(error)) => error,
         Err(other) => panic!("expected ifdef error, got: {other}"),
     };
-    let items = err.diagnostic_items();
+    let items = crate::diagnostics::ifdef_error_diagnostic_items(&err);
     assert_eq!(items.len(), 1);
     assert!(matches!(items[0].severity, Severity::Error));
     assert_eq!(
@@ -295,7 +296,7 @@ fn param_not_declared_warning_is_plain_warning_without_actions() {
     let items: Vec<DiagnosticItem> = warnings
         .as_slice()
         .iter()
-        .map(Warning::to_diagnostic_item)
+        .map(crate::diagnostics::warning_to_diagnostic_item)
         .collect();
     assert_eq!(items.len(), 1);
     assert!(matches!(items[0].severity, Severity::Warning));
@@ -326,7 +327,7 @@ fn multiple_old_duration_warnings() {
 fn assert_parse_error(query: &str, expected_from: usize, expected_to: usize) {
     let items = match compile(query, HashMap::new()) {
         Ok(_) => panic!("'{query}' should not compile"),
-        Err(CompileError::Parse(error)) => error.diagnostic_items(),
+        Err(CompileError::Parse(error)) => crate::diagnostics::parse_error_diagnostic_items(&error),
         Err(CompileError::Type(_) | CompileError::Group(_) | CompileError::Ifdef(_)) => {
             panic!("'{query}' should be a parse error, not type/group/ifdef error")
         }
@@ -404,7 +405,10 @@ fn diagnostics_for(query: &str) -> Vec<DiagnosticItem> {
     match compile(query, HashMap::new()) {
         Ok(_) => panic!("'{query}' should not compile"),
         Err(CompileError::Parse(error)) => {
-            maybe_rewrite_escaped_dataset_error(query, error.diagnostic_items())
+            maybe_rewrite_escaped_dataset_error(
+                query,
+                crate::diagnostics::parse_error_diagnostic_items(&error),
+            )
         }
         Err(CompileError::Type(_) | CompileError::Group(_) | CompileError::Ifdef(_)) => {
             panic!("'{query}' should be a parse error, not type/group/ifdef error")
@@ -471,14 +475,14 @@ fn backtick_dataset_with_colon_not_rewritten() {
 /// the wasm `diagnostics` entry point does after decoding the JS payload.
 fn diagnostic_items_with_params(
     q: &str,
-    params: HashMap<String, crate::query::ParamType>,
+    params: HashMap<String, mpl_lang::query::ParamType>,
 ) -> Vec<DiagnosticItem> {
     match compile(q, params) {
         Ok(_) => vec![],
-        Err(CompileError::Parse(error)) => error.diagnostic_items(),
-        Err(CompileError::Type(error)) => error.diagnostic_items(),
-        Err(CompileError::Group(error)) => error.diagnostic_items(),
-        Err(CompileError::Ifdef(error)) => error.diagnostic_items(),
+        Err(CompileError::Parse(error)) => crate::diagnostics::parse_error_diagnostic_items(&error),
+        Err(CompileError::Type(error)) => crate::diagnostics::type_error_diagnostic_items(&error),
+        Err(CompileError::Group(error)) => crate::diagnostics::group_error_diagnostic_items(&error),
+        Err(CompileError::Ifdef(error)) => crate::diagnostics::ifdef_error_diagnostic_items(&error),
     }
 }
 
@@ -487,7 +491,7 @@ fn system_param_clears_undefined_param_error() {
     // Without system params, `$__interval` is undeclared and the parser
     // raises `UndefinedParam`. With it registered, the query compiles
     // cleanly — that's the whole point of the wiring.
-    use crate::query::{ParamType, TerminalParamType};
+    use mpl_lang::query::{ParamType, TerminalParamType};
 
     let query = "ds:metric | align to $__interval using avg";
 
@@ -515,7 +519,7 @@ fn system_param_type_mismatch_still_errors() {
     // Registering a system param with the wrong type does NOT silence type
     // errors — `align to <duration>` rejects a string param, even when the
     // host claims `$__interval` is a string.
-    use crate::query::{ParamType, TagType, TerminalParamType};
+    use mpl_lang::query::{ParamType, TagType, TerminalParamType};
 
     let query = "ds:metric | align to $__interval using avg";
     let mut params = HashMap::new();
@@ -541,7 +545,7 @@ fn system_param_missing_prefix_is_reported() {
     // System param names must start with `__` (SYSTEM_PARAM_PREFIX). The
     // parser surfaces this as a parse error; the editor relies on it to
     // tell hosts they've mis-registered a name.
-    use crate::query::{ParamType, TerminalParamType};
+    use mpl_lang::query::{ParamType, TerminalParamType};
 
     let query = "ds:metric";
     let mut params = HashMap::new();
