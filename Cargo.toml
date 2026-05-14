@@ -14,8 +14,8 @@ rust-version = "1.92.0"
 [workspace]
 members = [
     "extra/mpl-playground",
-    "crates/mpl-language-server",
-    "crates/mpl-language-server-wasm",
+    "extra/mpl-language-server",
+    "extra/mpl-language-server-wasm",
 ]
 resolver = "3"
 
