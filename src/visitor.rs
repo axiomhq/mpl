@@ -133,9 +133,11 @@ pub trait QueryVisitor {
         &mut self,
         param: &mut ParamDeclaration,
         filter: &mut Filter,
+        else_filter: &mut Option<Filter>,
     ) -> Result<VisitRes, Self::Error> {
         let _ = filter;
         let _ = param;
+        let _ = else_filter;
         Ok(VisitRes::Walk)
     }
 
@@ -144,9 +146,11 @@ pub trait QueryVisitor {
         &mut self,
         param: &mut ParamDeclaration,
         filter: &mut Filter,
+        else_filter: &mut Option<Filter>,
     ) -> Result<(), Self::Error> {
         let _ = filter;
         let _ = param;
+        let _ = else_filter;
         Ok(())
     }
 
@@ -469,7 +473,11 @@ pub trait QueryWalker: QueryVisitor {
         );
         match filter {
             FilterOrIfDef::Filter(filter) => QueryWalker::walk_filter(self, filter)?,
-            FilterOrIfDef::Ifdef { param, filter } => QueryWalker::walk_ifdef(self, param, filter)?,
+            FilterOrIfDef::Ifdef {
+                param,
+                filter,
+                else_filter,
+            } => QueryWalker::walk_ifdef(self, param, filter, else_filter)?,
         }
         QueryVisitor::leave_filter_or_ifdef(self, filter)?;
         Ok(())
@@ -480,14 +488,19 @@ pub trait QueryWalker: QueryVisitor {
         &mut self,
         param: &mut ParamDeclaration,
         filter: &mut Filter,
+        else_filter: &mut Option<Filter>,
     ) -> Result<(), Self::Error> {
         stop!(
-            QueryVisitor::visit_ifdef(self, param, filter),
-            QueryVisitor::leave_ifdef(self, param, filter)
+            QueryVisitor::visit_ifdef(self, param, filter, else_filter),
+            QueryVisitor::leave_ifdef(self, param, filter, else_filter)
         );
         QueryWalker::walk_param(self, param)?;
         QueryWalker::walk_filter(self, filter)?;
-        QueryVisitor::leave_ifdef(self, param, filter)?;
+        if let Some(else_filter) = else_filter {
+            QueryWalker::walk_filter(self, else_filter)?;
+        }
+        QueryVisitor::leave_ifdef(self, param, filter, else_filter)?;
+
         Ok(())
     }
 

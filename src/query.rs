@@ -188,6 +188,8 @@ pub enum FilterOrIfDef {
         param: ParamDeclaration,
         /// The filter
         filter: Filter,
+        /// The else filter
+        else_filter: Option<Filter>,
     },
 }
 
@@ -924,8 +926,10 @@ impl ProvidedParams {
     pub fn active_filter<'a>(&self, filter: &'a FilterOrIfDef) -> Option<&'a Filter> {
         match filter {
             FilterOrIfDef::Filter(filter) => Some(filter),
-            FilterOrIfDef::Ifdef { param, filter } if self.contains(&param.name) => Some(filter),
-            FilterOrIfDef::Ifdef { .. } => None,
+            FilterOrIfDef::Ifdef { param, filter, .. } if self.contains(&param.name) => {
+                Some(filter)
+            }
+            FilterOrIfDef::Ifdef { else_filter, .. } => else_filter.as_ref(),
         }
     }
 

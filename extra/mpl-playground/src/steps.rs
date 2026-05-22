@@ -53,6 +53,8 @@ pub enum StepNode {
         param: ParamDeclaration,
         /// The filter applied when the param is set.
         filter: Filter,
+        /// The filter applied when the param is not set.
+        else_filter: Option<Filter>,
     },
     /// An aggregate pipe.
     Aggregate(Aggregate),
@@ -78,8 +80,20 @@ impl Display for StepNode {
         match self {
             StepNode::Source(s) => write!(f, "{s}"),
             StepNode::Filter(fl) => write!(f, "| where {fl}"),
-            StepNode::Ifdef { param, filter } => {
-                write!(f, "| ifdef(${}) {{ where {filter} }}", param.name)
+            StepNode::Ifdef {
+                param,
+                filter,
+                else_filter,
+            } => {
+                if let Some(else_filter) = else_filter {
+                    write!(
+                        f,
+                        "| ifdef(${}) {{ where {filter} }} else {{ where {else_filter} }}",
+                        param.name
+                    )
+                } else {
+                    write!(f, "| ifdef(${}) {{ where {filter} }}", param.name)
+                }
             }
             StepNode::Aggregate(a) => write!(f, "{a}"),
             StepNode::Sample(v) => write!(f, "| sample {v}"),
@@ -239,7 +253,15 @@ fn query_steps(query: Query) -> Vec<PipeStep> {
             }
             steps.extend(filters.into_iter().map(|fi| match fi {
                 FilterOrIfDef::Filter(filter) => step(StepNode::Filter(filter)),
-                FilterOrIfDef::Ifdef { param, filter } => step(StepNode::Ifdef { param, filter }),
+                FilterOrIfDef::Ifdef {
+                    param,
+                    filter,
+                    else_filter,
+                } => step(StepNode::Ifdef {
+                    param,
+                    filter,
+                    else_filter,
+                }),
             }));
             steps.extend(
                 aggregates

@@ -1358,7 +1358,11 @@ fn ifdef_step_is_a_no_op() {
     };
     let steps = vec![
         step(source_node("ds", "m")),
-        step(StepNode::Ifdef { param, filter }),
+        step(StepNode::Ifdef {
+            param,
+            filter,
+            else_filter: None,
+        }),
     ];
     let result = interpret(&steps, &datasets);
 
@@ -1379,7 +1383,11 @@ fn ifdef_step_canonical_text() {
             strumbra::SharedString::try_from("a").unwrap(),
         ))),
     };
-    let node = StepNode::Ifdef { param, filter };
+    let node = StepNode::Ifdef {
+        param,
+        filter,
+        else_filter: None,
+    };
     let text = node.to_string();
     assert!(
         text.starts_with("| ifdef($container) { where "),

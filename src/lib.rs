@@ -141,6 +141,7 @@ impl QueryVisitor for OptionCheckVisitor {
         &mut self,
         param: &mut ParamDeclaration,
         _filter: &mut Filter,
+        _else_filter: &mut Option<Filter>,
     ) -> Result<VisitRes, Self::Error> {
         self.ifdef_param = Some(param.clone());
         self.seen_param = None;
@@ -150,6 +151,7 @@ impl QueryVisitor for OptionCheckVisitor {
         &mut self,
         param: &mut ParamDeclaration,
         _filter: &mut Filter,
+        _else_filter: &mut Option<Filter>,
     ) -> Result<(), Self::Error> {
         if self.ifdef_param != self.seen_param {
             return Err(IfdefError::OptionalNotUsed {

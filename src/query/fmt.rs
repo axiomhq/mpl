@@ -38,8 +38,23 @@ impl Display for Query {
                         crate::query::FilterOrIfDef::Filter(filter) => {
                             writeln!(f, "| where {filter}")?;
                         }
-                        crate::query::FilterOrIfDef::Ifdef { param, filter } => {
+                        crate::query::FilterOrIfDef::Ifdef {
+                            param,
+                            filter,
+                            else_filter: None,
+                        } => {
                             writeln!(f, "| ifdef(${}) {{ where {filter} }}", param.name)?;
+                        }
+                        crate::query::FilterOrIfDef::Ifdef {
+                            param,
+                            filter,
+                            else_filter: Some(else_filter),
+                        } => {
+                            writeln!(
+                                f,
+                                "| ifdef(${}) {{ where {filter} }} else {{ where {else_filter} }}",
+                                param.name
+                            )?;
                         }
                     }
                 }

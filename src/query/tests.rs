@@ -274,6 +274,7 @@ fn active_filter_applies_ifdef_when_param_is_provided() {
     let filter_or_ifdef = FilterOrIfDef::Ifdef {
         param: optional_string_param("env"),
         filter: filter.clone(),
+        else_filter: None,
     };
 
     assert_eq!(Some(&filter), provided.active_filter(&filter_or_ifdef));
@@ -285,9 +286,23 @@ fn active_filter_drops_ifdef_when_param_is_omitted() {
     let filter_or_ifdef = FilterOrIfDef::Ifdef {
         param: optional_string_param("env"),
         filter: tag_filter("env", "prod"),
+        else_filter: None,
     };
 
     assert_eq!(None, provided.active_filter(&filter_or_ifdef));
+}
+
+#[test]
+fn becomes_else_ifdef_when_param_is_omitted() {
+    let provided = ProvidedParams::new(vec![]);
+    let filter = tag_filter("env", "prod");
+
+    let filter_or_ifdef = FilterOrIfDef::Ifdef {
+        param: optional_string_param("env"),
+        filter: tag_filter("env", "prod"),
+        else_filter: Some(filter.clone()),
+    };
+    assert_eq!(Some(&filter), provided.active_filter(&filter_or_ifdef));
 }
 
 #[test]
@@ -304,10 +319,12 @@ fn active_filters_preserves_order_and_drops_inactive_ifdefs() {
         FilterOrIfDef::Ifdef {
             param: optional_string_param("env"),
             filter: env.clone(),
+            else_filter: None,
         },
         FilterOrIfDef::Ifdef {
             param: optional_string_param("cluster"),
             filter: cluster,
+            else_filter: None,
         },
     ];
 

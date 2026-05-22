@@ -829,10 +829,10 @@ pub(crate) fn parse_filter(source: Pair<Rule>, state: &State) -> Result<Filter> 
     let keyword = inner.n()?;
     keyword.assert_type(Rule::pipe_keyword)?;
 
-    parse_where_part(inner, state)
+    parse_where_part(&mut inner, state)
 }
 
-fn parse_where_part(mut source: Pairs<Rule>, state: &State) -> Result<Filter> {
+fn parse_where_part(source: &mut Pairs<Rule>, state: &State) -> Result<Filter> {
     let _filter_kw = source.n()?; // kw_filter / kw_where
     let next = source.n()?;
     let res = parse_or(next, state)?;
@@ -840,7 +840,10 @@ fn parse_where_part(mut source: Pairs<Rule>, state: &State) -> Result<Filter> {
     Ok(res)
 }
 
-pub(crate) fn parse_ifdef(source: Pair<Rule>, state: &State) -> Result<(ParamDeclaration, Filter)> {
+pub(crate) fn parse_ifdef(
+    source: Pair<Rule>,
+    state: &State,
+) -> Result<(ParamDeclaration, Filter, Option<Filter>)> {
     source.assert_type(Rule::ifdef_rule)?;
     let mut inner = source.into_inner();
 
@@ -868,8 +871,13 @@ pub(crate) fn parse_ifdef(source: Pair<Rule>, state: &State) -> Result<(ParamDec
         });
     };
 
-    let filter = parse_where_part(inner, state)?;
-    Ok((param, filter))
+    let filter = parse_where_part(&mut inner, state)?;
+    let Ok(kw_else) = inner.n() else {
+        return Ok((param, filter, None));
+    };
+    kw_else.assert_type(Rule::kw_else)?;
+    let filter_else = parse_where_part(&mut inner, state)?;
+    Ok((param, filter, Some(filter_else)))
 }
 
 pub(crate) fn parse_sample(source: Pair<Rule>) -> Result<f64> {
@@ -1263,8 +1271,12 @@ impl Parser {
                 Rule::sample_rule if sample.is_some() => {}
                 Rule::sample_rule => sample = Some(parse_sample(next)?),
                 Rule::ifdef_rule => {
-                    let (param, filter) = parse_ifdef(next, state)?;
-                    filters.push(FilterOrIfDef::Ifdef { param, filter });
+                    let (param, filter, else_filter) = parse_ifdef(next, state)?;
+                    filters.push(FilterOrIfDef::Ifdef {
+                        param,
+                        filter,
+                        else_filter,
+                    });
                 }
                 Rule::filter_rule => {
                     filters.push(FilterOrIfDef::Filter(parse_filter(next, state)?));

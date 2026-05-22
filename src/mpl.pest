@@ -93,6 +93,7 @@ kw_filter      =  { "filter" }
 kw_sample      =  { "sample" }
 kw_where       =  { "where" }
 kw_ifdef       =  { "ifdef" }
+kw_else        =  { "else" }
 filter_keyword = _{ kw_filter | kw_where }
 filter_atom    =  { (tag ~ (value_filter | regex_filter | is_filter)) }
 filter_clause  =  { filter_atom | ("(" ~ filter_or ~ ")") }
@@ -101,7 +102,7 @@ filter_and     =  { filter_not ~ ("and" ~ filter_not)* }
 filter_or      =  { filter_and ~ ("or" ~ filter_and)* }
 filter_expr    = _{ filter_keyword ~ filter_or }
 filter_rule    =  { pipe_keyword ~ filter_expr }
-ifdef_rule     =  { pipe_keyword ~ kw_ifdef ~ "(" ~ param_ident ~ ")" ~ "{" ~ filter_expr ~ "}" }
+ifdef_rule     =  { pipe_keyword ~ kw_ifdef ~ "(" ~ param_ident ~ ")" ~ "{" ~ filter_expr ~ "}" ~ (kw_else ~ "{" ~ filter_expr ~ "}")? }
 sample_expr    =  { kw_sample ~ number }
 sample_rule    =  { pipe_keyword ~ sample_expr }
 
@@ -118,7 +119,7 @@ func = { (module ~ "::")* ~ ident }
 
 param_native_type =  { "Dataset" | "Duration" | "duration" | "Regex" }
 tag_type          =  { "string" | "int" | "float" | "bool" }
-optional_type     =  { "Option" ~ "<" ~ ( tag_type | param_native_type ) ~ ">" }
+optional_type     =  { "Option" ~ "<" ~ (tag_type | param_native_type) ~ ">" }
 param_type        =  { param_native_type | tag_type | optional_type }
 param_ident       = ${ "$" ~ ident }
 param             =  { "param" ~ param_ident ~ ":" ~ param_type ~ ";" }
