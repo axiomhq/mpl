@@ -572,9 +572,11 @@ is well-formed regardless of whether the caller supplied the parameter.
 `ifdef` conditionally applies a filter when an optional parameter is supplied. If the
 gating parameter is omitted from the request, the entire `ifdef` block is skipped; if it
 is supplied, the inner `where` clause is applied like any other filter.
+a `else` branch can be added to the `ifdef` block to apply a different filter when the
+gating parameter is not supplied.
 
 ```mpl
-| ifdef($param) { where <filter-expr> }
+| ifdef($param) { where <filter-expr> } else { where <else-filter-expr> }
 ```
 
 The argument to `ifdef` must be a parameter declared with an `Option<…>` type. Inside the
