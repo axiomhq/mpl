@@ -201,6 +201,20 @@ fn keyword_ifdef() {
 }
 
 #[test]
+fn keyword_else() {
+    // The `else` clause was added alongside `ifdef`; without an explicit
+    // `Rule::kw_else` arm in `token_type`, the highlighter would emit no
+    // token for `else` and the editor would render it as plain text.
+    let query = "param $f: Option<string>;\nds:metric | ifdef($f) { where tag == $f } else { where tag == \"x\" }";
+    let tokens = collect_tokens(query).expect("should tokenize");
+    let kw = tokens
+        .iter()
+        .find(|t| &query[t.span.from..t.span.to] == "else")
+        .expect("should have else keyword");
+    assert_eq!(kw.kind, TokenType::Keyword);
+}
+
+#[test]
 fn keyword_bucket_fn() {
     let query = "ds:metric | bucket to 1m using histogram(count)";
     let tokens = collect_tokens(query).expect("should tokenize");

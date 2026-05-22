@@ -110,6 +110,52 @@ fn optional_use_without_ifdef() {
 }
 
 #[test]
+fn optional_ok_with_else_branch() {
+    // Regression: `parse_where_part` used to `assert_empty()` after the
+    // if-branch, which rejected any trailing `kw_else` tokens even though
+    // the grammar accepted them. This test pins the round-trip: parsed
+    // query must compile, and the canonical Display must include the
+    // `else { ... }` clause.
+    let query = "
+        param $t: Option<string>;
+        dataset:metric
+        | ifdef($t) { where tag == $t } else { where tag == \"default\" }
+    ";
+    let (q, _) = crate::compile(query, HashMap::new()).expect("ifdef with else should compile");
+    let rendered = q.to_string();
+    assert!(
+        rendered.contains("} else { where "),
+        "canonical form should preserve the else branch, got:\n{rendered}"
+    );
+}
+
+#[test]
+fn optional_ifdef_else_without_param_reference_in_either_branch_errors() {
+    // Symmetric to `optional_ok`: when the gating param is referenced in
+    // *neither* branch, `OptionalNotUsed` still fires. The else branch is
+    // walked by the visitor too, so this proves the walker reaches it.
+    let query = "
+        param $t: Option<string>;
+        dataset:metric
+        | ifdef($t) { where tag == \"a\" } else { where tag == \"b\" }
+    ";
+    assert!(crate::compile(query, HashMap::new()).is_err());
+}
+
+#[test]
+fn optional_ifdef_else_with_param_reference_in_else_branch_only_ok() {
+    // The visitor's `seen_param` is set if *either* branch references the
+    // gating param. An else-only reference is enough to satisfy the
+    // `OptionalNotUsed` check.
+    let query = "
+        param $t: Option<string>;
+        dataset:metric
+        | ifdef($t) { where tag == \"a\" } else { where tag == $t }
+    ";
+    assert!(crate::compile(query, HashMap::new()).is_ok());
+}
+
+#[test]
 fn optional_ifdef_without_optional() {
     let query = "
         param $t: string;

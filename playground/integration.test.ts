@@ -316,6 +316,31 @@ describe("parse + interpret end-to-end", () => {
       const afterIfdef = ok(result[1]);
       expect(afterIfdef.length).toBe(source.length);
     });
+
+    // The playground binds no optional params, so an `ifdef ... else` block
+    // must run the else branch. Without this, a query that supplies an else
+    // filter would silently no-op in the playground while firing in prod —
+    // exactly the kind of drift the playground integration tests guard against.
+    it("runs the else branch when the gating param is unbound", () => {
+      const result = run(
+        'param $container: Option<string>;\n\ntest:http_requests_total\n| ifdef($container) { where container == $container } else { where container == "web-1" }',
+      );
+      expect(result.length).toBe(2);
+      const source = ok(result[0]);
+      const afterIfdef = ok(result[1]);
+      // Else branch filters down to a strict subset of the source series
+      // (web-1 only), so we must drop *some* series but not all.
+      expect(afterIfdef.length).toBeGreaterThan(0);
+      expect(afterIfdef.length).toBeLessThan(source.length);
+      // `tags` round-trips through serde_wasm_bindgen as a JS Map, not a
+      // plain object, so reach in with `get` rather than property access.
+      expect(
+        afterIfdef.every(
+          (s) =>
+            (s.tags as unknown as Map<string, string>).get("container") === "web-1",
+        ),
+      ).toBe(true);
+    });
   });
 
   describe("system params", () => {

@@ -835,9 +835,11 @@ pub(crate) fn parse_filter(source: Pair<Rule>, state: &State) -> Result<Filter> 
 fn parse_where_part(source: &mut Pairs<Rule>, state: &State) -> Result<Filter> {
     let _filter_kw = source.n()?; // kw_filter / kw_where
     let next = source.n()?;
-    let res = parse_or(next, state)?;
-    source.assert_empty()?;
-    Ok(res)
+    parse_or(next, state)
+    // Intentionally no `assert_empty`: `parse_ifdef` reuses this to parse the
+    // if-branch and then expects more pairs (`kw_else`, the else-branch's
+    // `kw_where` + `filter_or`). The grammar already prevents trailing
+    // garbage in `filter_rule`, so the defensive check is redundant.
 }
 
 pub(crate) fn parse_ifdef(

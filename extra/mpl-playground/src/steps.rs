@@ -305,8 +305,17 @@ pub fn interpret(pipe_steps: &[PipeStep], datasets: &Datasets) -> Vec<Result<Vec
             StepNode::Source(src) => eval_source(src, datasets),
             StepNode::Filter(f) => apply_filter(&series, f),
             // The playground has no way to provide values for optional params,
-            // so the gated filter never applies and the series passes through.
-            StepNode::Ifdef { .. } => Ok(series.clone()),
+            // so the gate never opens: the if-branch never fires. When the
+            // query supplies an `else { ... }`, that branch *does* fire (it's
+            // exactly the "param unbound" case), so apply its filter. With no
+            // else branch the series passes through unchanged.
+            StepNode::Ifdef {
+                else_filter: Some(f),
+                ..
+            } => apply_filter(&series, f),
+            StepNode::Ifdef {
+                else_filter: None, ..
+            } => Ok(series.clone()),
             StepNode::Sample(rate) => apply_sample(&series, *rate),
             StepNode::Error(msg) => Err(eyre!("{msg}")),
             StepNode::Aggregate(agg) => apply_aggregate(&series, agg),

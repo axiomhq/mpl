@@ -1119,13 +1119,20 @@ fn suggest_for_context(
     }
 }
 
-/// Dispatches completions inside an `ifdef(...) { ... }` clause.
+/// Dispatches completions inside an `ifdef(...) { ... } [else { ... }]`
+/// clause.
 ///
-/// Three cursor positions are handled:
+/// Cursor positions handled:
 ///   (a) inside the `(...)` argument: optional params only
-///   (b) after `)` but before `{`: suggest the opening brace + `where`
-///   (c) inside the `{ ... }` body: suggest `where` (when empty) or defer
+///   (b) after `)` but before the if-body `{`: suggest the opening brace +
+///       `where`
+///   (c) inside the if-body `{ ... }`: suggest `where` (when empty) or defer
 ///       to the regular filter-context logic
+///   (d) after the if-body `}` but before `else`: suggest the `else` keyword
+///   (e) after `else` but before the else-body `{`: suggest the opening
+///       brace + `where`
+///   (f) inside the else-body `{ ... }`: same as (c), but scoped to the
+///       else branch
 fn suggest_ifdef_context(
     before: &str,
     span: Span,
@@ -1134,7 +1141,10 @@ fn suggest_ifdef_context(
 ) -> Option<CompletionResult> {
     let open_paren = after_pipe.find('(');
     let close_paren = after_pipe.rfind(')');
-    let open_brace = after_pipe.rfind('{');
+    // Use `find` (not `rfind`) so a `{` in the else-body doesn't masquerade
+    // as the if-body brace. Filter expressions don't contain `{`, so the
+    // first one is always the if-body opener.
+    let if_open_brace = after_pipe.find('{');
 
     // (a) inside the argument list — `(` seen, no matching `)` yet
     if open_paren.is_some() && close_paren.is_none() {
@@ -1142,7 +1152,7 @@ fn suggest_ifdef_context(
     }
 
     // (b) `)` typed but no `{` yet — suggest opening the body
-    if close_paren.is_some() && open_brace.is_none() {
+    if close_paren.is_some() && if_open_brace.is_none() {
         return Some(CompletionResult::Keywords {
             span,
             options: vec![KeywordItem {
@@ -1153,14 +1163,77 @@ fn suggest_ifdef_context(
         });
     }
 
-    // (c) inside the body — slice past the `{` and route to filter logic
-    let brace_idx = open_brace?;
-    let body = after_pipe[brace_idx + 1..].trim();
+    let if_open = if_open_brace?;
     // Gate name (e.g. `"$f"`) scopes optional-param completions inside the
     // body to *this* ifdef's gate. Falling back to `None` when the argument
     // is malformed is intentional: with no gate, all optionals are filtered
     // out, which is the safe direction (compiler would reject either way).
     let active_gate = open_paren.and_then(|p| extract_ifdef_gate_name(after_pipe, p));
+    // Locate the if-body's closing `}`. Filter exprs don't use `}`, so the
+    // first `}` after the opening brace is the if-body close.
+    let if_close = after_pipe[if_open + 1..].find('}').map(|p| if_open + 1 + p);
+
+    // (c) still inside the if-body — no closing `}` yet
+    let Some(if_close) = if_close else {
+        return suggest_inside_filter_body(
+            before,
+            span,
+            after_pipe[if_open + 1..].trim(),
+            params,
+            active_gate,
+        );
+    };
+
+    let after_if = after_pipe[if_close + 1..].trim_start();
+
+    // (d) after if-body close, no `else` typed yet — suggest `else`
+    if after_if.is_empty() {
+        return Some(CompletionResult::Keywords {
+            span,
+            options: vec![KeywordItem {
+                label: "else",
+                apply: Some("else { where "),
+                info: "Apply a different filter when the gating param is omitted",
+            }],
+        });
+    }
+
+    // The only valid continuation after the if-body is the `else` clause.
+    // Anything else is a typo/in-progress edit we can't help with.
+    let after_else_kw = after_if.strip_prefix("else")?;
+
+    // (e) `else` typed but no `{` yet — suggest opening the else body
+    let Some(else_open_rel) = after_else_kw.find('{') else {
+        return Some(CompletionResult::Keywords {
+            span,
+            options: vec![KeywordItem {
+                label: "{",
+                apply: Some("{ where "),
+                info: "Open the else filter body",
+            }],
+        });
+    };
+
+    // (f) inside the else-body — bail once the user has typed the closing
+    // `}` since the pipe-keywords logic on the next `|` takes over from there.
+    let else_body = &after_else_kw[else_open_rel + 1..];
+    if else_body.contains('}') {
+        return None;
+    }
+    suggest_inside_filter_body(before, span, else_body.trim(), params, active_gate)
+}
+
+/// Shared body of cases (c) and (f): cursor sits inside a `{ ... }` filter
+/// body that has already been opened and not yet closed. Empty body offers
+/// `where`; otherwise route the partial filter text through the regular
+/// filter-context logic.
+fn suggest_inside_filter_body(
+    before: &str,
+    span: Span,
+    body: &str,
+    params: &[ParamItem],
+    active_gate: Option<&str>,
+) -> Option<CompletionResult> {
     if body.is_empty() {
         return Some(CompletionResult::Keywords {
             span,
@@ -1171,7 +1244,6 @@ fn suggest_ifdef_context(
             }],
         });
     }
-
     let body_words: Vec<&str> = body.split_whitespace().collect();
     let body_first = body_words[0];
     let body_last = body_words.last().copied().unwrap_or(body_first);

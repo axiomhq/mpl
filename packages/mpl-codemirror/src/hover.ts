@@ -66,8 +66,14 @@ const KEYWORD_DOCS: Record<string, KeywordDoc> = {
   not: { description: "Logical NOT in filter expressions" },
   ifdef: {
     description:
-      "Conditionally apply a filter when an optional param is supplied. The body is dropped when the param is omitted.",
-    syntax: "| ifdef($param) { where <filter-expr> }",
+      "Conditionally apply a filter when an optional param is supplied. The body is dropped when the param is omitted; an optional `else` branch applies a different filter in that case.",
+    syntax:
+      "| ifdef($param) { where <filter-expr> } [else { where <else-filter-expr> }]",
+  },
+  else: {
+    description:
+      "Optional companion to `ifdef`: applies a filter when the gating optional param is *not* supplied. Only valid immediately after an `ifdef(...) { ... }` block.",
+    syntax: "| ifdef($param) { ... } else { where <filter-expr> }",
   },
   Option: {
     description:

@@ -620,6 +620,28 @@ fn ifdef_keyword_apply_text_opens_paren() {
 }
 
 #[test]
+fn else_keyword_apply_text_opens_else_body() {
+    // After the if-body's closing `}`, the only useful continuation is
+    // `else { where ` — the apply text should drop the user straight into
+    // the else filter body so the next keystroke is the filter expr.
+    let r =
+        completions_at("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" } #")
+            .expect("should produce else keyword completion");
+    assert_eq!(r.kind(), "keywords");
+    let labels = r.option_labels();
+    let applies = r.keyword_apply_texts();
+    let pos = labels
+        .iter()
+        .position(|l| *l == "else")
+        .expect("else should be suggested after the if-body's closing brace");
+    assert_eq!(
+        applies[pos],
+        Some("else { where "),
+        "else apply text should open the else body so the cursor lands inside the filter"
+    );
+}
+
+#[test]
 fn completions_param_type_apply_includes_semicolon_newline() {
     let query = "param $name: ";
     let r = compute_completions(query, query.len()).expect("should produce type completions");
@@ -1465,6 +1487,17 @@ fn completions_at(input: &str) -> Option<CompletionResult> {
 #[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { filter #"             => Some("tag")      ; "ifdef body filter alias suggests tag")]
 #[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" } | #" => Some("keywords") ; "after closed ifdef pipe again")]
 #[test_case("ds:metric | ifdef(#"                                                     => None             ; "ifdef arg with no optional params returns none")]
+// ── ifdef else ─────────────────────────────────────────────
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" }#"   => Some("keywords") ; "after if-body close suggests else (no space)")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" } #"  => Some("keywords") ; "after if-body close suggests else (with space)")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" } el#" => Some("keywords") ; "after if-body close partial else keyword")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" } else #"          => Some("keywords") ; "after else keyword suggests open brace")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" } else {#"         => Some("keywords") ; "else open brace suggests where")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" } else { #"        => Some("keywords") ; "else inside braces suggests where")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" } else { wh#"      => Some("keywords") ; "else body partial where keyword")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" } else { where #"  => Some("tag")      ; "else body where suggests tag")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" } else { where tag == #" => Some("params") ; "else body filter value suggests params")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" } else { where tag == \"y\" }#" => None ; "after closed ifdef-else returns none")]
 fn test_completion_kind(input: &str) -> Option<&'static str> {
     completions_at(input).map(|r| r.kind())
 }

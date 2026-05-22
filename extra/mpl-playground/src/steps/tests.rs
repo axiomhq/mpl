@@ -1370,6 +1370,90 @@ fn ifdef_step_is_a_no_op() {
     assert_eq!(result[1].as_ref().unwrap().len(), 2);
 }
 
+// When an `ifdef` carries an `else` branch, the param is by definition
+// unbound in the playground, so the else filter *must* fire — otherwise
+// the playground silently disagrees with the production interpreter,
+// which is exactly the kind of drift the playground exists to catch.
+#[test]
+fn ifdef_else_step_applies_else_filter_when_param_unbound() {
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(&[("host", "a")], vec![0.0], vec![1.0]),
+            s(&[("host", "b")], vec![0.0], vec![2.0]),
+        ],
+    );
+    let param = ParamDeclaration {
+        span: span(),
+        name: "container".into(),
+        typ: ParamType::Optional(TerminalParamType::Tag(TagType::String)),
+    };
+    // If-branch would keep host==a; else-branch keeps host==b. The param
+    // is unbound in the playground, so we expect the else-branch result.
+    let if_filter = Filter::Cmp {
+        field: "host".into(),
+        rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+            strumbra::SharedString::try_from("a").unwrap(),
+        ))),
+    };
+    let else_filter = Filter::Cmp {
+        field: "host".into(),
+        rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+            strumbra::SharedString::try_from("b").unwrap(),
+        ))),
+    };
+    let steps = vec![
+        step(source_node("ds", "m")),
+        step(StepNode::Ifdef {
+            param,
+            filter: if_filter,
+            else_filter: Some(else_filter),
+        }),
+    ];
+    let result = interpret(&steps, &datasets);
+
+    let after_ifdef = result[1].as_ref().expect("else branch should apply");
+    assert_eq!(after_ifdef.len(), 1, "else filter should drop host==a");
+    assert_eq!(after_ifdef[0].values, vec![2.0]);
+}
+
+#[test]
+fn ifdef_else_step_canonical_text_includes_else_branch() {
+    let param = ParamDeclaration {
+        span: span(),
+        name: "container".into(),
+        typ: ParamType::Optional(TerminalParamType::Tag(TagType::String)),
+    };
+    let filter = Filter::Cmp {
+        field: "host".into(),
+        rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+            strumbra::SharedString::try_from("a").unwrap(),
+        ))),
+    };
+    let else_filter = Filter::Cmp {
+        field: "host".into(),
+        rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+            strumbra::SharedString::try_from("b").unwrap(),
+        ))),
+    };
+    let node = StepNode::Ifdef {
+        param,
+        filter,
+        else_filter: Some(else_filter),
+    };
+    let text = node.to_string();
+    assert!(
+        text.starts_with("| ifdef($container) { where "),
+        "unexpected prefix: {text}"
+    );
+    assert!(
+        text.contains("} else { where "),
+        "canonical text should include the else branch: {text}"
+    );
+    assert!(text.ends_with(" }"), "unexpected suffix: {text}");
+}
+
 #[test]
 fn ifdef_step_canonical_text() {
     let param = ParamDeclaration {
