@@ -111,8 +111,8 @@ pub(crate) fn tokenize(src: &str) -> Vec<Token<'_>> {
                 let next = src.as_bytes().get(i + 1).copied();
                 // #/ starts a regex literal, #s/ starts a regex replace
                 let is_regex = next == Some(b'/');
-                let is_regex_replace = next == Some(b's')
-                    && src.as_bytes().get(i + 2).copied() == Some(b'/');
+                let is_regex_replace =
+                    next == Some(b's') && src.as_bytes().get(i + 2).copied() == Some(b'/');
                 if is_regex || is_regex_replace {
                     // skip past the opening delimiter (#/ or #s/)
                     i += if is_regex_replace { 3 } else { 2 };

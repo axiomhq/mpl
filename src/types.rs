@@ -126,10 +126,7 @@ impl<T> Parameterized<T> {
     Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Deserialize, serde::Serialize,
 )]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-pub struct Metric(
-    #[cfg_attr(feature = "bincode", bincode(with_serde))]
-    SharedString,
-);
+pub struct Metric(#[cfg_attr(feature = "bincode", bincode(with_serde))] SharedString);
 
 impl std::fmt::Display for Metric {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -284,7 +284,9 @@ impl Module {
 
     /// Iterate this module's map functions.
     pub fn mapping_function_iter(&self) -> impl Iterator<Item = (&str, &MapFunction)> {
-        self.mapping_functions.iter().map(|(k, v)| (k.0.as_str(), v))
+        self.mapping_functions
+            .iter()
+            .map(|(k, v)| (k.0.as_str(), v))
     }
 
     /// Iterate this module's group functions.
@@ -299,7 +301,9 @@ impl Module {
 
     /// Iterate this module's compute functions.
     pub fn compute_function_iter(&self) -> impl Iterator<Item = (&str, &ComputeFunction)> {
-        self.compute_functions.iter().map(|(k, v)| (k.0.as_str(), v))
+        self.compute_functions
+            .iter()
+            .map(|(k, v)| (k.0.as_str(), v))
     }
 
     /// Look up an align function by bare name.

@@ -404,12 +404,10 @@ fn dataset_no_metric_with_time_range_error_at_bracket() {
 fn diagnostics_for(query: &str) -> Vec<DiagnosticItem> {
     match compile(query, HashMap::new()) {
         Ok(_) => panic!("'{query}' should not compile"),
-        Err(CompileError::Parse(error)) => {
-            maybe_rewrite_escaped_dataset_error(
-                query,
-                crate::diagnostics::parse_error_diagnostic_items(&error),
-            )
-        }
+        Err(CompileError::Parse(error)) => maybe_rewrite_escaped_dataset_error(
+            query,
+            crate::diagnostics::parse_error_diagnostic_items(&error),
+        ),
         Err(CompileError::Type(_) | CompileError::Group(_) | CompileError::Ifdef(_)) => {
             panic!("'{query}' should be a parse error, not type/group/ifdef error")
         }

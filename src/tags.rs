@@ -24,10 +24,7 @@ pub enum TagValue {
     /// Float value
     Float(f64),
     /// String value
-    String(
-        #[cfg_attr(feature = "bincode", bincode(with_serde))]
-        SharedString,
-    ),
+    String(#[cfg_attr(feature = "bincode", bincode(with_serde))] SharedString),
 }
 impl TagValue {
     /// Returns the type of the tag value.

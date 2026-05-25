@@ -750,8 +750,8 @@ fn function_info_bucket_function() {
 
 #[test]
 fn function_info_submodule_unqualified_search() {
-    let info = lookup_function(&STDLIB, "linear")
-        .expect("linear should be found via submodule search");
+    let info =
+        lookup_function(&STDLIB, "linear").expect("linear should be found via submodule search");
     assert_eq!(info.label, "interpolate::linear");
 }
 

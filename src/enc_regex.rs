@@ -5,10 +5,7 @@ use regex::Regex;
 
 /// A wrapper around `regex::Regex` that can be serialized and deserialized via bincode
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
-pub struct EncodableRegex(
-    #[serde(with = "serde_regex")]
-    Regex,
-);
+pub struct EncodableRegex(#[serde(with = "serde_regex")] Regex);
 
 impl PartialEq for EncodableRegex {
     fn eq(&self, other: &Self) -> bool {

@@ -1,7 +1,7 @@
 //! Syntax highlighting tokenization for `MPL` queries.
-use serde::Serialize;
 use mpl_lang::{MPLParser, Rule};
 use pest::Parser as _;
+use serde::Serialize;
 
 use crate::Span;
 use crate::visit::{Node, PairVisitor, VisitAction};

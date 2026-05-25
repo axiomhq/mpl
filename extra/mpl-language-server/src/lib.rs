@@ -57,12 +57,13 @@ pub fn query_spec() -> String {
         .documentation(1)
         .unwrap_or_else(|e| format!("**COULD NOT RENDER STDLIB DOCS**: {e}"));
 
-    let examples_section = mpl_lang::examples::MPL
-        .iter()
-        .fold(String::new(), |mut s, (name, example)| {
-            let _ = write!(&mut s, "## {name}\n```\n{example}\n```\n");
-            s
-        });
+    let examples_section =
+        mpl_lang::examples::MPL
+            .iter()
+            .fold(String::new(), |mut s, (name, example)| {
+                let _ = write!(&mut s, "## {name}\n```\n{example}\n```\n");
+                s
+            });
 
     format!(
         "# MPL Metrics Query Specification\n\n{}\n\n# Standard library\n{}\n\n# Examples\n{}",
