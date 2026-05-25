@@ -1,6 +1,6 @@
 import { autocompletion, CompletionContext, CompletionResult, snippet } from "@codemirror/autocomplete";
 import { EditorState } from "@codemirror/state";
-import * as mpl from "@axiomhq/mpl";
+import * as mpl from "@axiomhq/mpl-language-server-wasm";
 import { type WasmArgType, formatArgs } from "./wasm-types";
 import { CompletionCache } from "./completion-cache";
 import { mplSystemParams } from "./system-params";

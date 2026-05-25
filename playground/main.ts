@@ -1,6 +1,6 @@
 // Alpine.js store — glues editor, pipeline, and UI together.
 
-import wasmInitLang from "@axiomhq/mpl";
+import wasmInitLanguageServer from "@axiomhq/mpl-language-server-wasm";
 import wasmInitPlayground, { Interpreter, RunOutput } from "@axiomhq/mpl-playground";
 import Alpine from "alpinejs";
 import { renderCharts, type ChartEntry } from "./charts";
@@ -41,7 +41,7 @@ function resolveTheme(theme: Theme): "dark" | "light" {
   return theme;
 }
 
-await Promise.all([wasmInitLang(), wasmInitPlayground()]);
+await Promise.all([wasmInitLanguageServer(), wasmInitPlayground()]);
 const interpreter = new Interpreter(datasets);
 
 function onEditorChange() {

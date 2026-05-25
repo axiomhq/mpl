@@ -18,7 +18,10 @@ export default defineConfig({
         import.meta.dirname,
         "../packages/mpl-codemirror/src/index.ts",
       ),
-      "@axiomhq/mpl": path.resolve(import.meta.dirname, "../packages/mpl/mpl_lang.js"),
+      "@axiomhq/mpl-language-server-wasm": path.resolve(
+        import.meta.dirname,
+        "../packages/mpl-language-server-wasm/mpl_language_server_wasm.js",
+      ),
       "@axiomhq/mpl-playground": path.resolve(import.meta.dirname, "wasm/mpl_playground.js"),
     },
     dedupe: [

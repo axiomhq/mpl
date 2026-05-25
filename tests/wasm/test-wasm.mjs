@@ -1,14 +1,14 @@
 /**
- * Wasm integration test for --features wasm (non-playground build).
+ * Wasm integration test for the mpl-language-server-wasm crate.
  *
- * Uses diagnostics() — always exported under --features wasm — to verify:
+ * Uses diagnostics() — always exported — to verify:
  *   - tests/examples/*.mpl  → no hard parse errors (errors with "not supported" /
  *                             "not implemented" messages are acceptable, mirroring
  *                             the tolerance in tests/parse.rs)
  *   - tests/errors/*.mpl    → at least one error diagnostic
  *
  * Usage: node tests/wasm/test-wasm.mjs [pkg-dir]
- *   pkg-dir defaults to "pkg" (relative to repo root)
+ *   pkg-dir defaults to "extra/mpl-language-server-wasm/pkg" (relative to repo root)
  */
 
 import { readFileSync, readdirSync } from "fs";
@@ -19,10 +19,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../..");
 const pkgDir = process.argv[2]
   ? resolve(process.argv[2])
-  : join(repoRoot, "pkg");
+  : join(repoRoot, "extra/mpl-language-server-wasm/pkg");
 
-const mpl = await import(join(pkgDir, "mpl_lang.js"));
-const wasmBytes = readFileSync(join(pkgDir, "mpl_lang_bg.wasm"));
+const mpl = await import(join(pkgDir, "mpl_language_server_wasm.js"));
+const wasmBytes = readFileSync(join(pkgDir, "mpl_language_server_wasm_bg.wasm"));
 mpl.initSync({ module: wasmBytes });
 
 if (typeof mpl.diagnostics !== "function") {

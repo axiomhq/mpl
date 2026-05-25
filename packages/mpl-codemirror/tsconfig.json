@@ -12,7 +12,7 @@
     "strict": true,
     "baseUrl": ".",
     "paths": {
-      "@axiomhq/mpl": ["../mpl/mpl_lang.d.ts"]
+      "@axiomhq/mpl-language-server-wasm": ["../mpl-language-server-wasm/mpl_language_server_wasm.d.ts"]
     }
   },
   "include": ["src"],

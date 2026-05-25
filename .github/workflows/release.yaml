@@ -50,27 +50,27 @@ jobs:
       - name: Install wasm-pack
         run: cargo install wasm-pack --locked
       - name: Build WASM
-        run: wasm-pack build --out-name mpl --out-dir packages/mpl --scope axiomhq --target web --profile wasm-release --no-opt --features wasm 
-      - name: Update mpl package.json
+        run: ./packages/build-mpl-wasm.sh
+      - name: Update mpl-language-server-wasm package.json
         run: |
           set -euo pipefail
 
           jq '
-            .name = "@axiomhq/mpl"
-            | .files = ["mpl.js", "mpl.d.ts", "mpl_bg.wasm", "mpl_bg.wasm.d.ts", "LICENSE-MIT", "LICENSE-APACHE"]
+            .name = "@axiomhq/mpl-language-server-wasm"
+            | .files = ["mpl_language_server_wasm.js", "mpl_language_server_wasm.d.ts", "mpl_language_server_wasm_bg.wasm", "mpl_language_server_wasm_bg.wasm.d.ts", "LICENSE-MIT", "LICENSE-APACHE"]
             | .repository.url = "git+https://github.com/axiomhq/mpl.git"
-          ' packages/mpl/package.json > packages/mpl/package.json.tmp
-          mv packages/mpl/package.json.tmp packages/mpl/package.json
+          ' packages/mpl-language-server-wasm/package.json > packages/mpl-language-server-wasm/package.json.tmp
+          mv packages/mpl-language-server-wasm/package.json.tmp packages/mpl-language-server-wasm/package.json
       - name: Type-check WASM bindings
-        working-directory: packages/mpl
+        working-directory: packages/mpl-language-server-wasm
         run: |
           npm install --no-save typescript
-          npx tsc --noEmit -t esnext mpl.d.ts
+          npx tsc --noEmit -t esnext mpl_language_server_wasm.d.ts
       - name: Build mpl-codemirror
         working-directory: packages/mpl-codemirror
         run: npm install && npm run build
-      - name: Publish mpl to npmjs.org
-        working-directory: packages/mpl
+      - name: Publish mpl-language-server-wasm to npmjs.org
+        working-directory: packages/mpl-language-server-wasm
         run: npm publish --access public
       - name: Publish mpl-codemirror to npmjs.org
         working-directory: packages/mpl-codemirror

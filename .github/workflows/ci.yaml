@@ -56,26 +56,6 @@ jobs:
             flags: unittests
             fail_ci_if_error: ${{ github.event_name == 'pull_request' }}
             verbose: true
-      - name: Generate code coverage (wasm)
-        env:
-          RUSTFLAGS: -D warnings
-        run: |
-          cargo llvm-cov --locked --no-report nextest --profile ci --no-default-features --features wasm
-          cargo llvm-cov report --locked --lcov --output-path lcov-wasm.txt
-      - name: Upload coverage to Codecov
-        if: github.event.pull_request.user.login != 'dependabot[bot]'
-        uses: Wandalen/wretry.action@v3
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-        with:
-          action: codecov/codecov-action@v4
-          attempt_limit: 6
-          attempt_delay: 10000
-          with: |
-            files: ./lcov-wasm.txt
-            flags: wasm
-            fail_ci_if_error: ${{ github.event_name == 'pull_request' }}
-            verbose: true
   test-typescript:
     runs-on: ubuntu-latest
     steps:
@@ -97,14 +77,14 @@ jobs:
       - name: Build wasm
         # --no-opt: wasm-pack's bundled wasm-opt crashes, and even system wasm-opt
         # increases gzipped size (our wasm-release profile already optimizes well).
-        run: wasm-pack build --scope axiomhq --target web --profile wasm-release --no-opt --no-default-features --features wasm
+        run: wasm-pack build extra/mpl-language-server-wasm --scope axiomhq --target web --profile wasm-release --no-opt
       - run: npm install typescript
-        working-directory: pkg
+        working-directory: extra/mpl-language-server-wasm/pkg
       - name: Check TypeScript types
-        run: npx tsc --noEmit -t esnext mpl_lang.d.ts
-        working-directory: pkg
+        run: npx tsc --noEmit -t esnext mpl_language_server_wasm.d.ts
+        working-directory: extra/mpl-language-server-wasm/pkg
       - name: Test wasm build against sample queries
-        run: node tests/wasm/test-wasm.mjs
+        run: node tests/wasm/test-wasm.mjs extra/mpl-language-server-wasm/pkg
   build-playground:
     runs-on: ubuntu-latest
     steps:
@@ -143,22 +123,22 @@ jobs:
         with:
           node-version: "24"
       - name: Build WASM (release flags)
-        run: wasm-pack build --out-name mpl --out-dir packages/mpl --scope axiomhq --target web --profile wasm-release --no-opt --features wasm
-      - name: Apply release rename to packages/mpl/package.json
+        run: ./packages/build-mpl-wasm.sh
+      - name: Apply release rename to packages/mpl-language-server-wasm/package.json
         # Must stay byte-identical to the equivalent step in release.yaml.
         run: |
           set -euo pipefail
           jq '
-            .name = "@axiomhq/mpl"
-            | .files = ["mpl.js", "mpl.d.ts", "mpl_bg.wasm", "mpl_bg.wasm.d.ts", "LICENSE-MIT", "LICENSE-APACHE"]
+            .name = "@axiomhq/mpl-language-server-wasm"
+            | .files = ["mpl_language_server_wasm.js", "mpl_language_server_wasm.d.ts", "mpl_language_server_wasm_bg.wasm", "mpl_language_server_wasm_bg.wasm.d.ts", "LICENSE-MIT", "LICENSE-APACHE"]
             | .repository.url = "git+https://github.com/axiomhq/mpl.git"
-          ' packages/mpl/package.json > packages/mpl/package.json.tmp
-          mv packages/mpl/package.json.tmp packages/mpl/package.json
+          ' packages/mpl-language-server-wasm/package.json > packages/mpl-language-server-wasm/package.json.tmp
+          mv packages/mpl-language-server-wasm/package.json.tmp packages/mpl-language-server-wasm/package.json
       - name: Type-check WASM bindings
-        working-directory: packages/mpl
+        working-directory: packages/mpl-language-server-wasm
         run: |
           npm install --no-save typescript
-          npx tsc --noEmit -t esnext mpl.d.ts
+          npx tsc --noEmit -t esnext mpl_language_server_wasm.d.ts
       - name: Build mpl-codemirror (the step that fails on name drift)
         working-directory: packages/mpl-codemirror
         run: npm install && npm run build

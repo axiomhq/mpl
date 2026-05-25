@@ -720,11 +720,9 @@ dependencies = [
 name = "mpl-language-server-wasm"
 version = "0.5.3"
 dependencies = [
- "mpl-lang",
  "mpl-language-server",
  "serde",
  "serde-wasm-bindgen",
- "tsify",
  "wasm-bindgen",
 ]
 
