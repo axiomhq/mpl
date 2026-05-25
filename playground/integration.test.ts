@@ -152,6 +152,17 @@ describe("parse + interpret end-to-end", () => {
         expect(s.values).toHaveLength(1);
       }
     });
+
+    it("rejects zero-duration alignment without freezing", () => {
+      const result = run(`\`dev.metrics\`:http_requests_total
+| filter path == #/.*(elastic\\/_bulk|ingest|(?:v1\\/(traces|logs|metrics))).*/
+| filter code == #/[123]../
+| align to 0m using prom::rate
+| group by method, path, code using sum`);
+      expect(result.length).toBe(5);
+      expect(err(result[3])).toContain("Align duration must be greater than zero");
+      expect("Ok" in result[4].result).toBe(true);
+    });
   });
 
   describe("group", () => {

@@ -852,6 +852,7 @@ fn apply_align(series: &[Series], align: &Align) -> Result<Vec<Series>> {
             .collect();
     };
     let window_sec = time_to_seconds(get_param(time)?)?;
+    ensure!(window_sec > 0.0, "Align duration must be greater than zero");
 
     series
         .iter()
@@ -1101,7 +1102,12 @@ fn apply_bucket(series: &[Series], bucket: &BucketBy) -> Result<Vec<Series>> {
 
     let mut result = Vec::new();
     let window_sec = if let Some(time) = bucket.time.as_ref() {
-        Some(time_to_seconds(get_param(time)?)?)
+        let window_sec = time_to_seconds(get_param(time)?)?;
+        ensure!(
+            window_sec > 0.0,
+            "Bucket duration must be greater than zero"
+        );
+        Some(window_sec)
     } else {
         None
     };
