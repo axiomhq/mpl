@@ -1,6 +1,6 @@
 // Alpine.js store — glues editor, pipeline, and UI together.
 
-import wasmInitLanguageServer from "@axiomhq/mpl-language-server-wasm";
+import wasmInitLanguageServer from "@axiomhq/mpl";
 import wasmInitPlayground, { Interpreter, RunOutput } from "@axiomhq/mpl-playground";
 import Alpine from "alpinejs";
 import { renderCharts, type ChartEntry } from "./charts";

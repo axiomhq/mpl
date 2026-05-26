@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import type { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
-import * as mpl from "@axiomhq/mpl-language-server-wasm";
+import * as mpl from "@axiomhq/mpl";
 import {
   mapDiagnostics,
   mplLintSource,

@@ -1,4 +1,4 @@
-// Stub for @axiomhq/mpl-language-server-wasm used during unit tests.
+// Stub for @axiomhq/mpl used during unit tests.
 // The real package is a WASM build artifact not committed to the repo.
 // Tests that exercise pure-JS logic (needsEscape, escapeIdent, …) don't
 // invoke any WASM functions, so returning undefined is sufficient.

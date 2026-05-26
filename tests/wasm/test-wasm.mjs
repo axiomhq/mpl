@@ -21,8 +21,8 @@ const pkgDir = process.argv[2]
   ? resolve(process.argv[2])
   : join(repoRoot, "extra/mpl-language-server-wasm/pkg");
 
-const mpl = await import(join(pkgDir, "mpl_language_server_wasm.js"));
-const wasmBytes = readFileSync(join(pkgDir, "mpl_language_server_wasm_bg.wasm"));
+const mpl = await import(join(pkgDir, "mpl.js"));
+const wasmBytes = readFileSync(join(pkgDir, "mpl_bg.wasm"));
 mpl.initSync({ module: wasmBytes });
 
 if (typeof mpl.diagnostics !== "function") {

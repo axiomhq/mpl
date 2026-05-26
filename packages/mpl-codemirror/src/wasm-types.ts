@@ -2,10 +2,11 @@
  * Shared WASM types and utilities for the MPL language server integration.
  *
  * These types mirror the Rust serde output from the
- * `mpl-language-server-wasm` crate. Centralised here to avoid duplication
- * across mpl-completions, mpl-hover, and mpl-signature-help.
+ * `mpl-language-server-wasm` crate (published on npm as `@axiomhq/mpl`).
+ * Centralised here to avoid duplication across mpl-completions, mpl-hover,
+ * and mpl-signature-help.
  */
-import * as mpl from "@axiomhq/mpl-language-server-wasm";
+import * as mpl from "@axiomhq/mpl";
 
 // ── WASM type definitions ──────────────────────────────────────
 

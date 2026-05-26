@@ -20,8 +20,8 @@
     "check:lint": "oxlint ."
   },
   "dependencies": {
+    "@axiomhq/mpl": "*",
     "@axiomhq/mpl-codemirror": "*",
-    "@axiomhq/mpl-language-server-wasm": "*",
     "@axiomhq/mpl-playground": "*",
     "@codemirror/autocomplete": "^6.18.0",
     "@codemirror/commands": "^6.7.0",
