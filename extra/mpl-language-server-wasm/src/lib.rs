@@ -4,10 +4,22 @@
 //! `JsValue` arguments into pure Rust types, calls the corresponding
 //! `mpl_language_server::*` function, and re-encodes the result.
 
+use std::collections::HashMap;
+
+use mpl_lang::{Query, compile, query::Source};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
 mod system_params;
+
+/// Parse `query` (ignoring warnings) into a `Query` AST. Used by the
+/// `parse_*` / `extract_dataset` shims below. Errors are stringified via
+/// `Debug` to avoid pulling miette's fancy formatter into the wasm bundle.
+fn parse(query: &str) -> Result<Query, String> {
+    compile(query, HashMap::<String, _>::new())
+        .map(|(q, _warnings)| q)
+        .map_err(|e| format!("{e:?}"))
+}
 
 /// Returns completion suggestions for the given cursor position.
 ///
@@ -49,6 +61,64 @@ pub fn tokenize(query: &str) -> JsValue {
     to_js_value(&tokens)
 }
 
+/// Extracts the dataset name from an `MPL` query string.
+///
+/// For `Simple` queries, returns the dataset from the source.
+/// For `Compute` queries, recurses into the left-hand side.
+/// Returns `None` if the query fails to parse.
+#[must_use]
+#[wasm_bindgen]
+pub fn extract_dataset(query: &str) -> Option<String> {
+    fn get_dataset(q: &Query) -> String {
+        match q {
+            Query::Simple {
+                source: Source { metric_id, .. },
+                ..
+            } => metric_id.dataset.to_string(),
+            Query::Compute { left, .. } => get_dataset(left),
+        }
+    }
+    let parsed = parse(query).ok()?;
+    Some(get_dataset(&parsed))
+}
+
+/// Parses a query string into a `Query` AST encoded as a JS object.
+#[wasm_bindgen]
+pub fn parse_wasm(query: &str) -> Result<JsValue, String> {
+    parse(query).map(|q| to_js_value(&q))
+}
+
+/// Parses a query string into a JSON representation of the `Query` AST.
+#[wasm_bindgen]
+pub fn parse_json(query: &str) -> Result<String, String> {
+    let parsed = parse(query)?;
+    serde_json::to_string_pretty(&parsed).map_err(|e| format!("Failed to serialize to JSON: {e}"))
+}
+
+/// Parses a query string into a RON representation of the `Query` AST.
+#[wasm_bindgen]
+pub fn parse_ron(query: &str) -> Result<String, String> {
+    let parsed = parse(query)?;
+    ron::ser::to_string_pretty(&parsed, ron::ser::PrettyConfig::default())
+        .map_err(|e| format!("Failed to serialize to RON: {e}"))
+}
+
+/// Converts a JSON representation of a `Query` back to an `MPL` query string.
+#[wasm_bindgen]
+pub fn print_json(query: &str) -> Result<String, String> {
+    let query: Query =
+        serde_json::from_str(query).map_err(|e| format!("Failed to deserialize from JSON: {e}"))?;
+    Ok(query.to_string())
+}
+
+/// Converts a RON representation of a `Query` back to an `MPL` query string.
+#[wasm_bindgen]
+pub fn print_ron(query: &str) -> Result<String, String> {
+    let query: Query =
+        ron::de::from_str(query).map_err(|e| format!("Failed to deserialize from RON: {e}"))?;
+    Ok(query.to_string())
+}
+
 /// Returns the MPL language specification for LLMs. Available only when
 /// the `examples` feature is enabled at build time.
 #[cfg(feature = "examples")]
@@ -68,4 +138,48 @@ fn to_js_value(value: &impl Serialize) -> JsValue {
     value
         .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
         .unwrap_or(JsValue::NULL)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Native smoke tests for the string-in/string-out shims. The
+    //! `JsValue`-returning shims (`parse_wasm`, etc.) require
+    //! `wasm-bindgen-test` and are exercised by `tests/wasm/test-wasm.mjs`
+    //! against the built wasm artifact.
+
+    use super::{extract_dataset, parse_json, parse_ron, print_json, print_ron};
+
+    const QUERY: &str = "my_dataset:my_metric";
+
+    #[test]
+    fn extract_dataset_returns_dataset_for_simple_query() {
+        assert_eq!(extract_dataset(QUERY), Some("my_dataset".to_string()));
+    }
+
+    #[test]
+    fn extract_dataset_returns_none_for_invalid_query() {
+        assert_eq!(extract_dataset("@@@ not a query @@@"), None);
+    }
+
+    #[test]
+    fn parse_print_json_roundtrips() {
+        let json = parse_json(QUERY).expect("parse_json");
+        let back = print_json(&json).expect("print_json");
+        // The printed query should still reference the same dataset / metric.
+        assert!(back.contains("my_dataset"));
+        assert!(back.contains("my_metric"));
+    }
+
+    #[test]
+    fn parse_print_ron_roundtrips() {
+        let ron = parse_ron(QUERY).expect("parse_ron");
+        let back = print_ron(&ron).expect("print_ron");
+        assert!(back.contains("my_dataset"));
+        assert!(back.contains("my_metric"));
+    }
+
+    #[test]
+    fn parse_json_reports_error_for_invalid_query() {
+        assert!(parse_json("@@@ not a query @@@").is_err());
+    }
 }
