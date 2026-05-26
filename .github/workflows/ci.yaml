@@ -77,11 +77,14 @@ jobs:
       - name: Build wasm
         # --no-opt: wasm-pack's bundled wasm-opt crashes, and even system wasm-opt
         # increases gzipped size (our wasm-release profile already optimizes well).
-        run: wasm-pack build extra/mpl-language-server-wasm --scope axiomhq --target web --profile wasm-release --no-opt
+        # --out-name mpl: the published @axiomhq/mpl package keeps mpl.{js,d.ts}
+        # / mpl_bg.wasm{,.d.ts} basenames independent of the Rust crate name;
+        # tests/wasm/test-wasm.mjs loads pkg/mpl.js and pkg/mpl_bg.wasm.
+        run: wasm-pack build extra/mpl-language-server-wasm --out-name mpl --scope axiomhq --target web --profile wasm-release --no-opt
       - run: npm install typescript
         working-directory: extra/mpl-language-server-wasm/pkg
       - name: Check TypeScript types
-        run: npx tsc --noEmit -t esnext mpl_language_server_wasm.d.ts
+        run: npx tsc --noEmit -t esnext mpl.d.ts
         working-directory: extra/mpl-language-server-wasm/pkg
       - name: Test wasm build against sample queries
         run: node tests/wasm/test-wasm.mjs extra/mpl-language-server-wasm/pkg
@@ -124,21 +127,21 @@ jobs:
           node-version: "24"
       - name: Build WASM (release flags)
         run: ./packages/build-mpl-wasm.sh
-      - name: Apply release rename to packages/mpl-language-server-wasm/package.json
+      - name: Apply release rename to packages/mpl/package.json
         # Must stay byte-identical to the equivalent step in release.yaml.
         run: |
           set -euo pipefail
           jq '
-            .name = "@axiomhq/mpl-language-server-wasm"
-            | .files = ["mpl_language_server_wasm.js", "mpl_language_server_wasm.d.ts", "mpl_language_server_wasm_bg.wasm", "mpl_language_server_wasm_bg.wasm.d.ts", "LICENSE-MIT", "LICENSE-APACHE"]
+            .name = "@axiomhq/mpl"
+            | .files = ["mpl.js", "mpl.d.ts", "mpl_bg.wasm", "mpl_bg.wasm.d.ts", "LICENSE-MIT", "LICENSE-APACHE"]
             | .repository.url = "git+https://github.com/axiomhq/mpl.git"
-          ' packages/mpl-language-server-wasm/package.json > packages/mpl-language-server-wasm/package.json.tmp
-          mv packages/mpl-language-server-wasm/package.json.tmp packages/mpl-language-server-wasm/package.json
+          ' packages/mpl/package.json > packages/mpl/package.json.tmp
+          mv packages/mpl/package.json.tmp packages/mpl/package.json
       - name: Type-check WASM bindings
-        working-directory: packages/mpl-language-server-wasm
+        working-directory: packages/mpl
         run: |
           npm install --no-save typescript
-          npx tsc --noEmit -t esnext mpl_language_server_wasm.d.ts
+          npx tsc --noEmit -t esnext mpl.d.ts
       - name: Build mpl-codemirror (the step that fails on name drift)
         working-directory: packages/mpl-codemirror
         run: npm install && npm run build
