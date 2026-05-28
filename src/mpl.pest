@@ -89,6 +89,7 @@ regex_filter = { cmp_re ~ regex }
 
 kw_not = { "not" }
 
+kw_extend      =  { "extend" }
 kw_filter      =  { "filter" }
 kw_sample      =  { "sample" }
 kw_where       =  { "where" }
@@ -102,7 +103,9 @@ filter_and     =  { filter_not ~ ("and" ~ filter_not)* }
 filter_or      =  { filter_and ~ ("or" ~ filter_and)* }
 filter_expr    = _{ filter_keyword ~ filter_or }
 filter_rule    =  { pipe_keyword ~ filter_expr }
+extend_rule    =  { pipe_keyword ~ kw_extend ~ extend_expr ~ (", " ~ extend_expr)* }
 ifdef_rule     =  { pipe_keyword ~ kw_ifdef ~ "(" ~ param_ident ~ ")" ~ "{" ~ filter_expr ~ "}" ~ (kw_else ~ "{" ~ filter_expr ~ "}")? }
+extend_expr    =  { ident ~ "=" ~ value }
 sample_expr    =  { kw_sample ~ number }
 sample_rule    =  { pipe_keyword ~ sample_expr }
 
@@ -147,7 +150,7 @@ bucket_by                      = { "bucket" ~ ("by" ~ tags)? ~ ("to" ~ time_rela
 join                           = { "join" ~ tags ~ "from" ~ metric_id ~ "by" ~ tags }
 pipe_rule                      = { pipe_keyword ~ (align | map | group_by | replace | bucket_by | join | as) }
 
-simple_query = { source ~ (sample_rule)? ~ (filter_rule | ifdef_rule)* ~ pipe_rule* }
+simple_query = { source ~ (sample_rule)? ~ (filter_rule | ifdef_rule)* ~ pipe_rule* ~ extend_rule* }
 
 compute_op   = { "/" | "*" | "+" | "-" }
 compute_fn   = { func | compute_op }

@@ -404,6 +404,7 @@ impl QueryWalker for ParamTypecheckVisitor {}
 #[cfg(feature = "examples")]
 pub mod examples {
     //! Examples used in tests and documentation
+
     macro_rules! example {
         ($name:expr) => {
             (
@@ -417,14 +418,18 @@ pub mod examples {
     pub const SPEC: &str = include_str!("../spec.md");
 
     /// MPL examples used in tests and documentation
-    pub const MPL: [(&str, &str); 18] = [
+    pub const MPL: [(&str, &str); 22] = [
         example!("align-rate"),
         example!("as"),
         example!("enrich"),
+        example!("extend"),
         example!("filtered-histogram"),
-        example!("histogram_rate"),
+        example!("group-by"),
         example!("histogram"),
+        example!("histogram_rate"),
         example!("ifdef"),
+        example!("ifdef-else"),
+        example!("inf"),
         example!("map-gt"),
         example!("map-mul"),
         example!("nested-enrich"),
@@ -432,9 +437,9 @@ pub mod examples {
         example!("rate"),
         example!("replace_labels"),
         example!("set"),
+        example!("slo"),
         example!("slo-histogram"),
         example!("slo-ingest-rate"),
-        example!("slo"),
         example!("sum_rate"),
     ];
 }

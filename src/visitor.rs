@@ -6,7 +6,7 @@ use crate::{
     linker::ComputeFunction,
     query::{
         Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter, FilterOrIfDef,
-        GroupBy, Mapping, ParamDeclaration, Source,
+        GroupBy, Mapping, ParamDeclaration, Source, TagExtend,
     },
     tags::TagValue,
     types::{Dataset, Metric, Parameterized},
@@ -363,6 +363,30 @@ pub trait QueryVisitor {
         let _ = param;
         Ok(())
     }
+
+    /// Visit params.
+    fn visit_extends(&mut self, extends: &mut Vec<TagExtend>) -> Result<VisitRes, Self::Error> {
+        let _ = extends;
+        Ok(VisitRes::Walk)
+    }
+
+    /// Leave extends.
+    fn leave_extends(&mut self, extends: &mut Vec<TagExtend>) -> Result<(), Self::Error> {
+        let _ = extends;
+        Ok(())
+    }
+
+    /// Visit a extend.
+    fn visit_extend(&mut self, extend: &mut TagExtend) -> Result<VisitRes, Self::Error> {
+        let _ = extend;
+        Ok(VisitRes::Walk)
+    }
+
+    /// Leave a extend.
+    fn leave_extend(&mut self, extend: &mut TagExtend) -> Result<(), Self::Error> {
+        let _ = extend;
+        Ok(())
+    }
 }
 
 macro_rules! stop {
@@ -389,6 +413,7 @@ pub trait QueryWalker: QueryVisitor {
                 aggregates,
                 directives,
                 params,
+                extends,
             } => {
                 QueryWalker::walk_source(self, source)?;
                 QueryWalker::walk_sample(self, sample)?;
@@ -396,6 +421,7 @@ pub trait QueryWalker: QueryVisitor {
                 QueryWalker::walk_aggregates(self, aggregates)?;
                 QueryWalker::walk_directives(self, directives)?;
                 QueryWalker::walk_params(self, params)?;
+                QueryWalker::walk_extends(self, extends)?;
             }
             Query::Compute {
                 left,
@@ -405,6 +431,7 @@ pub trait QueryWalker: QueryVisitor {
                 aggregates,
                 directives,
                 params,
+                extends,
             } => {
                 QueryWalker::walk(self, left)?;
                 QueryWalker::walk(self, right)?;
@@ -413,6 +440,7 @@ pub trait QueryWalker: QueryVisitor {
                 QueryWalker::walk_aggregates(self, aggregates)?;
                 QueryWalker::walk_directives(self, directives)?;
                 QueryWalker::walk_params(self, params)?;
+                QueryWalker::walk_extends(self, extends)?;
             }
         }
 
@@ -672,6 +700,26 @@ pub trait QueryWalker: QueryVisitor {
     fn walk_param(&mut self, param: &mut ParamDeclaration) -> Result<(), Self::Error> {
         QueryVisitor::visit_param(self, param)?;
         QueryVisitor::leave_param(self, param)?;
+        Ok(())
+    }
+
+    /// Walk params.
+    fn walk_extends(&mut self, extends: &mut Vec<TagExtend>) -> Result<(), Self::Error> {
+        stop!(
+            QueryVisitor::visit_extends(self, extends),
+            QueryVisitor::leave_extends(self, extends)
+        );
+        for param in extends.iter_mut() {
+            QueryWalker::walk_extend(self, param)?;
+        }
+        QueryVisitor::leave_extends(self, extends)?;
+        Ok(())
+    }
+
+    /// Walk a param.
+    fn walk_extend(&mut self, extend: &mut TagExtend) -> Result<(), Self::Error> {
+        QueryVisitor::visit_extend(self, extend)?;
+        QueryVisitor::leave_extend(self, extend)?;
         Ok(())
     }
 }

@@ -15,8 +15,8 @@ use crate::{
     query::{
         Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter, FilterOrIfDef,
         GroupBy, Mapping, MetricId, ParamDeclaration, ParamType, ParamValue, Params, Query,
-        RelativeTime, Source, TagType, TerminalParamType, Time, TimeRange, TimeUnit, WarningReason,
-        Warnings,
+        RelativeTime, Source, TagExtend, TagType, TerminalParamType, Time, TimeRange, TimeUnit,
+        WarningReason, Warnings,
     },
     stdlib::STDLIB,
     tags::TagValue,
@@ -554,6 +554,43 @@ fn parse_regex(source: &Pair<'_, Rule>) -> Result<Regex> {
     Ok(regex::Regex::new(&unescape(&source.as_str()[1..], '/'))?)
 }
 
+fn parse_value(source: Pair<Rule>, state: &State) -> Result<Parameterized<TagValue>> {
+    source.assert_type(Rule::value)?;
+    let mut inner = source.into_inner();
+    let next = inner.n()?;
+
+    if next.as_rule() == Rule::param_ident {
+        // param
+        let span = pair_to_source_span(&next);
+        let mut inner = next.into_inner();
+        let next = inner.n()?;
+        let param = resolve_param(&next, state)?;
+        Ok(Parameterized::Param {
+            span,
+            param: param.clone(),
+        })
+    } else {
+        // concrete value
+        match next.as_rule() {
+            Rule::string => Ok(Parameterized::Concrete(TagValue::String(
+                SharedString::try_from(unescape(next.as_str(), '"'))?,
+            ))),
+            Rule::number => match parse_number(next)? {
+                Number::Int(value) => Ok(Parameterized::Concrete(TagValue::Int(value))),
+                Number::Float(value) => Ok(Parameterized::Concrete(TagValue::Float(value))),
+            },
+            Rule::bool => Ok(Parameterized::Concrete(TagValue::Bool(
+                next.as_str().to_string().parse()?,
+            ))),
+            rule => Err(ParseError::Unexpected {
+                span: pair_to_source_span(&next),
+                rule,
+                expected: vec![Rule::string, Rule::number, Rule::bool],
+            }),
+        }
+    }
+}
+
 fn parse_value_filter(field: String, source: Pair<Rule>, state: &State) -> Result<Filter> {
     source.assert_type(Rule::value_filter)?;
     let mut inner = source.into_inner();
@@ -561,42 +598,7 @@ fn parse_value_filter(field: String, source: Pair<Rule>, state: &State) -> Resul
     let operator = parse_cmp(&operator_pair)?;
     let next = inner.n()?;
 
-    next.assert_type(Rule::value)?;
-    let mut inner = next.into_inner();
-    let next = inner.n()?;
-
-    let value = if next.as_rule() == Rule::param_ident {
-        // param
-        let span = pair_to_source_span(&next);
-        let mut inner = next.into_inner();
-        let next = inner.n()?;
-        let param = resolve_param(&next, state)?;
-        Parameterized::Param {
-            span,
-            param: param.clone(),
-        }
-    } else {
-        // concrete value
-        match next.as_rule() {
-            Rule::string => Parameterized::Concrete(TagValue::String(SharedString::try_from(
-                unescape(next.as_str(), '"'),
-            )?)),
-            Rule::number => match parse_number(next)? {
-                Number::Int(value) => Parameterized::Concrete(TagValue::Int(value)),
-                Number::Float(value) => Parameterized::Concrete(TagValue::Float(value)),
-            },
-            Rule::bool => {
-                Parameterized::Concrete(TagValue::Bool(next.as_str().to_string().parse()?))
-            }
-            rule => {
-                return Err(ParseError::Unexpected {
-                    span: pair_to_source_span(&next),
-                    rule,
-                    expected: vec![Rule::string, Rule::number, Rule::bool],
-                });
-            }
-        }
-    };
+    let value = parse_value(next, state)?;
 
     let rhs = match operator {
         "==" => Cmp::Eq(value),
@@ -1237,12 +1239,15 @@ impl Parser {
         let op = self.parse_compute_fn(next)?;
 
         let mut aggregates = Vec::new();
+        let mut extends = Vec::new();
 
         // Read post-compute pipe_rule* from compute_query (the outer pairs),
         for next in &mut pairs {
             match next.as_rule() {
                 Rule::EOI => break,
                 Rule::pipe_rule => aggregates.push(self.parse_pipe(next, state)?),
+                Rule::extend_rule => extends.extend(self.parse_extend(next, state)?),
+
                 rule => {
                     return Err(ParseError::Unexpected {
                         span: pair_to_source_span(&next),
@@ -1259,20 +1264,17 @@ impl Parser {
             name,
             op,
             aggregates,
+            extends,
             directives: state.directives.clone(),
             params: state.params.clone(),
         })
     }
     fn parse_simple_query(&self, state: &State, mut pairs: Pairs<Rule>) -> Result<Query> {
-        let (source, as_) = parse_source(
-            pairs.next().ok_or(ParseError::EOF {
-                span: miette::SourceSpan::new(0.into(), 0),
-            })?,
-            state,
-        )?;
+        let (source, as_) = parse_source(pairs.n()?, state)?;
         let mut sample = None;
         let mut filters = Vec::new();
         let mut aggregates = Vec::new();
+        let mut extends = Vec::new();
         if let Some(as_) = as_ {
             aggregates.push(Aggregate::As(as_));
         }
@@ -1295,6 +1297,7 @@ impl Parser {
                     filters.push(FilterOrIfDef::Filter(parse_filter(next, state)?));
                 }
                 Rule::pipe_rule => aggregates.push(self.parse_pipe(next, state)?),
+                Rule::extend_rule => extends.extend(self.parse_extend(next, state)?),
                 rule => {
                     return Err(ParseError::Unexpected {
                         span: pair_to_source_span(&next),
@@ -1310,6 +1313,7 @@ impl Parser {
             source,
             filters,
             aggregates,
+            extends,
             directives: state.directives.clone(),
             params: state.params.clone(),
         })
@@ -1349,6 +1353,39 @@ impl Parser {
             }),
         }
     }
+
+    #[allow(clippy::unused_self)] // we will need self
+    fn parse_extend_expr(&self, source: Pair<Rule>, state: &State) -> Result<TagExtend> {
+        source.assert_type(Rule::extend_expr)?;
+        let mut inner = source.into_inner();
+
+        let next = inner.n()?;
+        let tag = parse_ident(&next)?;
+        let next = inner.n()?;
+        let value = parse_value(next, state)?;
+        Ok(TagExtend { tag, value })
+    }
+
+    #[allow(clippy::unused_self)] // we will need self
+    fn parse_extend(&self, source: Pair<Rule>, state: &State) -> Result<Vec<TagExtend>> {
+        source.assert_type(Rule::extend_rule)?;
+        let mut inner = source.into_inner();
+
+        let keyword = inner.n()?;
+        keyword.assert_type(Rule::pipe_keyword)?;
+        let keyword = inner.n()?;
+        keyword.assert_type(Rule::kw_extend)?;
+
+        let mut result = Vec::with_capacity(1);
+
+        let next = inner.n()?;
+        result.push(self.parse_extend_expr(next, state)?);
+        while let Ok(next) = inner.n() {
+            result.push(self.parse_extend_expr(next, state)?);
+        }
+        Ok(result)
+    }
+
     fn parse_map(&self, source: Pair<Rule>) -> Result<Mapping> {
         source.assert_type(Rule::map)?;
         let mut inner = source.into_inner();

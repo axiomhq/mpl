@@ -241,6 +241,15 @@ pub enum Aggregate {
     As(As),
 }
 
+/// Extends a series with a new tag
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct TagExtend {
+    /// The name of the new tag to add
+    pub tag: String,
+    /// The value of the new tag
+    pub value: Parameterized<TagValue>,
+}
+
 /// Values for directives
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -922,6 +931,8 @@ pub enum Query {
         directives: Directives,
         /// The params
         params: Params,
+        /// Tag extends to apply to the series
+        extends: Vec<TagExtend>,
         /// How to sample series
         sample: Option<f64>,
     },
@@ -937,6 +948,8 @@ pub enum Query {
         op: ComputeFunction,
         /// The aggregates to apply to the combined data
         aggregates: Vec<Aggregate>,
+        /// The tag extends to apply to the combined data
+        extends: Vec<TagExtend>,
         /// The directives
         directives: Directives,
         /// The params

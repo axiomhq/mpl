@@ -5,7 +5,7 @@ use crate::{
     linker::MapFunction,
     query::{
         Aggregate, Align, As, BucketBy, Cmp, Filter, GroupBy, Mapping, MetricId, RelativeTime,
-        Source, Time, TimeRange, TimeUnit,
+        Source, TagExtend, Time, TimeRange, TimeUnit,
     },
     types::{BucketType, MapType, Parameterized},
 };
@@ -26,6 +26,7 @@ impl Display for Query {
                 source,
                 filters,
                 aggregates,
+                extends,
                 directives: _,
                 params: _,
             } => {
@@ -61,6 +62,12 @@ impl Display for Query {
                 for aggregate in aggregates {
                     writeln!(f, " {aggregate}")?;
                 }
+                if let Some((first, rest)) = extends.split_first() {
+                    writeln!(f, "| extend {first}")?;
+                    for extend in rest {
+                        writeln!(f, ", {extend}")?;
+                    }
+                }
             }
             Query::Compute {
                 left,
@@ -68,6 +75,7 @@ impl Display for Query {
                 name,
                 op,
                 aggregates,
+                extends,
                 directives: _,
                 params: _,
             } => {
@@ -76,13 +84,23 @@ impl Display for Query {
                 for aggregate in aggregates {
                     writeln!(f, " {aggregate}")?;
                 }
+                if let Some((first, rest)) = extends.split_first() {
+                    writeln!(f, "| extend {first}")?;
+                    for extend in rest {
+                        writeln!(f, ", {extend}")?;
+                    }
+                }
             }
         }
 
         Ok(())
     }
 }
-
+impl Display for TagExtend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{tag} = {value}", tag = self.tag, value = self.value)
+    }
+}
 impl Display for Source {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Source {

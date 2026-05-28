@@ -241,6 +241,7 @@ fn query_steps(query: Query) -> Vec<PipeStep> {
             filters,
             aggregates,
             sample,
+            extends: _,
             directives: _,
             params: _,
         } => {
@@ -277,6 +278,7 @@ fn query_steps(query: Query) -> Vec<PipeStep> {
             op,
             aggregates,
             directives: _,
+            extends: _,
             params: _,
         } => {
             let mut steps = vec![step(StepNode::Compute {
