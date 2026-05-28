@@ -10,7 +10,7 @@ interface Token {
   type: TokenType;
 }
 
-const MPL_KEYWORDS = /\b(filter|where|map|group|by|using|align|to|over|from|bucket|join|compute|set|replace|as|and|or|not|is|param|ifdef|else|rate|increase|histogram|interpolate_delta_histogram|interpolate_cumulative_histogram|count|avg|sum|min|max)\b/g;
+const MPL_KEYWORDS = /\b(filter|where|map|group|by|using|align|to|over|from|bucket|join|compute|set|replace|as|extend|and|or|not|is|param|ifdef|else|rate|increase|histogram|interpolate_delta_histogram|interpolate_cumulative_histogram|count|avg|sum|min|max)\b/g;
 const COMMENT_RE = /\/\/[^\n]*/g;
 const STRING_RE = /"(?:[^"\\]|\\.)*"/g;
 const REGEX_RE = /#s?\/(?:[^/\\]|\\.)*(?:\/(?:[^/\\]|\\.)*)?\//g;

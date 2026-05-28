@@ -5,7 +5,7 @@ use mpl_lang::{
     linker::{AlignFunction, ComputeFunction, GroupFunction, MapFunction},
     query::{
         Aggregate, Align, As, BucketBy, Cmp, Filter, GroupBy, Mapping, MetricId, ParamDeclaration,
-        ParamType, Source, TagType, TerminalParamType,
+        ParamType, Source, TagExtend, TagType, TerminalParamType,
     },
     tags::TagValue,
     types::{BucketSpec, BucketType, ComputeType, Dataset, MapType, Metric},
@@ -1550,6 +1550,95 @@ fn group_sum_tolerates_all_nan_column() {
     assert!(values[0].is_nan(), "all-NaN column must emit NaN");
     assert_eq!(values[1], 4.0);
     assert_eq!(values[2], 6.0);
+}
+
+// ── extend ────────────────────────────────────────────────────────────────────────
+
+fn extend_step(pairs: &[(&str, TagValue)]) -> StepNode {
+    StepNode::Extend(
+        pairs
+            .iter()
+            .map(|(k, v)| TagExtend {
+                tag: (*k).to_string(),
+                value: Parameterized::Concrete(v.clone()),
+            })
+            .collect(),
+    )
+}
+
+/// Happy path: extend adds a constant tag to every series in the pipeline.
+#[test]
+fn extend_adds_tag_to_all_series() {
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(&[("host", "a")], vec![0.0], vec![1.0]),
+            s(&[("host", "b")], vec![0.0], vec![2.0]),
+        ],
+    );
+    let steps = vec![
+        step(source_node("ds", "m")),
+        step(extend_step(&[(
+            "env",
+            TagValue::String("prod".try_into().unwrap()),
+        )])),
+    ];
+    let result = interpret(&steps, &datasets);
+    let extended = result[1].as_ref().expect("extend must succeed");
+    assert_eq!(extended.len(), 2);
+    for series in extended {
+        assert_eq!(series.tags.get("env").map(String::as_str), Some("prod"));
+    }
+}
+
+/// Multiple tags in a single extend are all materialised.
+#[test]
+fn extend_supports_multiple_tags() {
+    let datasets = ds("ds", "m", vec![s(&[("host", "a")], vec![0.0], vec![1.0])]);
+    let steps = vec![
+        step(source_node("ds", "m")),
+        step(extend_step(&[
+            ("env", TagValue::String("prod".try_into().unwrap())),
+            ("version", TagValue::Int(42)),
+            ("healthy", TagValue::Bool(true)),
+        ])),
+    ];
+    let result = interpret(&steps, &datasets);
+    let extended = result[1].as_ref().expect("extend must succeed");
+    assert_eq!(
+        extended[0].tags.get("env").map(String::as_str),
+        Some("prod")
+    );
+    assert_eq!(
+        extended[0].tags.get("version").map(String::as_str),
+        Some("42")
+    );
+    assert_eq!(
+        extended[0].tags.get("healthy").map(String::as_str),
+        Some("true")
+    );
+}
+
+/// ADR-0006 invariant: extending a tag that already exists on any series
+/// is an error. The playground enforces this at interpret time so users
+/// see the failure mode in the editor.
+#[test]
+fn extend_rejects_conflicting_tag() {
+    let datasets = ds("ds", "m", vec![s(&[("host", "a")], vec![0.0], vec![1.0])]);
+    let steps = vec![
+        step(source_node("ds", "m")),
+        step(extend_step(&[(
+            "host",
+            TagValue::String("override".try_into().unwrap()),
+        )])),
+    ];
+    let result = interpret(&steps, &datasets);
+    let err = result[1].as_ref().expect_err("conflict must fail");
+    assert!(
+        err.to_string().contains("host"),
+        "error must name the conflicting tag, got: {err}"
+    );
 }
 
 /// `count` differs from sum/avg/min/max on an all-NaN column: counting

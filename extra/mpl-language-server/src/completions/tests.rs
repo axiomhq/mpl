@@ -1494,6 +1494,16 @@ fn completions_at(input: &str) -> Option<CompletionResult> {
 #[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" } else { where #"  => Some("tag")      ; "else body where suggests tag")]
 #[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" } else { where tag == #" => Some("params") ; "else body filter value suggests params")]
 #[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" } else { where tag == \"y\" }#" => None ; "after closed ifdef-else returns none")]
+// ── extend ─────────────────────────────────────────────────
+#[test_case("ds:metric | extend #"                                  => None             ; "extend bare expects ident no completions")]
+#[test_case("ds:metric | extend foo #"                              => Some("keywords") ; "extend ident suggests equals")]
+#[test_case("ds:metric | extend foo = #"                            => None             ; "extend value with no params returns none")]
+#[test_case("param $s: string;\nds:metric | extend foo = #"        => Some("params")   ; "extend value with string param suggests params")]
+#[test_case("param $r: Regex;\nds:metric | extend foo = #"         => None             ; "extend value excludes regex params")]
+#[test_case("ds:metric | extend foo = \"x\" #"                    => Some("keywords") ; "extend complete suggests comma continuation")]
+#[test_case("ds:metric | extend foo = \"x\", #"                   => None             ; "extend after comma free-form ident")]
+// ── extend in compute tail ─────────────────────────────────────────
+#[test_case("( a:b , c:d ) | compute r using / | extend foo #"     => Some("keywords") ; "extend in compute tail also suggests equals")]
 fn test_completion_kind(input: &str) -> Option<&'static str> {
     completions_at(input).map(|r| r.kind())
 }
@@ -1522,6 +1532,9 @@ fn test_completion_kind(input: &str) -> Option<&'static str> {
 #[test_case("`dev.metrics`:http_requests_total\n| align to 42s #", &["using"]          ; "align after to suggests using")]
 #[test_case("param $name: #", &["Dataset", "Metric", "Duration", "string", "int", "float", "bool", "Regex", "Option<string>", "Option<int>", "Option<float>", "Option<bool>", "Option<Regex>"] ; "all param types")]
 #[test_case("`my-dataset`:`my-metric` | #", &["sample", "where", "map"]                           ; "backtick pipe keywords")]
+// ── extend keyword in pipe-keywords list ──────────────────────
+#[test_case("ds:metric | #", &["extend"]                                                          ; "extend offered as pipe keyword")]
+#[test_case("( a:b , c:d ) | compute r using / | #", &["extend"]                                  ; "extend offered in compute tail")]
 // ── ifdef keyword in pipe-keywords list ─────────────────────────
 #[test_case("param $f: Option<string>;\nds:metric | #", &["ifdef"]                              ; "ifdef offered when optional present")]
 #[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == $f and other #", &["and", "or"]

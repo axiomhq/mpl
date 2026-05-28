@@ -49,6 +49,11 @@ const KEYWORD_DOCS: Record<string, KeywordDoc> = {
     syntax: "| join <tags> from <metric_id> by <tags>",
   },
   as: { description: "Rename the output metric", syntax: "| as <name>" },
+  extend: {
+    description:
+      "Add new constant-valued tags to every series after aggregation. Each tag must be net-new for the query — a series that already carries the tag causes the query to fail. Only constant values (strings, numbers, booleans, or scalar params) are supported.",
+    syntax: "| extend <tag> = <value>, ...",
+  },
   set: {
     description: "Set query directives (time range, resolution)",
     syntax: "set <directive> = <value>;",

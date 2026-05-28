@@ -932,6 +932,7 @@ pub enum Query {
         /// The params
         params: Params,
         /// Tag extends to apply to the series
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         extends: Vec<TagExtend>,
         /// How to sample series
         sample: Option<f64>,
@@ -949,6 +950,7 @@ pub enum Query {
         /// The aggregates to apply to the combined data
         aggregates: Vec<Aggregate>,
         /// The tag extends to apply to the combined data
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         extends: Vec<TagExtend>,
         /// The directives
         directives: Directives,

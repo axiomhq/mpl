@@ -237,6 +237,20 @@ The `as` operator renames the metric within the pipeline. It can appear both on 
 | as cpu_usage_rate
 ```
 
+### Extending
+
+The `extend` operator adds constant-valued tags to every series produced by the query. It is meant for enriching results with additional metadata that did not exist on the source series — for example, stamping every result with the environment the query was issued from.
+
+```mpl
+| extend env = "prod", tier = "frontend"
+```
+
+`extend` runs after the aggregation phase (alignment, grouping, bucketing, mapping). This guarantees the operation never blows up the work the aggregation phase had to do.
+
+A tag added by `extend` must be **net-new** for the query: if any input series already carries a tag with the same name the query fails. This avoids any need to specify a merge rule for conflicting values; if you want to overwrite an existing tag, drop it first via `group by` and re-add it with `extend`.
+
+Only constant values are supported in this iteration — string, integer, float, and boolean literals, or scalar parameters of those types. Expressions over series values are intentionally out of scope; see ADR-0006 for the rationale.
+
 ## Computation
 
 The `compute` operator queries two metrics and combines the results into a new metric. The underlying data structure ensures joins are non-overlapping. The `compute` operator supports nested computations.

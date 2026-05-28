@@ -1044,6 +1044,11 @@ fn pipe_keywords(
             apply: Some("as "),
             info: "Rename the metric",
         },
+        KeywordItem {
+            label: "extend",
+            apply: Some("extend "),
+            info: "Add new constant-valued tags to every series after aggregation",
+        },
     ]);
     CompletionResult::Keywords { span, options }
 }
@@ -1390,8 +1395,97 @@ fn suggest_pipe_rule(
             span,
             options: vec![],
         }),
+        "extend" => suggest_extend_pipe(words, last, span, params),
         _ => None,
     }
+}
+
+/// Completions inside an `| extend <tag> = <value>, ...` clause.
+///
+/// The tag identifier is free-form (the ADR requires it be net-new for the
+/// query, so we cannot offer tag completions). Returning `None` for those
+/// positions matches how the dispatcher handles other free-form positions
+/// like `| as <name>`.
+///
+/// Cursor positions handled:
+///   - `| extend foo `              → suggest `=`
+///   - `| extend foo = `            → suggest params (string/int/float/bool)
+///   - `| extend foo = "x" `      → suggest `,` to continue, or no-op
+///   - `| extend foo = "x", `     → free-form ident, no completions
+fn suggest_extend_pipe(
+    words: &[&str],
+    last: &str,
+    span: Span,
+    params: &[ParamItem],
+) -> Option<CompletionResult> {
+    // `extend` alone or with a trailing comma waits for the user to type a
+    // new tag name; we have no tag completions to offer for net-new tags.
+    if words.len() == 1 || last.ends_with(',') {
+        return None;
+    }
+
+    // After a complete `extend ident = <value>` clause, suggest the comma
+    // continuation. The value position is the last token whenever it is a
+    // string/number/bool literal and the previous token was `=`.
+    if words.len() >= 4 && words[words.len() - 2] == "=" && is_extend_value_literal(last) {
+        return Some(CompletionResult::Keywords {
+            span,
+            options: vec![KeywordItem {
+                label: ",",
+                apply: Some(", "),
+                info: "Add another tag",
+            }],
+        });
+    }
+
+    // After `=` token — suggest declared params with scalar types.
+    if last == "=" {
+        return suggest_extend_value_params(span, params);
+    }
+
+    // After a bare identifier (`| extend foo `) — suggest the `=` operator.
+    if words.len() == 2 {
+        return Some(CompletionResult::Keywords {
+            span,
+            options: vec![KeywordItem {
+                label: "=",
+                apply: Some("= "),
+                info: "Assign a constant value to the new tag",
+            }],
+        });
+    }
+
+    None
+}
+
+/// Returns true when `tok` looks like a complete literal value
+/// (string, number, or bool) that can appear on the RHS of an extend.
+fn is_extend_value_literal(tok: &str) -> bool {
+    if tok == "true" || tok == "false" {
+        return true;
+    }
+    if tok.starts_with('"') && tok.len() >= 2 && tok.ends_with('"') {
+        return true;
+    }
+    // Numbers: leading digit (the grammar's `number` rule), tolerating a
+    // trailing comma which the dispatcher already strips for the comma case.
+    tok.chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_digit() || c == '-')
+        && tok
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '.' || c == '-' || c == 'e' || c == 'E' || c == '+')
+}
+
+/// Params allowed on the RHS of an extend. Mirrors the predicate used by
+/// `suggest_filter_value_params` minus regex (regex is not a tag value).
+fn suggest_extend_value_params(span: Span, params: &[ParamItem]) -> Option<CompletionResult> {
+    suggest_params(span, params, None, |typ| {
+        matches!(
+            typ,
+            ParamType::String | ParamType::Bool | ParamType::Int | ParamType::Float
+        )
+    })
 }
 
 fn suggest_bucket_pipe(

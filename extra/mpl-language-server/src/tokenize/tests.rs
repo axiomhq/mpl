@@ -271,6 +271,32 @@ fn sample_number_highlighted() {
     assert_eq!(num.kind, TokenType::Number);
 }
 
+// ── extend keyword ──────────────────────────────────
+
+#[test]
+fn keyword_extend() {
+    let query = "ds:metric | extend env = \"prod\"";
+    let tokens = collect_tokens(query).expect("should tokenize");
+    let kw = tokens
+        .iter()
+        .find(|t| &query[t.span.from..t.span.to] == "extend")
+        .expect("should have extend keyword");
+    assert_eq!(kw.kind, TokenType::Keyword);
+}
+
+#[test]
+fn extend_value_literal_highlighted() {
+    // The string literal on the RHS of extend should be tokenised as a
+    // string, not blurred into the surrounding ident/keyword tokens.
+    let query = "ds:metric | extend env = \"prod\"";
+    let tokens = collect_tokens(query).expect("should tokenize");
+    let s = tokens
+        .iter()
+        .find(|t| &query[t.span.from..t.span.to] == "\"prod\"")
+        .expect("should have string token");
+    assert_eq!(s.kind, TokenType::String);
+}
+
 // ── full sequence verification ───────────────────────────────────
 
 #[test]

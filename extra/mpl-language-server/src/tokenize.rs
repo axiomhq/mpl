@@ -53,6 +53,7 @@ fn token_type(rule: Rule) -> Option<TokenType> {
         | Rule::kw_sample
         | Rule::kw_ifdef
         | Rule::kw_else
+        | Rule::kw_extend
         | Rule::kw_is
         | Rule::bucket_conversion
         | Rule::bucket_by_fn

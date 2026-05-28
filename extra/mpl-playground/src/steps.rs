@@ -20,7 +20,7 @@ use mpl_lang::{
     linker::{AlignFunction, ComputeFunction, GroupFunction, MapFunction},
     query::{
         Aggregate, Align, As, BucketBy, Cmp, Filter, FilterOrIfDef, GroupBy, Mapping,
-        ParamDeclaration, RelativeTime, Source, TagType, TimeUnit,
+        ParamDeclaration, RelativeTime, Source, TagExtend, TagType, TimeUnit,
     },
     tags::TagValue,
     types::{BucketSpec, MapType, Parameterized, TagsType, TimeType},
@@ -60,6 +60,8 @@ pub enum StepNode {
     Aggregate(Aggregate),
     /// A sample clause.
     Sample(f64),
+    /// An extend clause that adds constant-valued tags to every series.
+    Extend(Vec<TagExtend>),
     /// A parse or interpretation error.
     Error(String),
     /// A compute query.
@@ -97,6 +99,19 @@ impl Display for StepNode {
             }
             StepNode::Aggregate(a) => write!(f, "{a}"),
             StepNode::Sample(v) => write!(f, "| sample {v}"),
+            StepNode::Extend(extends) => {
+                // Mirrors the canonical `Display` impl in `mpl_lang::query::fmt`.
+                let mut first = true;
+                for e in extends {
+                    if first {
+                        write!(f, "| extend {e}")?;
+                        first = false;
+                    } else {
+                        write!(f, ", {e}")?;
+                    }
+                }
+                Ok(())
+            }
             StepNode::Error(msg) => write!(f, "/* error: {msg} */"),
             StepNode::Compute {
                 left,
@@ -241,12 +256,15 @@ fn query_steps(query: Query) -> Vec<PipeStep> {
             filters,
             aggregates,
             sample,
-            extends: _,
+            extends,
             directives: _,
             params: _,
         } => {
             let mut steps = Vec::with_capacity(
-                1 + usize::from(sample.is_some()) + filters.len() + aggregates.len(),
+                1 + usize::from(sample.is_some())
+                    + filters.len()
+                    + aggregates.len()
+                    + usize::from(!extends.is_empty()),
             );
             steps.push(step(StepNode::Source(source)));
             if let Some(rate) = sample {
@@ -269,6 +287,12 @@ fn query_steps(query: Query) -> Vec<PipeStep> {
                     .into_iter()
                     .map(|aggregate| step(StepNode::Aggregate(aggregate))),
             );
+            // Extends are a single step at the tail — the grammar groups all
+            // `extend_rule*` together after the aggregation phase (see ADR-0006),
+            // so collapsing them into one step matches the user's mental model.
+            if !extends.is_empty() {
+                steps.push(step(StepNode::Extend(extends)));
+            }
             steps
         }
         Query::Compute {
@@ -278,7 +302,7 @@ fn query_steps(query: Query) -> Vec<PipeStep> {
             op,
             aggregates,
             directives: _,
-            extends: _,
+            extends,
             params: _,
         } => {
             let mut steps = vec![step(StepNode::Compute {
@@ -292,6 +316,9 @@ fn query_steps(query: Query) -> Vec<PipeStep> {
                     .into_iter()
                     .map(|aggregate| step(StepNode::Aggregate(aggregate))),
             );
+            if !extends.is_empty() {
+                steps.push(step(StepNode::Extend(extends)));
+            }
             steps
         }
     }
@@ -319,6 +346,7 @@ pub fn interpret(pipe_steps: &[PipeStep], datasets: &Datasets) -> Vec<Result<Vec
                 else_filter: None, ..
             } => Ok(series.clone()),
             StepNode::Sample(rate) => apply_sample(&series, *rate),
+            StepNode::Extend(extends) => apply_extend(&series, extends),
             StepNode::Error(msg) => Err(eyre!("{msg}")),
             StepNode::Aggregate(agg) => apply_aggregate(&series, agg),
             StepNode::Compute { .. } => {
@@ -474,6 +502,42 @@ fn apply_filter(series: &[Series], filter: &Filter) -> Result<Vec<Series>> {
         }
     }
     Ok(result)
+}
+
+/// Materialises a list of `| extend tag = value` clauses onto every series.
+///
+/// Enforces ADR-0006's "net-new tag" invariant at interpret time: the
+/// playground rejects an extend whose key already appears on any input
+/// series, mirroring the runtime semantics documented in the ADR.
+fn apply_extend(series: &[Series], extends: &[TagExtend]) -> Result<Vec<Series>> {
+    for ext in extends {
+        if series.iter().any(|s| s.tags.contains_key(&ext.tag)) {
+            bail!(
+                "extend tag `{}` is not net-new: at least one series already carries it",
+                ext.tag
+            );
+        }
+    }
+    let new_pairs: Vec<(String, String)> = extends
+        .iter()
+        .map(|ext| Ok((ext.tag.clone(), raw_tag(get_param(&ext.value)?))))
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(series
+        .iter()
+        .map(|s| {
+            let mut tags = s.tags.clone();
+            for (k, v) in &new_pairs {
+                tags.insert(k.clone(), v.clone());
+            }
+            Series {
+                name: series_name(&tags),
+                tags,
+                timestamps: s.timestamps.clone(),
+                values: s.values.clone(),
+            }
+        })
+        .collect())
 }
 
 fn apply_sample(series: &[Series], rate: f64) -> Result<Vec<Series>> {
