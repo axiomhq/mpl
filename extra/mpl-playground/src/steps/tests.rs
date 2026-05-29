@@ -134,7 +134,7 @@ fn filter_eq() {
     );
     let filter = Filter::Cmp {
         field: "host".into(),
-        rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+        rhs: Cmp::Eq(Expr::Const(TagValue::String(
             strumbra::SharedString::try_from("a").unwrap(),
         ))),
     };
@@ -170,7 +170,7 @@ fn filter_unknown_tag() {
     let datasets = ds("ds", "m", vec![s(&[], vec![0.0], vec![1.0])]);
     let filter = Filter::Cmp {
         field: "missing".into(),
-        rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+        rhs: Cmp::Eq(Expr::Const(TagValue::String(
             strumbra::SharedString::try_from("x").unwrap(),
         ))),
     };
@@ -548,7 +548,7 @@ fn filter_ne() {
     );
     let filter = Filter::Cmp {
         field: "h".into(),
-        rhs: Cmp::Ne(Parameterized::Concrete(TagValue::String(
+        rhs: Cmp::Ne(Expr::Const(TagValue::String(
             strumbra::SharedString::try_from("a").unwrap(),
         ))),
     };
@@ -570,7 +570,7 @@ fn filter_gt() {
     );
     let filter = Filter::Cmp {
         field: "code".into(),
-        rhs: Cmp::Gt(Parameterized::Concrete(TagValue::Int(300))),
+        rhs: Cmp::Gt(Expr::Const(TagValue::Int(300))),
     };
     let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
     let result = interpret(&steps, &datasets);
@@ -590,7 +590,7 @@ fn filter_ge() {
     );
     let filter = Filter::Cmp {
         field: "code".into(),
-        rhs: Cmp::Ge(Parameterized::Concrete(TagValue::Int(300))),
+        rhs: Cmp::Ge(Expr::Const(TagValue::Int(300))),
     };
     let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
     let result = interpret(&steps, &datasets);
@@ -609,7 +609,7 @@ fn filter_lt() {
     );
     let filter = Filter::Cmp {
         field: "code".into(),
-        rhs: Cmp::Lt(Parameterized::Concrete(TagValue::Int(300))),
+        rhs: Cmp::Lt(Expr::Const(TagValue::Int(300))),
     };
     let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
     let result = interpret(&steps, &datasets);
@@ -629,7 +629,7 @@ fn filter_le() {
     );
     let filter = Filter::Cmp {
         field: "code".into(),
-        rhs: Cmp::Le(Parameterized::Concrete(TagValue::Int(300))),
+        rhs: Cmp::Le(Expr::Const(TagValue::Int(300))),
     };
     let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
     let result = interpret(&steps, &datasets);
@@ -673,13 +673,13 @@ fn filter_and_or_not() {
     let f_and = Filter::And(vec![
         Filter::Cmp {
             field: "a".into(),
-            rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+            rhs: Cmp::Eq(Expr::Const(TagValue::String(
                 strumbra::SharedString::try_from("1").unwrap(),
             ))),
         },
         Filter::Cmp {
             field: "b".into(),
-            rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+            rhs: Cmp::Eq(Expr::Const(TagValue::String(
                 strumbra::SharedString::try_from("2").unwrap(),
             ))),
         },
@@ -693,13 +693,13 @@ fn filter_and_or_not() {
     let f_or = Filter::Or(vec![
         Filter::Cmp {
             field: "a".into(),
-            rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+            rhs: Cmp::Eq(Expr::Const(TagValue::String(
                 strumbra::SharedString::try_from("1").unwrap(),
             ))),
         },
         Filter::Cmp {
             field: "a".into(),
-            rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+            rhs: Cmp::Eq(Expr::Const(TagValue::String(
                 strumbra::SharedString::try_from("2").unwrap(),
             ))),
         },
@@ -711,7 +711,7 @@ fn filter_and_or_not() {
     // NOT a == "1" => third series
     let f_not = Filter::Not(Box::new(Filter::Cmp {
         field: "a".into(),
-        rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+        rhs: Cmp::Eq(Expr::Const(TagValue::String(
             strumbra::SharedString::try_from("1").unwrap(),
         ))),
     }));
@@ -733,7 +733,7 @@ fn filter_missing_tag_returns_false() {
     );
     let filter = Filter::Cmp {
         field: "a".into(),
-        rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+        rhs: Cmp::Eq(Expr::Const(TagValue::String(
             strumbra::SharedString::try_from("1").unwrap(),
         ))),
     };
@@ -1352,7 +1352,7 @@ fn ifdef_step_is_a_no_op() {
     };
     let filter = Filter::Cmp {
         field: "host".into(),
-        rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+        rhs: Cmp::Eq(Expr::Const(TagValue::String(
             strumbra::SharedString::try_from("a").unwrap(),
         ))),
     };
@@ -1393,13 +1393,13 @@ fn ifdef_else_step_applies_else_filter_when_param_unbound() {
     // is unbound in the playground, so we expect the else-branch result.
     let if_filter = Filter::Cmp {
         field: "host".into(),
-        rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+        rhs: Cmp::Eq(Expr::Const(TagValue::String(
             strumbra::SharedString::try_from("a").unwrap(),
         ))),
     };
     let else_filter = Filter::Cmp {
         field: "host".into(),
-        rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+        rhs: Cmp::Eq(Expr::Const(TagValue::String(
             strumbra::SharedString::try_from("b").unwrap(),
         ))),
     };
@@ -1427,13 +1427,13 @@ fn ifdef_else_step_canonical_text_includes_else_branch() {
     };
     let filter = Filter::Cmp {
         field: "host".into(),
-        rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+        rhs: Cmp::Eq(Expr::Const(TagValue::String(
             strumbra::SharedString::try_from("a").unwrap(),
         ))),
     };
     let else_filter = Filter::Cmp {
         field: "host".into(),
-        rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+        rhs: Cmp::Eq(Expr::Const(TagValue::String(
             strumbra::SharedString::try_from("b").unwrap(),
         ))),
     };
@@ -1463,7 +1463,7 @@ fn ifdef_step_canonical_text() {
     };
     let filter = Filter::Cmp {
         field: "host".into(),
-        rhs: Cmp::Eq(Parameterized::Concrete(TagValue::String(
+        rhs: Cmp::Eq(Expr::Const(TagValue::String(
             strumbra::SharedString::try_from("a").unwrap(),
         ))),
     };
@@ -1560,7 +1560,7 @@ fn extend_step(pairs: &[(&str, TagValue)]) -> StepNode {
             .iter()
             .map(|(k, v)| TagExtend {
                 tag: (*k).to_string(),
-                value: Parameterized::Concrete(v.clone()),
+                value: Expr::Const(v.clone()),
             })
             .collect(),
     )

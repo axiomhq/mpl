@@ -19,7 +19,7 @@ use mpl_lang::{
     Query, compile,
     linker::{AlignFunction, ComputeFunction, GroupFunction, MapFunction},
     query::{
-        Aggregate, Align, As, BucketBy, Cmp, Filter, FilterOrIfDef, GroupBy, Mapping,
+        Aggregate, Align, As, BucketBy, Cmp, Expr, Filter, FilterOrIfDef, GroupBy, Mapping,
         ParamDeclaration, RelativeTime, Source, TagExtend, TagType, TimeUnit,
     },
     tags::TagValue,
@@ -372,6 +372,15 @@ fn get_param<T>(p: &Parameterized<T>) -> Result<&T> {
     }
 }
 
+fn get_expr(e: &Expr) -> Result<&TagValue> {
+    match e {
+        Expr::Const(v) => Ok(v),
+        Expr::Param { .. } => {
+            bail!("Parameterized values are not supported in the playground")
+        }
+    }
+}
+
 fn raw_tag(v: &TagValue) -> String {
     match v {
         TagValue::Null => String::new(),
@@ -414,26 +423,26 @@ fn eval_source(src: &Source, datasets: &Datasets) -> Result<Vec<Series>> {
 
 fn evaluate_cmp(tag_val: &str, rhs: &Cmp) -> Result<bool> {
     match rhs {
-        Cmp::Eq(p) => Ok(tag_val == raw_tag(get_param(p)?)),
-        Cmp::Ne(p) => Ok(tag_val != raw_tag(get_param(p)?)),
+        Cmp::Eq(p) => Ok(tag_val == raw_tag(get_expr(p)?)),
+        Cmp::Ne(p) => Ok(tag_val != raw_tag(get_expr(p)?)),
         Cmp::Gt(p) => {
             let lhs: f64 = tag_val.parse().unwrap_or(f64::NAN);
-            let rhs_f: f64 = raw_tag(get_param(p)?).parse().unwrap_or(f64::NAN);
+            let rhs_f: f64 = raw_tag(get_expr(p)?).parse().unwrap_or(f64::NAN);
             Ok(lhs > rhs_f)
         }
         Cmp::Ge(p) => {
             let lhs: f64 = tag_val.parse().unwrap_or(f64::NAN);
-            let rhs_f: f64 = raw_tag(get_param(p)?).parse().unwrap_or(f64::NAN);
+            let rhs_f: f64 = raw_tag(get_expr(p)?).parse().unwrap_or(f64::NAN);
             Ok(lhs >= rhs_f)
         }
         Cmp::Lt(p) => {
             let lhs: f64 = tag_val.parse().unwrap_or(f64::NAN);
-            let rhs_f: f64 = raw_tag(get_param(p)?).parse().unwrap_or(f64::NAN);
+            let rhs_f: f64 = raw_tag(get_expr(p)?).parse().unwrap_or(f64::NAN);
             Ok(lhs < rhs_f)
         }
         Cmp::Le(p) => {
             let lhs: f64 = tag_val.parse().unwrap_or(f64::NAN);
-            let rhs_f: f64 = raw_tag(get_param(p)?).parse().unwrap_or(f64::NAN);
+            let rhs_f: f64 = raw_tag(get_expr(p)?).parse().unwrap_or(f64::NAN);
             Ok(lhs <= rhs_f)
         }
         Cmp::RegEx(p) => {
@@ -520,7 +529,7 @@ fn apply_extend(series: &[Series], extends: &[TagExtend]) -> Result<Vec<Series>>
     }
     let new_pairs: Vec<(String, String)> = extends
         .iter()
-        .map(|ext| Ok((ext.tag.clone(), raw_tag(get_param(&ext.value)?))))
+        .map(|ext| Ok((ext.tag.clone(), raw_tag(get_expr(&ext.value)?))))
         .collect::<Result<Vec<_>>>()?;
 
     Ok(series
