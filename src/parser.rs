@@ -432,26 +432,37 @@ fn parse_int(source: &Pair<Rule>) -> Result<i64> {
     Ok(res)
 }
 
+fn parse_float(next: &Pair<Rule>) -> Result<f64> {
+    match next.as_rule() {
+        Rule::float => Ok(next.as_str().parse()?),
+        Rule::inf => match next.as_str() {
+            "inf" | "+inf" => Ok(f64::INFINITY),
+            "-inf" => Ok(f64::NEG_INFINITY),
+            _ => Err(ParseError::Unexpected {
+                span: pair_to_source_span(next),
+                rule: next.as_rule(),
+                expected: vec![],
+            }),
+        },
+        rule => Err(ParseError::Unexpected {
+            span: pair_to_source_span(next),
+            rule,
+            expected: vec![Rule::inf, Rule::float],
+        }),
+    }
+}
+
 fn parse_number(source: Pair<Rule>) -> Result<Number> {
     source.assert_type(Rule::number)?;
     let mut inner = source.into_inner();
     let next = inner.n()?;
     let res = match next.as_rule() {
         Rule::int => Ok(Number::Int(parse_int(&next)?)),
-        Rule::float => Ok(Number::Float(next.as_str().parse()?)),
-        Rule::inf => match next.as_str() {
-            "inf" | "+inf" => Ok(Number::Float(f64::INFINITY)),
-            "-inf" => Ok(Number::Float(f64::NEG_INFINITY)),
-            _ => Err(ParseError::Unexpected {
-                span: pair_to_source_span(&next),
-                rule: next.as_rule(),
-                expected: vec![],
-            }),
-        },
+        Rule::float | Rule::inf => Ok(Number::Float(parse_float(&next)?)),
         rule => Err(ParseError::Unexpected {
             span: pair_to_source_span(&next),
             rule,
-            expected: vec![Rule::int, Rule::float],
+            expected: vec![Rule::int, Rule::inf, Rule::float],
         }),
     };
     inner.assert_empty()?;
@@ -459,20 +470,18 @@ fn parse_number(source: Pair<Rule>) -> Result<Number> {
 }
 
 fn parse_directive_value(source: Pair<Rule>) -> Result<DirectiveValue> {
-    source.assert_type(Rule::value)?;
+    source.assert_type(Rule::r#const)?;
     let mut inner = source.into_inner();
     let next = inner.n()?;
     match next.as_rule() {
         Rule::string => Ok(DirectiveValue::String(unescape(next.as_str(), '"'))),
-        Rule::number => match parse_number(next)? {
-            Number::Int(value) => Ok(DirectiveValue::Int(value)),
-            Number::Float(value) => Ok(DirectiveValue::Float(value)),
-        },
+        Rule::int => Ok(DirectiveValue::Int(parse_int(&next)?)),
+        Rule::float | Rule::inf => Ok(DirectiveValue::Float(parse_float(&next)?)),
         Rule::bool => Ok(DirectiveValue::Bool(next.as_str().to_string().parse()?)),
         rule => Err(ParseError::Unexpected {
             span: pair_to_source_span(&next),
             rule,
-            expected: vec![Rule::string, Rule::number, Rule::bool],
+            expected: vec![Rule::string, Rule::int, Rule::float, Rule::inf, Rule::bool],
         }),
     }
 }
@@ -554,40 +563,52 @@ fn parse_regex(source: &Pair<'_, Rule>) -> Result<Regex> {
     Ok(regex::Regex::new(&unescape(&source.as_str()[1..], '/'))?)
 }
 
-fn parse_value(source: Pair<Rule>, state: &State) -> Result<Parameterized<TagValue>> {
-    source.assert_type(Rule::value)?;
+fn parse_expr(source: Pair<Rule>, state: &State) -> Result<Parameterized<TagValue>> {
+    source.assert_type(Rule::expr)?;
     let mut inner = source.into_inner();
     let next = inner.n()?;
 
-    if next.as_rule() == Rule::param_ident {
-        // param
-        let span = pair_to_source_span(&next);
-        let mut inner = next.into_inner();
-        let next = inner.n()?;
-        let param = resolve_param(&next, state)?;
-        Ok(Parameterized::Param {
-            span,
-            param: param.clone(),
-        })
-    } else {
-        // concrete value
-        match next.as_rule() {
-            Rule::string => Ok(Parameterized::Concrete(TagValue::String(
-                SharedString::try_from(unescape(next.as_str(), '"'))?,
-            ))),
-            Rule::number => match parse_number(next)? {
-                Number::Int(value) => Ok(Parameterized::Concrete(TagValue::Int(value))),
-                Number::Float(value) => Ok(Parameterized::Concrete(TagValue::Float(value))),
-            },
-            Rule::bool => Ok(Parameterized::Concrete(TagValue::Bool(
-                next.as_str().to_string().parse()?,
-            ))),
-            rule => Err(ParseError::Unexpected {
-                span: pair_to_source_span(&next),
-                rule,
-                expected: vec![Rule::string, Rule::number, Rule::bool],
-            }),
+    match next.as_rule() {
+        Rule::param_ident => {
+            // param
+            let span = pair_to_source_span(&next);
+            let mut inner = next.into_inner();
+            let next = inner.n()?;
+            let param = resolve_param(&next, state)?;
+            Ok(Parameterized::Param {
+                span,
+                param: param.clone(),
+            })
         }
+        Rule::r#const => {
+            next.assert_type(Rule::r#const)?;
+            let mut inner = next.into_inner();
+            let next = inner.n()?;
+
+            // concrete value
+            match next.as_rule() {
+                Rule::string => Ok(Parameterized::Concrete(TagValue::String(
+                    SharedString::try_from(unescape(next.as_str(), '"'))?,
+                ))),
+                Rule::float | Rule::inf => Ok(Parameterized::Concrete(TagValue::Float(
+                    parse_float(&next)?,
+                ))),
+                Rule::int => Ok(Parameterized::Concrete(TagValue::Int(parse_int(&next)?))),
+                Rule::bool => Ok(Parameterized::Concrete(TagValue::Bool(
+                    next.as_str().to_string().parse()?,
+                ))),
+                rule => Err(ParseError::Unexpected {
+                    span: pair_to_source_span(&next),
+                    rule,
+                    expected: vec![Rule::string, Rule::float, Rule::inf, Rule::int, Rule::bool],
+                }),
+            }
+        }
+        _ => Err(ParseError::Unexpected {
+            span: pair_to_source_span(&next),
+            rule: next.as_rule(),
+            expected: vec![Rule::param_ident, Rule::expr],
+        }),
     }
 }
 
@@ -598,7 +619,7 @@ fn parse_value_filter(field: String, source: Pair<Rule>, state: &State) -> Resul
     let operator = parse_cmp(&operator_pair)?;
     let next = inner.n()?;
 
-    let value = parse_value(next, state)?;
+    let value = parse_expr(next, state)?;
 
     let rhs = match operator {
         "==" => Cmp::Eq(value),
@@ -668,41 +689,48 @@ pub(crate) fn parse_param_value(
                 rule,
             }),
         },
-        TerminalParamType::Tag(TagType::String) => match next.as_rule() {
-            Rule::string => Ok(ParamValue::String(unescape(next.as_str(), '"'))),
-            rule => Err(ParseParamError::TypeMismatch {
-                declared_typ: param.typ,
-                rule,
-            }),
-        },
-        TerminalParamType::Tag(TagType::Int) => match next.as_rule() {
-            Rule::int => Ok(ParamValue::Int(parse_int(&next)?)),
-            rule => Err(ParseParamError::TypeMismatch {
-                declared_typ: param.typ,
-                rule,
-            }),
-        },
-        TerminalParamType::Tag(TagType::Float) => match next.as_rule() {
-            Rule::float => Ok(ParamValue::Float(next.as_str().parse()?)),
-            rule => Err(ParseParamError::TypeMismatch {
-                declared_typ: param.typ,
-                rule,
-            }),
-        },
-        TerminalParamType::Tag(TagType::Bool) => match next.as_rule() {
-            Rule::bool => Ok(ParamValue::Bool(
-                next.as_str()
-                    .to_string()
-                    .parse()
-                    .map_err(ParseParamError::ParseBool)?,
-            )),
-            rule => Err(ParseParamError::TypeMismatch {
-                declared_typ: param.typ,
-                rule,
-            }),
-        },
+        TerminalParamType::Tag(TagType::String) => Ok(ParamValue::String(unescape(
+            const_type(next, Rule::string, param.typ)?.as_str(),
+            '"',
+        ))),
+        TerminalParamType::Tag(TagType::Int) => Ok(ParamValue::Int(parse_int(&const_type(
+            next,
+            Rule::int,
+            param.typ,
+        )?)?)),
+        TerminalParamType::Tag(TagType::Float) => Ok(ParamValue::Float(
+            const_type(next, Rule::float, param.typ)?.as_str().parse()?,
+        )),
+        TerminalParamType::Tag(TagType::Bool) => Ok(ParamValue::Bool(
+            const_type(next, Rule::bool, param.typ)?
+                .as_str()
+                .parse()
+                .map_err(ParseParamError::ParseBool)?,
+        )),
         TerminalParamType::Tag(TagType::Null) => Err(ParseParamError::NoneParam),
     }
+}
+
+fn const_type(
+    src: Pair<Rule>,
+    rule_type: Rule,
+    declared_typ: ParamType,
+) -> core::result::Result<Pair<Rule>, ParseParamError> {
+    if src.as_rule() != Rule::r#const {
+        return Err(ParseParamError::TypeMismatch {
+            declared_typ,
+            rule: src.as_rule(),
+        });
+    }
+    let mut inner = src.into_inner();
+    let next = inner.n()?;
+    if next.as_rule() != rule_type {
+        return Err(ParseParamError::TypeMismatch {
+            declared_typ,
+            rule: next.as_rule(),
+        });
+    }
+    Ok(next)
 }
 
 fn parse_regex_filter(field: String, source: Pair<Rule>) -> Result<Filter> {
@@ -1137,11 +1165,11 @@ impl Parser {
         let value = if let Some(v) = inner.next() {
             match v.as_rule() {
                 Rule::plain_ident | Rule::escaped_ident => DirectiveValue::Ident(parse_ident(&v)?),
-                Rule::value => parse_directive_value(v)?,
+                Rule::r#const => parse_directive_value(v)?,
                 rule => Err(ParseError::Unexpected {
                     span: pair_to_source_span(&v),
                     rule,
-                    expected: vec![Rule::escaped_ident, Rule::plain_ident, Rule::value],
+                    expected: vec![Rule::escaped_ident, Rule::plain_ident, Rule::r#const],
                 })?,
             }
         } else {
@@ -1362,7 +1390,7 @@ impl Parser {
         let next = inner.n()?;
         let tag = parse_ident(&next)?;
         let next = inner.n()?;
-        let value = parse_value(next, state)?;
+        let value = parse_expr(next, state)?;
         Ok(TagExtend { tag, value })
     }
 

@@ -79,12 +79,11 @@ source = { metric_id ~ time_range? ~ as? }
 
 cmp    = @{ "==" | "!=" | "<=" | "<" | ">=" | ">" }
 cmp_re = @{ "==" | "!=" }
-value  =  { string | number | bool | param_ident }
 
 kw_is = { "is" }
 
 is_filter    = { kw_is ~ tag_type }
-value_filter = { cmp ~ value }
+value_filter = { cmp ~ expr }
 regex_filter = { cmp_re ~ regex }
 
 kw_not = { "not" }
@@ -105,7 +104,7 @@ filter_expr    = _{ filter_keyword ~ filter_or }
 filter_rule    =  { pipe_keyword ~ filter_expr }
 extend_rule    =  { pipe_keyword ~ kw_extend ~ extend_expr ~ (", " ~ extend_expr)* }
 ifdef_rule     =  { pipe_keyword ~ kw_ifdef ~ "(" ~ param_ident ~ ")" ~ "{" ~ filter_expr ~ "}" ~ (kw_else ~ "{" ~ filter_expr ~ "}")? }
-extend_expr    =  { ident ~ "=" ~ value }
+extend_expr    =  { ident ~ "=" ~ expr }
 sample_expr    =  { kw_sample ~ number }
 sample_rule    =  { pipe_keyword ~ sample_expr }
 
@@ -126,8 +125,11 @@ optional_type     =  { "Option" ~ "<" ~ (tag_type | param_native_type) ~ ">" }
 param_type        =  { param_native_type | tag_type | optional_type }
 param_ident       = ${ "$" ~ ident }
 param             =  { "param" ~ param_ident ~ ":" ~ param_type ~ ";" }
-param_value       =  { time_relative | string | float | int | bool | regex | ident }
 // used for parsing provided params
+
+expr = { const | param_ident }
+
+const = { string | float | int | bool | inf }
 
 align = { "align" ~ ("to" ~ time_relative_parameterized)? ~ ("over" ~ time_relative_parameterized)? ~ "using" ~ func }
 
@@ -160,6 +162,8 @@ compute_query = { "(" ~ query ~ "," ~ query ~ ","? ~ ")" ~ compute_rule ~ pipe_r
 
 query = _{ simple_query | compute_query }
 
-directive = { "set" ~ ident ~ ("=" ~ (value | ident))? ~ ";" }
+directive = { "set" ~ ident ~ ("=" ~ (const | ident))? ~ ";" }
 
-file = _{ SOI ~ directive* ~ param* ~ query ~ EOI }
+// external entry points
+param_value =  { time_relative | const | regex | ident }
+file        = _{ SOI ~ directive* ~ param* ~ query ~ EOI }

@@ -465,10 +465,10 @@ fn friendly_rule(rule: Rule) -> String {
         // Ops
         Rule::cmp => "a comparison operator (==, !=, <, >, <=, >=)".to_string(),
         Rule::cmp_re => "a regex operator (==, !=)".to_string(),
-        Rule::regex => "a regex pattern (e.g., /pattern/)".to_string(),
+        Rule::regex => "a regex pattern (e.g., #/pattern/)".to_string(),
 
         // Values
-        Rule::value => "value (string, number, or bool)".to_string(),
+        Rule::r#const => "value (string, number, or bool)".to_string(),
         Rule::string => "string value".to_string(),
         Rule::number => "number".to_string(),
         Rule::bool => "bool (true or false)".to_string(),
