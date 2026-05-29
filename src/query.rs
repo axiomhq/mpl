@@ -109,21 +109,35 @@ pub enum ValueError {
     BadFloat,
 }
 
+/// An expression
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub enum Expr {
+    /// Constant value Leave
+    Const(TagValue),
+    /// Parameter value
+    Param {
+        /// The location where the param is used
+        span: SourceSpan,
+        /// The param
+        param: ParamDeclaration,
+    },
+}
+
 /// A comparison operator for filtering based on a value
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub enum Cmp {
     /// Equal to the given value
-    Eq(Parameterized<TagValue>),
+    Eq(Expr),
     /// Not equal to the given value
-    Ne(Parameterized<TagValue>),
+    Ne(Expr),
     /// Greater than the given value
-    Gt(Parameterized<TagValue>),
+    Gt(Expr),
     /// Greater than or equal to the given value
-    Ge(Parameterized<TagValue>),
+    Ge(Expr),
     /// Less than the given value
-    Lt(Parameterized<TagValue>),
+    Lt(Expr),
     /// Less than or equal to the given value
-    Le(Parameterized<TagValue>),
+    Le(Expr),
     /// Matches the given regular expression
     RegEx(Parameterized<EncodableRegex>),
     /// Does not match the given regular expression
@@ -247,7 +261,7 @@ pub struct TagExtend {
     /// The name of the new tag to add
     pub tag: String,
     /// The value of the new tag
-    pub value: Parameterized<TagValue>,
+    pub value: Expr,
 }
 
 /// Values for directives

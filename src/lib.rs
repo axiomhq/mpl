@@ -38,7 +38,7 @@ pub use query::Query;
 pub use stdlib::STDLIB;
 
 use crate::{
-    query::{Cmp, Filter, ParamDeclaration, ParamType, TagType, TerminalParamType, Warnings},
+    query::{Cmp, Expr, Filter, ParamDeclaration, ParamType, TagType, TerminalParamType, Warnings},
     types::{Dataset, Parameterized},
     visitor::{QueryVisitor, QueryWalker, VisitRes},
 };
@@ -159,11 +159,8 @@ impl QueryVisitor for OptionCheckVisitor {
         self.ifdef_param = None;
         Ok(())
     }
-    fn visit_parameterized_value(
-        &mut self,
-        value: &mut Parameterized<tags::TagValue>,
-    ) -> Result<VisitRes, Self::Error> {
-        if let Parameterized::Param { span, param } = value
+    fn visit_expr(&mut self, value: &mut Expr) -> Result<VisitRes, Self::Error> {
+        if let Expr::Param { span, param } = value
             && param.is_optional()
         {
             self.seen_param = Some(param.clone());
@@ -293,15 +290,14 @@ pub enum TypeError {
 struct ParamTypecheckVisitor {}
 
 impl ParamTypecheckVisitor {
-    fn assert_param_type<T>(
-        value: &Parameterized<T>,
+    fn assert_param_type(
+        param: &ParamDeclaration,
+        use_span: SourceSpan,
         expected: Vec<TerminalParamType>,
     ) -> Result<(), TypeError> {
-        if let Parameterized::Param { span, param } = value
-            && !expected.contains(&param.typ())
-        {
+        if !expected.contains(&param.typ()) {
             return Err(TypeError::TypeMismatch {
-                use_span: *span,
+                use_span,
                 declaration_span: param.span,
                 param_name: param.name.clone(),
                 expected,
@@ -310,6 +306,16 @@ impl ParamTypecheckVisitor {
         }
 
         Ok(())
+    }
+
+    fn assert_param<T>(
+        value: &Parameterized<T>,
+        expected: Vec<TerminalParamType>,
+    ) -> Result<(), TypeError> {
+        let Parameterized::Param { span, param } = value else {
+            return Ok(());
+        };
+        Self::assert_param_type(param, *span, expected)
     }
 }
 
@@ -320,13 +326,12 @@ impl QueryVisitor for ParamTypecheckVisitor {
         &mut self,
         dataset: &mut Parameterized<Dataset>,
     ) -> Result<VisitRes, Self::Error> {
-        Self::assert_param_type(dataset, vec![TerminalParamType::Dataset]).map(|()| VisitRes::Walk)
+        Self::assert_param(dataset, vec![TerminalParamType::Dataset]).map(|()| VisitRes::Walk)
     }
 
     fn visit_align(&mut self, align: &mut query::Align) -> Result<VisitRes, Self::Error> {
         if let Some(time) = &align.time {
-            Self::assert_param_type(time, vec![TerminalParamType::Duration])
-                .map(|()| VisitRes::Walk)
+            Self::assert_param(time, vec![TerminalParamType::Duration]).map(|()| VisitRes::Walk)
         } else {
             Ok(VisitRes::Walk)
         }
@@ -337,8 +342,7 @@ impl QueryVisitor for ParamTypecheckVisitor {
         bucket_by: &mut query::BucketBy,
     ) -> Result<VisitRes, Self::Error> {
         if let Some(time) = &bucket_by.time {
-            Self::assert_param_type(time, vec![TerminalParamType::Duration])
-                .map(|()| VisitRes::Walk)
+            Self::assert_param(time, vec![TerminalParamType::Duration]).map(|()| VisitRes::Walk)
         } else {
             Ok(VisitRes::Walk)
         }
@@ -353,11 +357,15 @@ impl QueryVisitor for ParamTypecheckVisitor {
         ];
 
         match cmp {
-            Cmp::Is(_) => Ok(VisitRes::Walk),
-            Cmp::Eq(value) => {
-                if let Parameterized::Param { span, param } = value
-                    && param.typ() == TerminalParamType::Regex
-                {
+            Cmp::Is(_)
+            | Cmp::Eq(Expr::Const(_))
+            | Cmp::Ne(Expr::Const(_))
+            | Cmp::Gt(Expr::Const(_))
+            | Cmp::Ge(Expr::Const(_))
+            | Cmp::Lt(Expr::Const(_))
+            | Cmp::Le(Expr::Const(_)) => Ok(VisitRes::Walk),
+            Cmp::Eq(Expr::Param { span, param }) => {
+                if param.typ() == TerminalParamType::Regex {
                     // we have a regex param in an eq
                     // this happens because we cannot detect this in pest
                     //
@@ -369,12 +377,11 @@ impl QueryVisitor for ParamTypecheckVisitor {
                     return Ok(VisitRes::Walk);
                 }
 
-                Self::assert_param_type(value, tag_value_param_types).map(|()| VisitRes::Walk)
+                Self::assert_param_type(param, *span, tag_value_param_types)
+                    .map(|()| VisitRes::Walk)
             }
-            Cmp::Ne(value) => {
-                if let Parameterized::Param { span, param } = value
-                    && param.typ() == TerminalParamType::Regex
-                {
+            Cmp::Ne(Expr::Param { span, param }) => {
+                if param.typ() == TerminalParamType::Regex {
                     // we have a regex param in ne
                     // this happens because we cannot detect this in pest
                     //
@@ -386,14 +393,19 @@ impl QueryVisitor for ParamTypecheckVisitor {
                     return Ok(VisitRes::Walk);
                 }
 
-                Self::assert_param_type(value, tag_value_param_types).map(|()| VisitRes::Walk)
-            }
-            Cmp::Gt(value) | Cmp::Ge(value) | Cmp::Lt(value) | Cmp::Le(value) => {
-                Self::assert_param_type(value, tag_value_param_types).map(|()| VisitRes::Walk)
-            }
-            Cmp::RegEx(value) | Cmp::RegExNot(value) => {
-                Self::assert_param_type(value, vec![TerminalParamType::Regex])
+                Self::assert_param_type(param, *span, tag_value_param_types)
                     .map(|()| VisitRes::Walk)
+            }
+            Cmp::Gt(Expr::Param { span, param })
+            | Cmp::Ge(Expr::Param { span, param })
+            | Cmp::Lt(Expr::Param { span, param })
+            | Cmp::Le(Expr::Param { span, param }) => {
+                Self::assert_param_type(param, *span, tag_value_param_types)
+                    .map(|()| VisitRes::Walk)
+            }
+
+            Cmp::RegEx(value) | Cmp::RegExNot(value) => {
+                Self::assert_param(value, vec![TerminalParamType::Regex]).map(|()| VisitRes::Walk)
             }
         }
     }

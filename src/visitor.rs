@@ -5,10 +5,9 @@ use crate::{
     enc_regex::EncodableRegex,
     linker::ComputeFunction,
     query::{
-        Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter, FilterOrIfDef,
-        GroupBy, Mapping, ParamDeclaration, Source, TagExtend,
+        Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Expr, Filter,
+        FilterOrIfDef, GroupBy, Mapping, ParamDeclaration, Source, TagExtend,
     },
-    tags::TagValue,
     types::{Dataset, Metric, Parameterized},
 };
 
@@ -169,19 +168,13 @@ pub trait QueryVisitor {
     }
 
     /// Visit a parameterized value.
-    fn visit_parameterized_value(
-        &mut self,
-        value: &mut Parameterized<TagValue>,
-    ) -> Result<VisitRes, Self::Error> {
+    fn visit_expr(&mut self, value: &mut Expr) -> Result<VisitRes, Self::Error> {
         let _ = value;
         Ok(VisitRes::Walk)
     }
 
     /// Leave a parameterized value.
-    fn leave_parameterized_value(
-        &mut self,
-        value: &mut Parameterized<TagValue>,
-    ) -> Result<(), Self::Error> {
+    fn leave_expr(&mut self, value: &mut Expr) -> Result<(), Self::Error> {
         let _ = value;
         Ok(())
     }
@@ -561,7 +554,7 @@ pub trait QueryWalker: QueryVisitor {
             | Cmp::Gt(parameterized)
             | Cmp::Ge(parameterized)
             | Cmp::Lt(parameterized)
-            | Cmp::Le(parameterized) => QueryWalker::walk_parameterized_value(self, parameterized)?,
+            | Cmp::Le(parameterized) => QueryWalker::walk_expr(self, parameterized)?,
             Cmp::RegEx(parameterized) | Cmp::RegExNot(parameterized) => {
                 QueryWalker::walk_parameterized_regex(self, parameterized)?;
             }
@@ -570,12 +563,9 @@ pub trait QueryWalker: QueryVisitor {
         QueryVisitor::leave_cmp(self, field, rhs)
     }
     /// Walks a parameterized value
-    fn walk_parameterized_value(
-        &mut self,
-        value: &mut Parameterized<TagValue>,
-    ) -> Result<(), Self::Error> {
-        QueryVisitor::visit_parameterized_value(self, value)?;
-        QueryVisitor::leave_parameterized_value(self, value)
+    fn walk_expr(&mut self, value: &mut Expr) -> Result<(), Self::Error> {
+        QueryVisitor::visit_expr(self, value)?;
+        QueryVisitor::leave_expr(self, value)
     }
     /// Walks a parameterized regex
     fn walk_parameterized_regex(

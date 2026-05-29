@@ -2,8 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     CompileError, ParseError, TypeError,
-    query::{Cmp, Filter, TagType, TerminalParamType},
-    types::Parameterized,
+    query::{Cmp, Expr, Filter, TagType, TerminalParamType},
 };
 
 #[test]
@@ -105,7 +104,7 @@ dataset:metric
     let (res, _) = super::compile(s, HashMap::new())?;
     let expected = Filter::Cmp {
         field: "a".into(),
-        rhs: Cmp::Eq(Parameterized::Concrete("snot".try_into()?)),
+        rhs: Cmp::Eq(Expr::Const("snot".try_into()?)),
     };
     match res {
         crate::Query::Simple { filters, .. } => {
@@ -128,11 +127,11 @@ dataset:metric
     let expected = Filter::And(vec![
         Filter::Cmp {
             field: "a".into(),
-            rhs: Cmp::Eq(Parameterized::Concrete(7.0.into())),
+            rhs: Cmp::Eq(Expr::Const(7.0.into())),
         },
         Filter::Not(Box::new(Filter::Cmp {
             field: "b".into(),
-            rhs: Cmp::Eq(Parameterized::Concrete(8.into())),
+            rhs: Cmp::Eq(Expr::Const(8.into())),
         })),
     ]);
     match res {
@@ -157,26 +156,26 @@ dataset:metric
         Filter::And(vec![
             Filter::Cmp {
                 field: "a".into(),
-                rhs: Cmp::Eq(Parameterized::Concrete(7.into())),
+                rhs: Cmp::Eq(Expr::Const(7.into())),
             },
             Filter::Cmp {
                 field: "b".into(),
-                rhs: Cmp::Eq(Parameterized::Concrete(8.into())),
+                rhs: Cmp::Eq(Expr::Const(8.into())),
             },
         ]),
         Filter::And(vec![
             Filter::Cmp {
                 field: "c".into(),
-                rhs: Cmp::Eq(Parameterized::Concrete(9.into())),
+                rhs: Cmp::Eq(Expr::Const(9.into())),
             },
             Filter::Or(vec![
                 Filter::Cmp {
                     field: "d".into(),
-                    rhs: Cmp::Eq(Parameterized::Concrete(10.into())),
+                    rhs: Cmp::Eq(Expr::Const(10.into())),
                 },
                 Filter::Cmp {
                     field: "e".into(),
-                    rhs: Cmp::Eq(Parameterized::Concrete(11.into())),
+                    rhs: Cmp::Eq(Expr::Const(11.into())),
                 },
             ]),
         ]),

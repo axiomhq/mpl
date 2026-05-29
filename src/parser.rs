@@ -13,10 +13,10 @@ use crate::{
         AlignFunction, ComputeFunction, Function, FunctionId, GroupFunction, Module, ModuleId,
     },
     query::{
-        Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter, FilterOrIfDef,
-        GroupBy, Mapping, MetricId, ParamDeclaration, ParamType, ParamValue, Params, Query,
-        RelativeTime, Source, TagExtend, TagType, TerminalParamType, Time, TimeRange, TimeUnit,
-        WarningReason, Warnings,
+        Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Expr, Filter,
+        FilterOrIfDef, GroupBy, Mapping, MetricId, ParamDeclaration, ParamType, ParamValue, Params,
+        Query, RelativeTime, Source, TagExtend, TagType, TerminalParamType, Time, TimeRange,
+        TimeUnit, WarningReason, Warnings,
     },
     stdlib::STDLIB,
     tags::TagValue,
@@ -563,7 +563,7 @@ fn parse_regex(source: &Pair<'_, Rule>) -> Result<Regex> {
     Ok(regex::Regex::new(&unescape(&source.as_str()[1..], '/'))?)
 }
 
-fn parse_expr(source: Pair<Rule>, state: &State) -> Result<Parameterized<TagValue>> {
+fn parse_expr(source: Pair<Rule>, state: &State) -> Result<Expr> {
     source.assert_type(Rule::expr)?;
     let mut inner = source.into_inner();
     let next = inner.n()?;
@@ -575,7 +575,7 @@ fn parse_expr(source: Pair<Rule>, state: &State) -> Result<Parameterized<TagValu
             let mut inner = next.into_inner();
             let next = inner.n()?;
             let param = resolve_param(&next, state)?;
-            Ok(Parameterized::Param {
+            Ok(Expr::Param {
                 span,
                 param: param.clone(),
             })
@@ -587,14 +587,12 @@ fn parse_expr(source: Pair<Rule>, state: &State) -> Result<Parameterized<TagValu
 
             // concrete value
             match next.as_rule() {
-                Rule::string => Ok(Parameterized::Concrete(TagValue::String(
-                    SharedString::try_from(unescape(next.as_str(), '"'))?,
-                ))),
-                Rule::float | Rule::inf => Ok(Parameterized::Concrete(TagValue::Float(
-                    parse_float(&next)?,
-                ))),
-                Rule::int => Ok(Parameterized::Concrete(TagValue::Int(parse_int(&next)?))),
-                Rule::bool => Ok(Parameterized::Concrete(TagValue::Bool(
+                Rule::string => Ok(Expr::Const(TagValue::String(SharedString::try_from(
+                    unescape(next.as_str(), '"'),
+                )?))),
+                Rule::float | Rule::inf => Ok(Expr::Const(TagValue::Float(parse_float(&next)?))),
+                Rule::int => Ok(Expr::Const(TagValue::Int(parse_int(&next)?))),
+                Rule::bool => Ok(Expr::Const(TagValue::Bool(
                     next.as_str().to_string().parse()?,
                 ))),
                 rule => Err(ParseError::Unexpected {

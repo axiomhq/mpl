@@ -3,10 +3,11 @@ use miette::SourceSpan;
 use crate::{
     enc_regex::EncodableRegex,
     query::{
-        Cmp, Filter, FilterOrIfDef, ParamDeclaration, ParamType, ParamValue,
+        Cmp, Expr, Filter, FilterOrIfDef, ParamDeclaration, ParamType, ParamValue,
         ParseProvidedParamsError, ProvidedParam, ProvidedParams, RelativeTime, TagType,
         TerminalParamType, TimeUnit,
     },
+    tags::TagValue,
     types::Dataset,
 };
 
@@ -249,9 +250,9 @@ fn optional_string_param(name: &str) -> ParamDeclaration {
 fn tag_filter(field: &str, value: &str) -> Filter {
     Filter::Cmp {
         field: field.to_string(),
-        rhs: Cmp::Eq(crate::types::Parameterized::Concrete(
-            crate::tags::TagValue::String(value.try_into().expect("valid shared string")),
-        )),
+        rhs: Cmp::Eq(Expr::Const(TagValue::String(
+            value.try_into().expect("valid shared string"),
+        ))),
     }
 }
 

@@ -4,8 +4,8 @@ use crate::{
     Query,
     linker::MapFunction,
     query::{
-        Aggregate, Align, As, BucketBy, Cmp, Filter, GroupBy, Mapping, MetricId, RelativeTime,
-        Source, TagExtend, Time, TimeRange, TimeUnit,
+        Aggregate, Align, As, BucketBy, Cmp, Expr, Filter, GroupBy, Mapping, MetricId,
+        RelativeTime, Source, TagExtend, Time, TimeRange, TimeUnit,
     },
     types::{BucketType, MapType, Parameterized},
 };
@@ -99,6 +99,17 @@ impl Display for Query {
 impl Display for TagExtend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{tag} = {value}", tag = self.tag, value = self.value)
+    }
+}
+impl Display for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Expr::Const(c) => write!(f, "{c}"),
+            Expr::Param { span: _, param } => {
+                write!(f, "$")?;
+                escape_ident(f, param.name.as_str())
+            }
+        }
     }
 }
 impl Display for Source {
