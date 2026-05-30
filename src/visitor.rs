@@ -14,10 +14,16 @@ use crate::{
 /// Result of a visit operation.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum VisitRes {
-    /// Continue walking.
+    /// Continue after the visit hook, walking this node's children and leave hook.
     Walk,
-    /// Stop walking.
+    /// Stop after the visit hook, skipping this node's children and leave hook.
     Stop,
+}
+
+impl VisitRes {
+    fn should_walk(self) -> bool {
+        matches!(self, VisitRes::Walk)
+    }
 }
 
 /// Visitor for all query components.
@@ -382,22 +388,13 @@ pub trait QueryVisitor {
     }
 }
 
-macro_rules! stop {
-    ($e:expr, $leave_fn:expr) => {
-        if $e? == VisitRes::Stop {
-            return $leave_fn;
-        }
-    };
-}
-
 /// A trait for walking a query.
 pub trait QueryWalker: QueryVisitor {
     /// Walk a query.
     fn walk(&mut self, query: &mut Query) -> Result<(), Self::Error> {
-        stop!(
-            QueryVisitor::visit(self, query),
-            QueryVisitor::leave(self, query)
-        );
+        if !QueryVisitor::visit(self, query)?.should_walk() {
+            return Ok(());
+        }
         match query {
             Query::Simple {
                 sample,
@@ -442,56 +439,54 @@ pub trait QueryWalker: QueryVisitor {
 
     /// Walk a source.
     fn walk_source(&mut self, source: &mut Source) -> Result<(), Self::Error> {
-        stop!(
-            QueryVisitor::visit_source(self, source),
-            QueryVisitor::leave_source(self, source)
-        );
+        if !QueryVisitor::visit_source(self, source)?.should_walk() {
+            return Ok(());
+        }
         QueryWalker::walk_dataset(self, &mut source.metric_id.dataset)?;
         QueryWalker::walk_metric(self, &mut source.metric_id.metric)?;
-        QueryVisitor::leave_source(self, source)?;
-        Ok(())
+        QueryVisitor::leave_source(self, source)
     }
 
     /// Walk a dataset.
     fn walk_dataset(&mut self, dataset: &mut Parameterized<Dataset>) -> Result<(), Self::Error> {
-        QueryVisitor::visit_dataset(self, dataset)?;
-        QueryVisitor::leave_dataset(self, dataset)?;
-        Ok(())
+        if !QueryVisitor::visit_dataset(self, dataset)?.should_walk() {
+            return Ok(());
+        }
+        QueryVisitor::leave_dataset(self, dataset)
     }
 
     /// Walk a metric.
     fn walk_metric(&mut self, metric: &mut Metric) -> Result<(), Self::Error> {
-        QueryVisitor::visit_metric(self, metric)?;
-        QueryVisitor::leave_metric(self, metric)?;
-        Ok(())
+        if !QueryVisitor::visit_metric(self, metric)?.should_walk() {
+            return Ok(());
+        }
+        QueryVisitor::leave_metric(self, metric)
     }
 
     /// Walk a sample.
     fn walk_sample(&mut self, sample: &mut Option<f64>) -> Result<(), Self::Error> {
-        QueryVisitor::visit_sample(self, sample)?;
-        QueryVisitor::leave_sample(self, sample)?;
-        Ok(())
+        if !QueryVisitor::visit_sample(self, sample)?.should_walk() {
+            return Ok(());
+        }
+        QueryVisitor::leave_sample(self, sample)
     }
 
     /// Walk filters.
     fn walk_filters(&mut self, filters: &mut Vec<FilterOrIfDef>) -> Result<(), Self::Error> {
-        stop!(
-            QueryVisitor::visit_filters(self, filters),
-            QueryVisitor::leave_filters(self, filters)
-        );
+        if !QueryVisitor::visit_filters(self, filters)?.should_walk() {
+            return Ok(());
+        }
         for filter in filters.iter_mut() {
             QueryWalker::walk_filter_or_ifdef(self, filter)?;
         }
-        QueryVisitor::leave_filters(self, filters)?;
-        Ok(())
+        QueryVisitor::leave_filters(self, filters)
     }
 
     /// Walk a filter or ifdef.
     fn walk_filter_or_ifdef(&mut self, filter: &mut FilterOrIfDef) -> Result<(), Self::Error> {
-        stop!(
-            QueryVisitor::visit_filter_or_ifdef(self, filter),
-            QueryVisitor::leave_filter_or_ifdef(self, filter)
-        );
+        if !QueryVisitor::visit_filter_or_ifdef(self, filter)?.should_walk() {
+            return Ok(());
+        }
         match filter {
             FilterOrIfDef::Filter(filter) => QueryWalker::walk_filter(self, filter)?,
             FilterOrIfDef::Ifdef {
@@ -500,8 +495,7 @@ pub trait QueryWalker: QueryVisitor {
                 else_filter,
             } => QueryWalker::walk_ifdef(self, param, filter, else_filter)?,
         }
-        QueryVisitor::leave_filter_or_ifdef(self, filter)?;
-        Ok(())
+        QueryVisitor::leave_filter_or_ifdef(self, filter)
     }
 
     /// Walk an ifdef.
@@ -511,26 +505,22 @@ pub trait QueryWalker: QueryVisitor {
         filter: &mut Filter,
         else_filter: &mut Option<Filter>,
     ) -> Result<(), Self::Error> {
-        stop!(
-            QueryVisitor::visit_ifdef(self, param, filter, else_filter),
-            QueryVisitor::leave_ifdef(self, param, filter, else_filter)
-        );
+        if !QueryVisitor::visit_ifdef(self, param, filter, else_filter)?.should_walk() {
+            return Ok(());
+        }
         QueryWalker::walk_param(self, param)?;
         QueryWalker::walk_filter(self, filter)?;
         if let Some(else_filter) = else_filter {
             QueryWalker::walk_filter(self, else_filter)?;
         }
-        QueryVisitor::leave_ifdef(self, param, filter, else_filter)?;
-
-        Ok(())
+        QueryVisitor::leave_ifdef(self, param, filter, else_filter)
     }
 
     /// Walk a filter.
     fn walk_filter(&mut self, filter: &mut Filter) -> Result<(), Self::Error> {
-        stop!(
-            QueryVisitor::visit_filter(self, filter),
-            QueryVisitor::leave_filter(self, filter)
-        );
+        if !QueryVisitor::visit_filter(self, filter)?.should_walk() {
+            return Ok(());
+        }
         match filter {
             Filter::And(filters) | Filter::Or(filters) => {
                 for filter in filters {
@@ -540,21 +530,23 @@ pub trait QueryWalker: QueryVisitor {
             Filter::Not(filter) => QueryWalker::walk_filter(self, filter)?,
             Filter::Cmp { field, rhs } => QueryWalker::walk_cmp(self, field, rhs)?,
         }
-        QueryVisitor::leave_filter(self, filter)?;
-        Ok(())
+        QueryVisitor::leave_filter(self, filter)
     }
 
     /// Walk a cmp.
     fn walk_cmp(&mut self, field: &mut String, rhs: &mut Cmp) -> Result<(), Self::Error> {
-        QueryVisitor::visit_cmp(self, field, rhs)?;
-
+        if !QueryVisitor::visit_cmp(self, field, rhs)?.should_walk() {
+            return Ok(());
+        }
         match rhs {
             Cmp::Eq(parameterized)
             | Cmp::Ne(parameterized)
             | Cmp::Gt(parameterized)
             | Cmp::Ge(parameterized)
             | Cmp::Lt(parameterized)
-            | Cmp::Le(parameterized) => QueryWalker::walk_expr(self, parameterized)?,
+            | Cmp::Le(parameterized) => {
+                QueryWalker::walk_expr(self, parameterized)?;
+            }
             Cmp::RegEx(parameterized) | Cmp::RegExNot(parameterized) => {
                 QueryWalker::walk_parameterized_regex(self, parameterized)?;
             }
@@ -564,7 +556,9 @@ pub trait QueryWalker: QueryVisitor {
     }
     /// Walks a parameterized value
     fn walk_expr(&mut self, value: &mut Expr) -> Result<(), Self::Error> {
-        QueryVisitor::visit_expr(self, value)?;
+        if !QueryVisitor::visit_expr(self, value)?.should_walk() {
+            return Ok(());
+        }
         QueryVisitor::leave_expr(self, value)
     }
     /// Walks a parameterized regex
@@ -572,36 +566,36 @@ pub trait QueryWalker: QueryVisitor {
         &mut self,
         regex: &mut Parameterized<EncodableRegex>,
     ) -> Result<(), Self::Error> {
-        QueryVisitor::visit_parameterized_regex(self, regex)?;
+        if !QueryVisitor::visit_parameterized_regex(self, regex)?.should_walk() {
+            return Ok(());
+        }
         QueryVisitor::leave_parameterized_regex(self, regex)
     }
 
     /// Walk an op.
     fn walk_op(&mut self, op: &mut ComputeFunction) -> Result<(), Self::Error> {
-        QueryVisitor::visit_op(self, op)?;
-        QueryVisitor::leave_op(self, op)?;
-        Ok(())
+        if !QueryVisitor::visit_op(self, op)?.should_walk() {
+            return Ok(());
+        }
+        QueryVisitor::leave_op(self, op)
     }
 
     /// Walk aggregates.
     fn walk_aggregates(&mut self, aggregates: &mut Vec<Aggregate>) -> Result<(), Self::Error> {
-        stop!(
-            QueryVisitor::visit_aggregates(self, aggregates),
-            QueryVisitor::leave_aggregates(self, aggregates)
-        );
+        if !QueryVisitor::visit_aggregates(self, aggregates)?.should_walk() {
+            return Ok(());
+        }
         for aggregate in aggregates.iter_mut() {
             QueryWalker::walk_aggregate(self, aggregate)?;
         }
-        QueryVisitor::leave_aggregates(self, aggregates)?;
-        Ok(())
+        QueryVisitor::leave_aggregates(self, aggregates)
     }
 
     /// Walk an aggregate.
     fn walk_aggregate(&mut self, aggregate: &mut Aggregate) -> Result<(), Self::Error> {
-        stop!(
-            QueryVisitor::visit_aggregate(self, aggregate),
-            QueryVisitor::leave_aggregate(self, aggregate)
-        );
+        if !QueryVisitor::visit_aggregate(self, aggregate)?.should_walk() {
+            return Ok(());
+        }
         match aggregate {
             Aggregate::Map(mapping) => QueryWalker::walk_mapping(self, mapping)?,
             Aggregate::Align(align) => QueryWalker::walk_align(self, align)?,
@@ -609,57 +603,59 @@ pub trait QueryWalker: QueryVisitor {
             Aggregate::Bucket(bucket_by) => QueryWalker::walk_bucket_by(self, bucket_by)?,
             Aggregate::As(as_) => QueryWalker::walk_as(self, as_)?,
         }
-        QueryVisitor::leave_aggregate(self, aggregate)?;
-        Ok(())
+        QueryVisitor::leave_aggregate(self, aggregate)
     }
 
     /// Walk a mapping.
     fn walk_mapping(&mut self, mapping: &mut Mapping) -> Result<(), Self::Error> {
-        QueryVisitor::visit_mapping(self, mapping)?;
-        QueryVisitor::leave_mapping(self, mapping)?;
-        Ok(())
+        if !QueryVisitor::visit_mapping(self, mapping)?.should_walk() {
+            return Ok(());
+        }
+        QueryVisitor::leave_mapping(self, mapping)
     }
 
     /// Walk an align.
     fn walk_align(&mut self, align: &mut Align) -> Result<(), Self::Error> {
-        QueryVisitor::visit_align(self, align)?;
-        QueryVisitor::leave_align(self, align)?;
-        Ok(())
+        if !QueryVisitor::visit_align(self, align)?.should_walk() {
+            return Ok(());
+        }
+        QueryVisitor::leave_align(self, align)
     }
 
     /// Walk a group by.
     fn walk_group_by(&mut self, group_by: &mut GroupBy) -> Result<(), Self::Error> {
-        QueryVisitor::visit_group_by(self, group_by)?;
-        QueryVisitor::leave_group_by(self, group_by)?;
-        Ok(())
+        if !QueryVisitor::visit_group_by(self, group_by)?.should_walk() {
+            return Ok(());
+        }
+        QueryVisitor::leave_group_by(self, group_by)
     }
 
     /// Walk a bucket by.
     fn walk_bucket_by(&mut self, bucket_by: &mut BucketBy) -> Result<(), Self::Error> {
-        QueryVisitor::visit_bucket_by(self, bucket_by)?;
-        QueryVisitor::leave_bucket_by(self, bucket_by)?;
-        Ok(())
+        if !QueryVisitor::visit_bucket_by(self, bucket_by)?.should_walk() {
+            return Ok(());
+        }
+        QueryVisitor::leave_bucket_by(self, bucket_by)
     }
 
     /// Walk an as.
     fn walk_as(&mut self, as_: &mut As) -> Result<(), Self::Error> {
-        QueryVisitor::visit_as(self, as_)?;
-        QueryVisitor::visit_metric(self, &mut as_.name)?;
-        QueryVisitor::leave_as(self, as_)?;
-        Ok(())
+        if !QueryVisitor::visit_as(self, as_)?.should_walk() {
+            return Ok(());
+        }
+        QueryWalker::walk_metric(self, &mut as_.name)?;
+        QueryVisitor::leave_as(self, as_)
     }
 
     /// Walk directives.
     fn walk_directives(&mut self, directives: &mut Directives) -> Result<(), Self::Error> {
-        stop!(
-            QueryVisitor::visit_directives(self, directives),
-            QueryVisitor::leave_directives(self, directives)
-        );
+        if !QueryVisitor::visit_directives(self, directives)?.should_walk() {
+            return Ok(());
+        }
         for (name, value) in directives.iter_mut() {
             QueryWalker::walk_directive(self, name, value)?;
         }
-        QueryVisitor::leave_directives(self, directives)?;
-        Ok(())
+        QueryVisitor::leave_directives(self, directives)
     }
 
     /// Walk a directive.
@@ -668,48 +664,47 @@ pub trait QueryWalker: QueryVisitor {
         name: &String,
         value: &mut DirectiveValue,
     ) -> Result<(), Self::Error> {
-        QueryVisitor::visit_directive(self, name, value)?;
-        QueryVisitor::leave_directive(self, name, value)?;
-        Ok(())
+        if !QueryVisitor::visit_directive(self, name, value)?.should_walk() {
+            return Ok(());
+        }
+        QueryVisitor::leave_directive(self, name, value)
     }
 
     /// Walk params.
     fn walk_params(&mut self, params: &mut Vec<ParamDeclaration>) -> Result<(), Self::Error> {
-        stop!(
-            QueryVisitor::visit_params(self, params),
-            QueryVisitor::leave_params(self, params)
-        );
+        if !QueryVisitor::visit_params(self, params)?.should_walk() {
+            return Ok(());
+        }
         for param in params.iter_mut() {
             QueryWalker::walk_param(self, param)?;
         }
-        QueryVisitor::leave_params(self, params)?;
-        Ok(())
+        QueryVisitor::leave_params(self, params)
     }
 
     /// Walk a param.
     fn walk_param(&mut self, param: &mut ParamDeclaration) -> Result<(), Self::Error> {
-        QueryVisitor::visit_param(self, param)?;
-        QueryVisitor::leave_param(self, param)?;
-        Ok(())
+        if !QueryVisitor::visit_param(self, param)?.should_walk() {
+            return Ok(());
+        }
+        QueryVisitor::leave_param(self, param)
     }
 
     /// Walk params.
     fn walk_extends(&mut self, extends: &mut Vec<TagExtend>) -> Result<(), Self::Error> {
-        stop!(
-            QueryVisitor::visit_extends(self, extends),
-            QueryVisitor::leave_extends(self, extends)
-        );
+        if !QueryVisitor::visit_extends(self, extends)?.should_walk() {
+            return Ok(());
+        }
         for param in extends.iter_mut() {
             QueryWalker::walk_extend(self, param)?;
         }
-        QueryVisitor::leave_extends(self, extends)?;
-        Ok(())
+        QueryVisitor::leave_extends(self, extends)
     }
 
     /// Walk a param.
     fn walk_extend(&mut self, extend: &mut TagExtend) -> Result<(), Self::Error> {
-        QueryVisitor::visit_extend(self, extend)?;
-        QueryVisitor::leave_extend(self, extend)?;
-        Ok(())
+        if !QueryVisitor::visit_extend(self, extend)?.should_walk() {
+            return Ok(());
+        }
+        QueryVisitor::leave_extend(self, extend)
     }
 }
