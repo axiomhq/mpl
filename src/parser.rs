@@ -696,9 +696,28 @@ pub(crate) fn parse_param_value(
             Rule::int,
             param.typ,
         )?)?)),
-        TerminalParamType::Tag(TagType::Float) => Ok(ParamValue::Float(
-            const_type(next, Rule::float, param.typ)?.as_str().parse()?,
-        )),
+        TerminalParamType::Tag(TagType::Float) => {
+            let declared_typ = param.typ;
+            if next.as_rule() != Rule::r#const {
+                return Err(ParseParamError::TypeMismatch {
+                    declared_typ,
+                    rule: next.as_rule(),
+                });
+            }
+            let mut inner = next.into_inner();
+            let next = inner.n()?;
+            match next.as_rule() {
+                Rule::float => Ok(ParamValue::Float(next.as_str().parse()?)),
+                Rule::inf if next.as_str() == "inf" || next.as_str() == "+inf" => {
+                    Ok(ParamValue::Float(f64::INFINITY))
+                }
+                Rule::inf if next.as_str() == "-inf" => Ok(ParamValue::Float(f64::NEG_INFINITY)),
+                _ => Err(ParseParamError::TypeMismatch {
+                    declared_typ,
+                    rule: next.as_rule(),
+                }),
+            }
+        }
         TerminalParamType::Tag(TagType::Bool) => Ok(ParamValue::Bool(
             const_type(next, Rule::bool, param.typ)?
                 .as_str()
