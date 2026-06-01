@@ -14,3 +14,7 @@ pub(crate) fn decode(value: JsValue) -> Vec<SystemParamSpec> {
     }
     serde_wasm_bindgen::from_value::<Vec<SystemParamSpec>>(value).unwrap_or_default()
 }
+
+pub(crate) fn decode_optional(value: Option<JsValue>) -> Vec<SystemParamSpec> {
+    value.map_or_else(Vec::new, decode)
+}

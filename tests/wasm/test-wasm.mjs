@@ -30,6 +30,15 @@ if (typeof mpl.diagnostics !== "function") {
   process.exit(1);
 }
 
+if (
+  typeof mpl.extract_dataset !== "function" ||
+  typeof mpl.parse_json !== "function" ||
+  typeof mpl.parse_wasm !== "function"
+) {
+  console.error("ERROR: parse/extract exports missing — wrong build artifact?");
+  process.exit(1);
+}
+
 // ---------------------------------------------------------------------------
 
 // Errors whose message starts with one of these prefixes mean "parsed OK but
@@ -51,6 +60,52 @@ function mplFiles(dir) {
     .filter((f) => f.endsWith(".mpl"))
     .sort()
     .map((f) => ({ name: f, path: join(dir, f) }));
+}
+
+// --- system params: parse APIs must accept host-provided params -------------
+
+console.log("\nSystem params (parse APIs)");
+
+const systemParamQuery = "ds:metric | align to $__interval using avg";
+const systemParams = [{ name: "__interval", type: "Duration" }];
+
+try {
+  mpl.parse_json(systemParamQuery);
+  console.error("  FAIL  parse_json without system params should reject $__interval");
+  failed++;
+} catch {
+  console.log("  PASS  parse_json rejects missing system params");
+  passed++;
+}
+
+try {
+  mpl.parse_json(systemParamQuery, systemParams);
+  console.log("  PASS  parse_json accepts system params");
+  passed++;
+} catch (error) {
+  console.error(`  FAIL  parse_json with system params: ${error}`);
+  failed++;
+}
+
+try {
+  mpl.parse_wasm(systemParamQuery, systemParams);
+  console.log("  PASS  parse_wasm accepts system params");
+  passed++;
+} catch (error) {
+  console.error(`  FAIL  parse_wasm with system params: ${error}`);
+  failed++;
+}
+
+try {
+  const dataset = mpl.extract_dataset(systemParamQuery, systemParams);
+  if (dataset !== "ds") {
+    throw new Error(`expected ds, got ${dataset}`);
+  }
+  console.log("  PASS  extract_dataset accepts system params");
+  passed++;
+} catch (error) {
+  console.error(`  FAIL  extract_dataset with system params: ${error}`);
+  failed++;
 }
 
 // --- examples: must have no hard errors ------------------------------------
