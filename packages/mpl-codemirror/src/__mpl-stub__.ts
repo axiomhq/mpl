@@ -6,10 +6,10 @@ export function completions(_query: string, _cursorPos: number, _systemParams?: 
 export function diagnostics(_query: string, _systemParams?: unknown): unknown { return undefined; }
 export function tokenize(_query: string): unknown { return undefined; }
 export function function_info(_label: string): unknown { return undefined; }
-export function extract_dataset(_query: string): string | undefined { return undefined; }
-export function parse_json(_query: string): string { return ""; }
-export function parse_ron(_query: string): string { return ""; }
-export function parse_wasm(_query: string): unknown { return undefined; }
+export function extract_dataset(_query: string, _systemParams?: unknown): string | undefined { return undefined; }
+export function parse_json(_query: string, _systemParams?: unknown): string { return ""; }
+export function parse_ron(_query: string, _systemParams?: unknown): string { return ""; }
+export function parse_wasm(_query: string, _systemParams?: unknown): unknown { return undefined; }
 export function print_json(_query: string): string { return ""; }
 export function print_ron(_query: string): string { return ""; }
 export function initSync(_module: unknown): unknown { return {}; }

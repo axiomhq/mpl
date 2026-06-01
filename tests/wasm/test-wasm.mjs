@@ -30,6 +30,13 @@ if (typeof mpl.diagnostics !== "function") {
   process.exit(1);
 }
 
+for (const fn of ["parse_wasm", "parse_json", "parse_ron", "extract_dataset"]) {
+  if (typeof mpl[fn] !== "function") {
+    console.error(`ERROR: ${fn}() not exported — wrong build artifact?`);
+    process.exit(1);
+  }
+}
+
 // ---------------------------------------------------------------------------
 
 // Errors whose message starts with one of these prefixes mean "parsed OK but
@@ -51,6 +58,60 @@ function mplFiles(dir) {
     .filter((f) => f.endsWith(".mpl"))
     .sort()
     .map((f) => ({ name: f, path: join(dir, f) }));
+}
+
+// --- parse system param ----------------------------------------------------
+
+console.log("\nParse system param");
+
+const queryWithSystemParam = "my_dataset:my_metric | align to $__interval using avg";
+const intervalSystemParam = [{ name: "__interval", type: "Duration" }];
+
+try {
+  mpl.parse_wasm(queryWithSystemParam, []);
+  console.error("  FAIL  parse_wasm rejects system param without registration: expected error");
+  failed++;
+} catch {
+  console.log("  PASS  parse_wasm rejects system param without registration");
+  passed++;
+}
+
+const ast = mpl.parse_wasm(queryWithSystemParam, intervalSystemParam);
+if (ast && typeof ast === "object") {
+  console.log("  PASS  parse_wasm accepts registered system param");
+  passed++;
+} else {
+  console.error("  FAIL  parse_wasm accepts registered system param: expected AST object");
+  failed++;
+}
+
+const json = mpl.parse_json(queryWithSystemParam, intervalSystemParam);
+if (typeof json === "string" && json.includes("\"__interval\"") && json.includes("\"Duration\"")) {
+  console.log("  PASS  parse_json accepts registered system param");
+  passed++;
+} else {
+  console.error("  FAIL  parse_json accepts registered system param: expected serialized JSON with __interval");
+  failed++;
+}
+
+const ron = mpl.parse_ron(queryWithSystemParam, intervalSystemParam);
+if (typeof ron === "string" && ron.includes('name: "__interval"') && ron.includes("Terminal(Duration)")) {
+  console.log("  PASS  parse_ron accepts registered system param");
+  passed++;
+} else {
+  console.error("  FAIL  parse_ron accepts registered system param: expected serialized RON with __interval");
+  failed++;
+}
+
+const datasetWithParams = mpl.extract_dataset(queryWithSystemParam, intervalSystemParam);
+if (datasetWithParams === "my_dataset") {
+  console.log("  PASS  extract_dataset accepts registered system param");
+  passed++;
+} else {
+  console.error(
+    `  FAIL  extract_dataset accepts registered system param: expected my_dataset, got ${String(datasetWithParams)}`
+  );
+  failed++;
 }
 
 // --- examples: must have no hard errors ------------------------------------

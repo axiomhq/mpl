@@ -4,9 +4,8 @@
 //! `JsValue` arguments into pure Rust types, calls the corresponding
 //! `mpl_language_server::*` function, and re-encodes the result.
 
-use std::collections::HashMap;
-
 use mpl_lang::{Query, compile, query::Source};
+use mpl_language_server::SystemParamSpec;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -15,10 +14,43 @@ mod system_params;
 /// Parse `query` (ignoring warnings) into a `Query` AST. Used by the
 /// `parse_*` / `extract_dataset` shims below. Errors are stringified via
 /// `Debug` to avoid pulling miette's fancy formatter into the wasm bundle.
-fn parse(query: &str) -> Result<Query, String> {
-    compile(query, HashMap::<String, _>::new())
+fn parse_with_system_param_specs(
+    query: &str,
+    system_params: &[SystemParamSpec],
+) -> Result<Query, String> {
+    let params = mpl_language_server::to_compile_params(system_params);
+    compile(query, params)
         .map(|(q, _warnings)| q)
         .map_err(|e| format!("{e:?}"))
+}
+
+/// Pure rust JSON parse helper.
+fn parse_json_from_query(query: &str, system_params: &[SystemParamSpec]) -> Result<String, String> {
+    let parsed = parse_with_system_param_specs(query, system_params)?;
+    serde_json::to_string_pretty(&parsed).map_err(|e| format!("Failed to serialize to JSON: {e}"))
+}
+
+/// Pure rust RON parse helper.
+fn parse_ron_from_query(query: &str, system_params: &[SystemParamSpec]) -> Result<String, String> {
+    let parsed = parse_with_system_param_specs(query, system_params)?;
+    ron::ser::to_string_pretty(&parsed, ron::ser::PrettyConfig::default())
+        .map_err(|e| format!("Failed to serialize to RON: {e}"))
+}
+
+/// Pure rust parse helper.
+fn extract_dataset_from_query(query: &str, system_params: &[SystemParamSpec]) -> Option<String> {
+    fn get_dataset(q: &Query) -> String {
+        match q {
+            Query::Simple {
+                source: Source { metric_id, .. },
+                ..
+            } => metric_id.dataset.to_string(),
+            Query::Compute { left, .. } => get_dataset(left),
+        }
+    }
+
+    let parsed = parse_with_system_param_specs(query, system_params).ok()?;
+    Some(get_dataset(&parsed))
 }
 
 /// Returns completion suggestions for the given cursor position.
@@ -68,39 +100,30 @@ pub fn tokenize(query: &str) -> JsValue {
 /// Returns `None` if the query fails to parse.
 #[must_use]
 #[wasm_bindgen]
-pub fn extract_dataset(query: &str) -> Option<String> {
-    fn get_dataset(q: &Query) -> String {
-        match q {
-            Query::Simple {
-                source: Source { metric_id, .. },
-                ..
-            } => metric_id.dataset.to_string(),
-            Query::Compute { left, .. } => get_dataset(left),
-        }
-    }
-    let parsed = parse(query).ok()?;
-    Some(get_dataset(&parsed))
+pub fn extract_dataset(query: &str, system_params: JsValue) -> Option<String> {
+    let specs = system_params::decode(system_params);
+    extract_dataset_from_query(query, &specs)
 }
 
 /// Parses a query string into a `Query` AST encoded as a JS object.
 #[wasm_bindgen]
-pub fn parse_wasm(query: &str) -> Result<JsValue, String> {
-    parse(query).map(|q| to_js_value(&q))
+pub fn parse_wasm(query: &str, system_params: JsValue) -> Result<JsValue, String> {
+    let specs = system_params::decode(system_params);
+    parse_with_system_param_specs(query, &specs).map(|q| to_js_value(&q))
 }
 
 /// Parses a query string into a JSON representation of the `Query` AST.
 #[wasm_bindgen]
-pub fn parse_json(query: &str) -> Result<String, String> {
-    let parsed = parse(query)?;
-    serde_json::to_string_pretty(&parsed).map_err(|e| format!("Failed to serialize to JSON: {e}"))
+pub fn parse_json(query: &str, system_params: JsValue) -> Result<String, String> {
+    let specs = system_params::decode(system_params);
+    parse_json_from_query(query, &specs)
 }
 
 /// Parses a query string into a RON representation of the `Query` AST.
 #[wasm_bindgen]
-pub fn parse_ron(query: &str) -> Result<String, String> {
-    let parsed = parse(query)?;
-    ron::ser::to_string_pretty(&parsed, ron::ser::PrettyConfig::default())
-        .map_err(|e| format!("Failed to serialize to RON: {e}"))
+pub fn parse_ron(query: &str, system_params: JsValue) -> Result<String, String> {
+    let specs = system_params::decode(system_params);
+    parse_ron_from_query(query, &specs)
 }
 
 /// Converts a JSON representation of a `Query` back to an `MPL` query string.
@@ -147,23 +170,29 @@ mod tests {
     //! `wasm-bindgen-test` and are exercised by `tests/wasm/test-wasm.mjs`
     //! against the built wasm artifact.
 
-    use super::{extract_dataset, parse_json, parse_ron, print_json, print_ron};
+    use super::{
+        extract_dataset_from_query, parse_json_from_query, parse_ron_from_query, print_json,
+        print_ron,
+    };
 
     const QUERY: &str = "my_dataset:my_metric";
 
     #[test]
     fn extract_dataset_returns_dataset_for_simple_query() {
-        assert_eq!(extract_dataset(QUERY), Some("my_dataset".to_string()));
+        assert_eq!(
+            extract_dataset_from_query(QUERY, &[]),
+            Some("my_dataset".to_string())
+        );
     }
 
     #[test]
     fn extract_dataset_returns_none_for_invalid_query() {
-        assert_eq!(extract_dataset("@@@ not a query @@@"), None);
+        assert_eq!(extract_dataset_from_query("@@@ not a query @@@", &[]), None);
     }
 
     #[test]
     fn parse_print_json_roundtrips() {
-        let json = parse_json(QUERY).expect("parse_json");
+        let json = parse_json_from_query(QUERY, &[]).expect("parse_json");
         let back = print_json(&json).expect("print_json");
         // The printed query should still reference the same dataset / metric.
         assert!(back.contains("my_dataset"));
@@ -172,7 +201,7 @@ mod tests {
 
     #[test]
     fn parse_print_ron_roundtrips() {
-        let ron = parse_ron(QUERY).expect("parse_ron");
+        let ron = parse_ron_from_query(QUERY, &[]).expect("parse_ron");
         let back = print_ron(&ron).expect("print_ron");
         assert!(back.contains("my_dataset"));
         assert!(back.contains("my_metric"));
@@ -180,6 +209,6 @@ mod tests {
 
     #[test]
     fn parse_json_reports_error_for_invalid_query() {
-        assert!(parse_json("@@@ not a query @@@").is_err());
+        assert!(parse_json_from_query("@@@ not a query @@@", &[]).is_err());
     }
 }
