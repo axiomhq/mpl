@@ -30,6 +30,11 @@ if (typeof mpl.diagnostics !== "function") {
   process.exit(1);
 }
 
+if (typeof mpl.parse_wasm !== "function") {
+  console.error("ERROR: parse_wasm() not exported — wrong build artifact?");
+  process.exit(1);
+}
+
 // ---------------------------------------------------------------------------
 
 // Errors whose message starts with one of these prefixes mean "parsed OK but
@@ -51,6 +56,52 @@ function mplFiles(dir) {
     .filter((f) => f.endsWith(".mpl"))
     .sort()
     .map((f) => ({ name: f, path: join(dir, f) }));
+}
+
+// --- parse_wasm: basic AST shape -------------------------------------------
+
+const simpleAst = mpl.parse_wasm(`\`dataset\`:\`handling_seconds\`
+| where \`service.name\` == "fancy-schmancy-service"
+| align to 5m using avg
+| group by method using avg`);
+if (
+  "Simple" in simpleAst &&
+  simpleAst.Simple.source.metric_id.metric === "handling_seconds" &&
+  simpleAst.Simple.source.metric_id.dataset.Concrete === "dataset" &&
+  simpleAst.Simple.aggregates.length === 2 &&
+  "Align" in simpleAst.Simple.aggregates[0] &&
+  simpleAst.Simple.aggregates[0].Align.function.Builtin === "Avg" &&
+  simpleAst.Simple.aggregates[0].Align.time.Concrete.value === 5 &&
+  simpleAst.Simple.aggregates[0].Align.time.Concrete.unit === "Minute" &&
+  "GroupBy" in simpleAst.Simple.aggregates[1] &&
+  simpleAst.Simple.aggregates[1].GroupBy.function.Builtin === "Avg" &&
+  simpleAst.Simple.aggregates[1].GroupBy.tags.length === 1 &&
+  simpleAst.Simple.aggregates[1].GroupBy.tags[0] === "method"
+) {
+  console.log("  PASS  parse_wasm simple AST shape with align/group by");
+  passed++;
+} else {
+  console.error("  FAIL  parse_wasm simple AST shape with align/group by");
+  failed++;
+}
+
+const computeAst = mpl.parse_wasm(`(
+  \`ds\`:m1
+  | group by method, code using sum,
+  \`ds\`:m2
+  | group by method, path using sum
+)
+| compute test using +`);
+if (
+  "Compute" in computeAst &&
+  computeAst.Compute.name === "test" &&
+  computeAst.Compute.op.Builtin === "Add"
+) {
+  console.log("  PASS  parse_wasm compute AST shape");
+  passed++;
+} else {
+  console.error("  FAIL  parse_wasm compute AST shape");
+  failed++;
 }
 
 // --- examples: must have no hard errors ------------------------------------

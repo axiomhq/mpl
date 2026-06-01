@@ -12,6 +12,9 @@ use wasm_bindgen::prelude::*;
 
 mod system_params;
 
+#[wasm_bindgen(typescript_custom_section)]
+const PARSE_WASM_AST_TS: &str = include_str!("parse_wasm_types.d.ts");
+
 /// Parse `query` (ignoring warnings) into a `Query` AST. Used by the
 /// `parse_*` / `extract_dataset` shims below. Errors are stringified via
 /// `Debug` to avoid pulling miette's fancy formatter into the wasm bundle.
@@ -83,7 +86,7 @@ pub fn extract_dataset(query: &str) -> Option<String> {
 }
 
 /// Parses a query string into a `Query` AST encoded as a JS object.
-#[wasm_bindgen]
+#[wasm_bindgen(skip_typescript)]
 pub fn parse_wasm(query: &str) -> Result<JsValue, String> {
     parse(query).map(|q| to_js_value(&q))
 }
