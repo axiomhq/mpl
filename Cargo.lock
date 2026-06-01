@@ -681,7 +681,7 @@ dependencies = [
 
 [[package]]
 name = "mpl-lang"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "arborium",
  "bincode",
@@ -704,7 +704,7 @@ dependencies = [
 
 [[package]]
 name = "mpl-language-server"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "miette",
  "mpl-lang",
@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "mpl-language-server-wasm"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "mpl-lang",
  "mpl-language-server",
@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "mpl-playground"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "derive_more",
  "eyre",
