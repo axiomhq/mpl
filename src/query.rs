@@ -108,7 +108,14 @@ pub enum ValueError {
     #[error("Invalid Float")]
     BadFloat,
 }
-
+/// An fragment of a string expression
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub enum StringFragment {
+    /// Plain text
+    Text(String),
+    /// Interpolated expression
+    Expr(Expr),
+}
 /// An expression
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub enum Expr {
@@ -121,6 +128,8 @@ pub enum Expr {
         /// The param
         param: ParamDeclaration,
     },
+    /// A possibly interpolated string value
+    String(Vec<StringFragment>),
 }
 
 /// A comparison operator for filtering based on a value
@@ -812,18 +821,60 @@ impl ProvidedParams {
     }
 
     /// Resolve a `TagValue`.
-    pub fn resolve_tag_value(&self, expr: Expr) -> Result<TagValue, ResolveError> {
+    pub fn inline_params(&self, expr: Expr) -> Result<Expr, ResolveError> {
         let param = match expr {
-            Expr::Const(val) => return Ok(val), // no need to resolve
+            Expr::Const(val) => return Ok(Expr::Const(val)), // no need to resolve
             Expr::Param { span: _, param } => param,
+            Expr::String(parts) => {
+                // Inline all param expressions in the string concatination
+                let parts = parts
+                    .into_iter()
+                    .map(|part| match part {
+                        StringFragment::Text(text) => Ok(StringFragment::Text(text)),
+                        StringFragment::Expr(expr) => {
+                            Ok(StringFragment::Expr(self.inline_params(expr)?))
+                        }
+                    })
+                    .collect::<Result<Vec<StringFragment>, ResolveError>>()?;
+                // If all parts are text, collapse the string
+                return if parts.iter().all(|part| {
+                    matches!(part, StringFragment::Text(_))
+                        | matches!(part, StringFragment::Expr(Expr::Const(_)))
+                }) {
+                    // Collapse the string into a single text fragment,
+                    // there should not be a expr here!
+                    Ok(Expr::Const(
+                        parts
+                            .into_iter()
+                            .map(|part| match part {
+                                StringFragment::Text(text) => text,
+                                // we need to split this out so we avoid the PII safe
+                                // string formating
+                                StringFragment::Expr(Expr::Const(TagValue::String(s))) => {
+                                    s.to_string()
+                                }
+                                StringFragment::Expr(Expr::Const(c)) => c.to_string(),
+                                StringFragment::Expr(_) => {
+                                    "unreachable string collapse".to_string()
+                                }
+                            })
+                            .collect::<String>()
+                            .try_into()?,
+                    ))
+                } else {
+                    Ok(Expr::String(parts))
+                };
+            }
         };
 
         let provided_param = self.get_param(&param.name)?;
         match &provided_param.value {
-            ParamValue::String(val) => Ok(TagValue::String(SharedString::try_from(val)?)),
-            ParamValue::Int(val) => Ok(TagValue::Int(*val)),
-            ParamValue::Float(val) => Ok(TagValue::Float(*val)),
-            ParamValue::Bool(val) => Ok(TagValue::Bool(*val)),
+            ParamValue::String(val) => {
+                Ok(Expr::Const(TagValue::String(SharedString::try_from(val)?)))
+            }
+            ParamValue::Int(val) => Ok(Expr::Const(TagValue::Int(*val))),
+            ParamValue::Float(val) => Ok(Expr::Const(TagValue::Float(*val))),
+            ParamValue::Bool(val) => Ok(Expr::Const(TagValue::Bool(*val))),
             val => Err(ResolveError::InvalidType {
                 name: param.name,
                 defined: val.typ(),

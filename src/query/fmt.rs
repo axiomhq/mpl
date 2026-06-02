@@ -5,13 +5,17 @@ use crate::{
     linker::MapFunction,
     query::{
         Aggregate, Align, As, BucketBy, Cmp, Expr, Filter, GroupBy, Mapping, MetricId,
-        RelativeTime, Source, TagExtend, Time, TimeRange, TimeUnit,
+        RelativeTime, Source, StringFragment, TagExtend, Time, TimeRange, TimeUnit,
     },
     types::{BucketType, MapType, Parameterized},
 };
 
 fn escape_ident(f: &mut std::fmt::Formatter<'_>, ident: &str) -> std::fmt::Result {
-    write!(f, "`{}`", ident.replace('\\', "\\\\").replace('`', "\\`"))
+    if ident.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        write!(f, "{ident}")
+    } else {
+        write!(f, "`{}`", ident.replace('\\', "\\\\").replace('`', "\\`"))
+    }
 }
 
 impl Display for Query {
@@ -101,6 +105,22 @@ impl Display for TagExtend {
         write!(f, "{tag} = {value}", tag = self.tag, value = self.value)
     }
 }
+fn write_string(f: &mut std::fmt::Formatter<'_>, text: &str) -> std::fmt::Result {
+    for c in text.chars() {
+        match c {
+            '\r' => write!(f, "\\r")?,
+            '\n' => write!(f, "\\n")?,
+            '\t' => write!(f, "\\t")?,
+            '\x08' => write!(f, "\\b")?,
+            '\x0C' => write!(f, "\\f")?,
+            '\\' => write!(f, "\\\\")?,
+            '$' => write!(f, "\\$")?,
+            '"' => write!(f, "\\\"")?,
+            _ => write!(f, "{c}")?,
+        }
+    }
+    Ok(())
+}
 impl Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -108,6 +128,16 @@ impl Display for Expr {
             Expr::Param { span: _, param } => {
                 write!(f, "$")?;
                 escape_ident(f, param.name.as_str())
+            }
+            Expr::String(string_fragments) => {
+                write!(f, "\"")?;
+                for fragment in string_fragments {
+                    match fragment {
+                        StringFragment::Text(text) => write_string(f, text)?,
+                        StringFragment::Expr(expr) => write!(f, "${{ {expr} }}")?,
+                    }
+                }
+                write!(f, "\"")
             }
         }
     }

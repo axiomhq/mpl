@@ -378,6 +378,9 @@ fn get_expr(e: &Expr) -> Result<&TagValue> {
         Expr::Param { .. } => {
             bail!("Parameterized values are not supported in the playground")
         }
+        Expr::String(_) => {
+            bail!("String values are not supported in the playground")
+        }
     }
 }
 

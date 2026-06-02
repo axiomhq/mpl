@@ -16,11 +16,12 @@ ident = _{ plain_ident | escaped_ident }
 
 as = { "as" ~ metric_name }
 
-string       = ${ "\"" ~ string_inner ~ "\"" }
-string_inner = @{ string_char* }
+string       = ${ "\"" ~ string_inner* ~ "\"" }
+string_inner = !{ string_chars | ("${" ~ expr ~ "}") }
+string_chars = @{ string_char+ }
 string_char  =  {
-    !("\"" | "\\") ~ ANY
-  | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+    !("\"" | "\\" | "${") ~ ANY
+  | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t" | "$")
   | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
 }
 inf          =  { "inf" | "+inf" | "-inf" }

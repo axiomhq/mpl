@@ -5,7 +5,7 @@ use crate::{
     query::{
         Cmp, Expr, Filter, FilterOrIfDef, ParamDeclaration, ParamType, ParamValue,
         ParseProvidedParamsError, ProvidedParam, ProvidedParams, RelativeTime, ResolveError,
-        TagType, TerminalParamType, TimeUnit,
+        StringFragment, TagType, TerminalParamType, TimeUnit,
     },
     tags::TagValue,
     types::Dataset,
@@ -247,7 +247,7 @@ fn resolve_tag_value_from_provided_param() {
     )]);
 
     let value = provided_params
-        .resolve_tag_value(Expr::Param {
+        .inline_params(Expr::Param {
             span: SourceSpan::from(0..0),
             param: ParamDeclaration {
                 span: SourceSpan::from(0..0),
@@ -259,7 +259,40 @@ fn resolve_tag_value_from_provided_param() {
 
     assert_eq!(
         value,
-        TagValue::String("prod".try_into().expect("valid shared string"))
+        Expr::Const(TagValue::String(
+            "prod".try_into().expect("valid shared string")
+        ))
+    );
+}
+
+#[test]
+fn resolve_tag_value_from_provided_param_interpolated() {
+    let provided_params = ProvidedParams::new(vec![ProvidedParam::new(
+        "env",
+        ParamValue::String("prod".to_string()),
+    )]);
+
+    let value = provided_params
+        .inline_params(Expr::String(vec![
+            StringFragment::Text("http://".to_string()),
+            StringFragment::Expr(Expr::Param {
+                span: SourceSpan::from(0..0),
+                param: ParamDeclaration {
+                    span: SourceSpan::from(0..0),
+                    name: "env".to_string(),
+                    typ: ParamType::Terminal(TerminalParamType::Tag(TagType::String)),
+                },
+            }),
+            StringFragment::Text(":".to_string()),
+            StringFragment::Expr(Expr::Const(TagValue::Int(8080))),
+        ]))
+        .expect("expected string param to resolve");
+
+    assert_eq!(
+        value,
+        Expr::Const(TagValue::String(
+            "http://prod:8080".try_into().expect("valid shared string")
+        ))
     );
 }
 
@@ -267,7 +300,7 @@ fn resolve_tag_value_from_provided_param() {
 fn resolve_tag_value_errors_for_missing_param() {
     let provided_params = ProvidedParams::new(vec![]);
 
-    match provided_params.resolve_tag_value(Expr::Param {
+    match provided_params.inline_params(Expr::Param {
         span: SourceSpan::from(0..0),
         param: ParamDeclaration {
             span: SourceSpan::from(0..0),

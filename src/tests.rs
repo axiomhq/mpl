@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     CompileError, ParseError, TypeError,
-    query::{Cmp, Expr, Filter, TagType, TerminalParamType},
+    query::{Cmp, DirectiveValue, Expr, Filter, TagType, TerminalParamType},
 };
 
 #[test]
@@ -423,5 +423,27 @@ fn group_by_compute() -> Result<(), Box<dyn std::error::Error>> {
 | compute test using +
     ";
     super::compile(s, HashMap::new())?;
+    Ok(())
+}
+
+#[test]
+fn directive_string() -> Result<(), Box<dyn std::error::Error>> {
+    let (query, _warnings) = super::compile("set foo = \"bar\";\ndataset:metric", HashMap::new())?;
+    assert_eq!(
+        query.directives().get("foo"),
+        Some(&DirectiveValue::String("bar".to_string()))
+    );
+    Ok(())
+}
+
+#[test]
+fn interp_display() -> Result<(), Box<dyn std::error::Error>> {
+    let src = r#"param $host: string;
+dataset:metric
+| extend url = "http://${ $host }:${ 8080 }""#;
+    let (query, _warnings) = super::compile(src, HashMap::new())?;
+    let printed = query.to_string();
+    super::compile(&printed, HashMap::new())
+        .unwrap_or_else(|e| panic!("printed query did not re-parse: {e}\nprinted:\n{printed}"));
     Ok(())
 }

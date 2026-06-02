@@ -358,12 +358,12 @@ impl QueryVisitor for ParamTypecheckVisitor {
 
         match cmp {
             Cmp::Is(_)
-            | Cmp::Eq(Expr::Const(_))
-            | Cmp::Ne(Expr::Const(_))
-            | Cmp::Gt(Expr::Const(_))
-            | Cmp::Ge(Expr::Const(_))
-            | Cmp::Lt(Expr::Const(_))
-            | Cmp::Le(Expr::Const(_)) => Ok(VisitRes::Walk),
+            | Cmp::Eq(Expr::Const(_) | Expr::String(_))
+            | Cmp::Ne(Expr::Const(_) | Expr::String(_))
+            | Cmp::Gt(Expr::Const(_) | Expr::String(_))
+            | Cmp::Ge(Expr::Const(_) | Expr::String(_))
+            | Cmp::Lt(Expr::Const(_) | Expr::String(_))
+            | Cmp::Le(Expr::Const(_) | Expr::String(_)) => Ok(VisitRes::Walk),
             Cmp::Eq(Expr::Param { span, param }) => {
                 if param.typ() == TerminalParamType::Regex {
                     // we have a regex param in an eq

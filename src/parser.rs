@@ -4,7 +4,6 @@ use chrono::DateTime;
 use miette::SourceSpan;
 use pest::iterators::{Pair, Pairs};
 use regex::Regex;
-use strumbra::SharedString;
 
 use crate::{
     ParseError,
@@ -15,8 +14,8 @@ use crate::{
     query::{
         Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Expr, Filter,
         FilterOrIfDef, GroupBy, Mapping, MetricId, ParamDeclaration, ParamType, ParamValue, Params,
-        Query, RelativeTime, Source, TagExtend, TagType, TerminalParamType, Time, TimeRange,
-        TimeUnit, WarningReason, Warnings,
+        Query, RelativeTime, Source, StringFragment, TagExtend, TagType, TerminalParamType, Time,
+        TimeRange, TimeUnit, WarningReason, Warnings,
     },
     stdlib::STDLIB,
     tags::TagValue,
@@ -99,14 +98,17 @@ impl PairHelper<Rule> for Pair<'_, Rule> {
     }
 }
 
+fn unescape_and_trim(data: &str, delim: char) -> String {
+    unescape(
+        data.trim_start_matches(delim).trim_end_matches(delim),
+        delim,
+    )
+}
+
 fn unescape(data: &str, delim: char) -> String {
     let mut escaped = false;
-    let mut res = String::with_capacity(data.len() - 2);
-    for c in data
-        .trim_start_matches(delim)
-        .trim_end_matches(delim)
-        .chars()
-    {
+    let mut res = String::with_capacity(data.len());
+    for c in data.chars() {
         if escaped {
             escaped = false;
             match c {
@@ -116,6 +118,7 @@ fn unescape(data: &str, delim: char) -> String {
                 'b' => res.push('\x08'),
                 'f' => res.push('\x0C'),
                 '\\' => res.push('\\'),
+                '$' => res.push('$'),
                 c if c == delim => res.push(delim),
                 _ => {
                     res.push('\\');
@@ -134,7 +137,7 @@ fn unescape(data: &str, delim: char) -> String {
 fn parse_ident(source: &Pair<'_, Rule>) -> Result<String> {
     match source.as_rule() {
         Rule::plain_ident => Ok(source.as_str().to_string()),
-        Rule::escaped_ident => Ok(unescape(source.as_str(), '`').clone()),
+        Rule::escaped_ident => Ok(unescape_and_trim(source.as_str(), '`').clone()),
         rule => Err(ParseError::Unexpected {
             span: pair_to_source_span(source),
             rule,
@@ -170,7 +173,7 @@ fn resolve_param<'p>(source: &Pair<'_, Rule>, state: &'p State) -> Result<&'p Pa
 fn parse_source_ident(source: &Pair<'_, Rule>) -> Result<String> {
     match source.as_rule() {
         Rule::plain_ident => Ok(source.as_str().to_string()),
-        Rule::escaped_ident => Ok(unescape(source.as_str(), '`').clone()),
+        Rule::escaped_ident => Ok(unescape_and_trim(source.as_str(), '`').clone()),
         rule => Err(ParseError::Unexpected {
             span: pair_to_source_span(source),
             rule,
@@ -186,7 +189,7 @@ fn parse_source_ident_param(
     match source.as_rule() {
         Rule::plain_ident => Ok(Parameterized::Concrete(source.as_str().to_string())),
         Rule::escaped_ident => Ok(Parameterized::Concrete(
-            unescape(source.as_str(), '`').clone(),
+            unescape_and_trim(source.as_str(), '`').clone(),
         )),
         Rule::param_ident => {
             let span = pair_to_source_span(&source);
@@ -474,7 +477,10 @@ fn parse_directive_value(source: Pair<Rule>) -> Result<DirectiveValue> {
     let mut inner = source.into_inner();
     let next = inner.n()?;
     match next.as_rule() {
-        Rule::string => Ok(DirectiveValue::String(unescape(next.as_str(), '"'))),
+        Rule::string => Ok(DirectiveValue::String(unescape_and_trim(
+            next.as_str(),
+            '"',
+        ))),
         Rule::int => Ok(DirectiveValue::Int(parse_int(&next)?)),
         Rule::float | Rule::inf => Ok(DirectiveValue::Float(parse_float(&next)?)),
         Rule::bool => Ok(DirectiveValue::Bool(next.as_str().to_string().parse()?)),
@@ -560,7 +566,10 @@ fn parse_param_type(state: &mut State, source: Pair<Rule>) -> Result<ParamType> 
 
 fn parse_regex(source: &Pair<'_, Rule>) -> Result<Regex> {
     source.assert_type(Rule::regex)?;
-    Ok(regex::Regex::new(&unescape(&source.as_str()[1..], '/'))?)
+    Ok(regex::Regex::new(&unescape_and_trim(
+        &source.as_str()[1..],
+        '/',
+    ))?)
 }
 
 fn parse_expr(source: Pair<Rule>, state: &State) -> Result<Expr> {
@@ -587,9 +596,7 @@ fn parse_expr(source: Pair<Rule>, state: &State) -> Result<Expr> {
 
             // concrete value
             match next.as_rule() {
-                Rule::string => Ok(Expr::Const(TagValue::String(SharedString::try_from(
-                    unescape(next.as_str(), '"'),
-                )?))),
+                Rule::string => parse_string(next, state),
                 Rule::float | Rule::inf => Ok(Expr::Const(TagValue::Float(parse_float(&next)?))),
                 Rule::int => Ok(Expr::Const(TagValue::Int(parse_int(&next)?))),
                 Rule::bool => Ok(Expr::Const(TagValue::Bool(
@@ -608,6 +615,48 @@ fn parse_expr(source: Pair<Rule>, state: &State) -> Result<Expr> {
             expected: vec![Rule::param_ident, Rule::expr],
         }),
     }
+}
+
+fn parse_string(source: Pair<Rule>, state: &State) -> Result<Expr> {
+    source.assert_type(Rule::string)?;
+    let inner = source.into_inner();
+
+    let mut parts = Vec::new();
+    for part in inner {
+        part.assert_type(Rule::string_inner)?;
+        let mut inner_part = part.into_inner();
+        let next = inner_part.n()?;
+        inner_part.assert_empty()?;
+        match next.as_rule() {
+            Rule::string_chars => parts.push(StringFragment::Text(unescape(next.as_str(), '"'))),
+            Rule::expr => parts.push(StringFragment::Expr(parse_expr(next, state)?)),
+            _ => {
+                return Err(ParseError::Unexpected {
+                    span: pair_to_source_span(&next),
+                    rule: next.as_rule(),
+                    expected: vec![Rule::string, Rule::expr],
+                });
+            }
+        }
+    }
+    if parts
+        .iter()
+        .all(|part| matches!(part, StringFragment::Text(_)))
+    {
+        return Ok(Expr::Const(TagValue::String(
+            parts
+                .into_iter()
+                .map(|part| match part {
+                    StringFragment::Text(text) => text,
+                    StringFragment::Expr(_) => {
+                        unreachable!("we tested that all fragments are Text")
+                    }
+                })
+                .collect::<String>()
+                .try_into()?,
+        )));
+    }
+    Ok(Expr::String(parts))
 }
 
 fn parse_value_filter(field: String, source: Pair<Rule>, state: &State) -> Result<Filter> {
@@ -687,7 +736,8 @@ pub(crate) fn parse_param_value(
                 rule,
             }),
         },
-        TerminalParamType::Tag(TagType::String) => Ok(ParamValue::String(unescape(
+        // TODO: how should we handle interpolsted strings here?
+        TerminalParamType::Tag(TagType::String) => Ok(ParamValue::String(unescape_and_trim(
             const_type(next, Rule::string, param.typ)?.as_str(),
             '"',
         ))),
