@@ -447,3 +447,25 @@ dataset:metric
         .unwrap_or_else(|e| panic!("printed query did not re-parse: {e}\nprinted:\n{printed}"));
     Ok(())
 }
+
+#[test]
+fn tag_expr_display() -> Result<(), Box<dyn std::error::Error>> {
+    let cases = [
+        "dataset:metric\n| where foo == bar",
+        "dataset:metric\n| extend x = some_tag",
+        "dataset:metric\n| extend x = `weird tag`",
+        "dataset:metric\n| where foo == `weird-tag`",
+        "dataset:metric\n| extend url = \"http://${ id }\"",
+    ];
+    for src in cases {
+        let (query, _warnings) = super::compile(src, HashMap::new())?;
+        let printed = query.to_string();
+        let (reparsed, _warnings) = super::compile(&printed, HashMap::new())?;
+        assert_eq!(
+            printed,
+            reparsed.to_string(),
+            "round-trip unstable for {src:?} vs {printed:?}"
+        );
+    }
+    Ok(())
+}

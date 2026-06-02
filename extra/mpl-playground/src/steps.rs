@@ -394,6 +394,7 @@ fn expr_to_string(e: &Expr) -> Result<String> {
             }
             Ok(out)
         }
+        Expr::Tag(_) => todo!(),
     }
 }
 

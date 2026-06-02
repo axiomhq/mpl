@@ -609,10 +609,11 @@ fn parse_expr(source: Pair<Rule>, state: &State) -> Result<Expr> {
                 }),
             }
         }
+        Rule::plain_ident | Rule::escaped_ident => Ok(Expr::Tag(parse_ident(&next)?)),
         _ => Err(ParseError::Unexpected {
             span: pair_to_source_span(&next),
             rule: next.as_rule(),
-            expected: vec![Rule::param_ident, Rule::expr],
+            expected: vec![Rule::param_ident, Rule::r#const, Rule::ident],
         }),
     }
 }

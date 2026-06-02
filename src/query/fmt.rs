@@ -125,6 +125,7 @@ impl Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Expr::Const(c) => write!(f, "{c}"),
+            Expr::Tag(tag) => escape_ident(f, tag),
             Expr::Param { span: _, param } => {
                 write!(f, "$")?;
                 escape_ident(f, param.name.as_str())

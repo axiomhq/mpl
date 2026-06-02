@@ -130,6 +130,8 @@ pub enum Expr {
     },
     /// A possibly interpolated string value
     String(Vec<StringFragment>),
+    /// A reference to a tag value
+    Tag(String),
 }
 
 /// A comparison operator for filtering based on a value
@@ -824,6 +826,7 @@ impl ProvidedParams {
     pub fn inline_params(&self, expr: Expr) -> Result<Expr, ResolveError> {
         let param = match expr {
             Expr::Const(val) => return Ok(Expr::Const(val)), // no need to resolve
+            Expr::Tag(tag) => return Ok(Expr::Tag(tag)),     // no need to resolve
             Expr::Param { span: _, param } => param,
             Expr::String(parts) => {
                 // Inline all param expressions in the string concatination

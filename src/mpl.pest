@@ -128,7 +128,7 @@ param_ident       = ${ "$" ~ ident }
 param             =  { "param" ~ param_ident ~ ":" ~ param_type ~ ";" }
 // used for parsing provided params
 
-expr = { const | param_ident }
+expr = { const | param_ident | ident }
 
 const = { string | float | int | bool | inf }
 
