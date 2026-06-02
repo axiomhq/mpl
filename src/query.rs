@@ -812,10 +812,10 @@ impl ProvidedParams {
     }
 
     /// Resolve a `TagValue`.
-    pub fn resolve_tag_value(&self, pv: Parameterized<TagValue>) -> Result<TagValue, ResolveError> {
-        let param = match pv {
-            Parameterized::Concrete(val) => return Ok(val), // no need to resolve
-            Parameterized::Param { span: _, param } => param,
+    pub fn resolve_tag_value(&self, expr: Expr) -> Result<TagValue, ResolveError> {
+        let param = match expr {
+            Expr::Const(val) => return Ok(val), // no need to resolve
+            Expr::Param { span: _, param } => param,
         };
 
         let provided_param = self.get_param(&param.name)?;
