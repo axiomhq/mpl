@@ -4,8 +4,8 @@ use crate::{
     enc_regex::EncodableRegex,
     query::{
         Cmp, Expr, Filter, FilterOrIfDef, ParamDeclaration, ParamType, ParamValue,
-        ParseProvidedParamsError, ProvidedParam, ProvidedParams, RelativeTime, TagType,
-        TerminalParamType, TimeUnit,
+        ParseProvidedParamsError, ProvidedParam, ProvidedParams, RelativeTime, ResolveError,
+        TagType, TerminalParamType, TimeUnit,
     },
     tags::TagValue,
     types::Dataset,
@@ -236,6 +236,47 @@ fn too_many_provided_params() {
             // ok
         }
         res => panic!("expected too many params error, got {res:?}"),
+    }
+}
+
+#[test]
+fn resolve_tag_value_from_provided_param() {
+    let provided_params = ProvidedParams::new(vec![ProvidedParam::new(
+        "env",
+        ParamValue::String("prod".to_string()),
+    )]);
+
+    let value = provided_params
+        .resolve_tag_value(Expr::Param {
+            span: SourceSpan::from(0..0),
+            param: ParamDeclaration {
+                span: SourceSpan::from(0..0),
+                name: "env".to_string(),
+                typ: ParamType::Terminal(TerminalParamType::Tag(TagType::String)),
+            },
+        })
+        .expect("expected string param to resolve");
+
+    assert_eq!(
+        value,
+        TagValue::String("prod".try_into().expect("valid shared string"))
+    );
+}
+
+#[test]
+fn resolve_tag_value_errors_for_missing_param() {
+    let provided_params = ProvidedParams::new(vec![]);
+
+    match provided_params.resolve_tag_value(Expr::Param {
+        span: SourceSpan::from(0..0),
+        param: ParamDeclaration {
+            span: SourceSpan::from(0..0),
+            name: "env".to_string(),
+            typ: ParamType::Terminal(TerminalParamType::Tag(TagType::String)),
+        },
+    }) {
+        Err(ResolveError::ParamNotProvided(name)) => assert_eq!(name, "env"),
+        res => panic!("expected missing param error, got {res:?}"),
     }
 }
 
