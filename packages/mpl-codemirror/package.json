@@ -1,6 +1,6 @@
 {
   "name": "@axiomhq/mpl-codemirror",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "type": "module",
   "collaborators": [
     "Seoyoung Lee <seoyoung@axiom.co>",
