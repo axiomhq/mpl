@@ -580,27 +580,22 @@ pub fn compute_completions_with_params(
 
     let span = Span::new(word_start, cursor);
     let mut result = if cursor_in_interpolation(query, word_start) {
-        // Inside a `${ \u2026 }` string interpolation the grammar only accepts an
-        // `expr` (`param_ident | const`), so the only useful completion is a
-        // param. Only offer it when the user is typing a param (`$\u2026`) or has
-        // typed nothing yet; a partial like `42` or `tru` is a const literal we
-        // cannot complete, so we return nothing rather than misfiring.
-        if !(partial.is_empty() || partial.starts_with('$')) {
-            return None;
-        }
+        // Inside a `${ \u2026 }` string interpolation the grammar accepts an `expr`
+        // (`const | param_ident | ident`), so a tag reference or a param are
+        // both legal. A const literal (`42`, `"x"`) cannot be completed.
         // `active_gate = None` excludes optional params (only valid inside an
         // `ifdef` body); this is the safe direction the rest of the engine uses.
-        suggest_params(span, &params, None, |_| true)?
+        suggest_expr_position(before, span, partial, &params, None, |_| true)?
     } else {
         match locate_query_context(before) {
             QueryContext::Subquery(text) => {
-                suggest_for_context(text, span, FilterPolicy::Include, &params)
+                suggest_for_context(text, span, partial, FilterPolicy::Include, &params)
                     .or_else(|| suggest_for_preamble(text, partial, span))
                     .or_else(|| suggest_for_source(text, partial, span, &params))?
             }
             QueryContext::ComputeRulePipe(text) => suggest_for_compute_rule(text, span)?,
             QueryContext::ComputeTailPipe(text) => {
-                suggest_for_context(text, span, FilterPolicy::Exclude, &params)?
+                suggest_for_context(text, span, partial, FilterPolicy::Exclude, &params)?
             }
         }
     };
@@ -1111,6 +1106,53 @@ fn suggest_params(
     }
 }
 
+/// Completions for a position that accepts an `expr` (`const | param_ident |
+/// ident`): filter comparison RHS, `extend` values, and string interpolation.
+///
+/// The completion API can only return one result kind, so route on what the
+/// user is typing:
+/// - `$…` → a param reference (params are always `$`-prefixed),
+/// - a string/numeric literal prefix (`"`, digit, `-`) → a `const`, which
+///   cannot be completed (return `None`),
+/// - a non-`$` identifier prefix (including a backtick-escaped one) → a tag
+///   reference, since it can never match a `$param`,
+/// - empty → prefer declared params (the richer, finite set, preserving the
+///   existing param UX) and fall back to tag completions when no param fits.
+///
+/// Tag completions need a resolvable dataset/metric; with none, only the
+/// param path can contribute.
+fn suggest_expr_position(
+    before: &str,
+    span: Span,
+    partial: &str,
+    params: &[ParamItem],
+    active_gate: Option<&str>,
+    allowed_params: impl Fn(ParamType) -> bool,
+) -> Option<CompletionResult> {
+    if partial.starts_with('$') {
+        return suggest_params(span, params, active_gate, allowed_params);
+    }
+    if partial
+        .chars()
+        .next()
+        .is_some_and(|c| c == '"' || c == '-' || c.is_ascii_digit())
+    {
+        return None;
+    }
+    // At an empty position, declared params take precedence; a tag reference
+    // is the fallback. Once the user types an identifier it can only be a tag.
+    if partial.is_empty()
+        && let Some(result) = suggest_params(span, params, active_gate, allowed_params)
+    {
+        return Some(result);
+    }
+    extract_source_info(before).map(|(dataset, metric)| CompletionResult::Tag {
+        span,
+        dataset,
+        metric,
+    })
+}
+
 // ── suggestion logic ────────────────────────────────────────────
 
 /// Controls whether filter/where keywords are included in pipe completions.
@@ -1237,6 +1279,7 @@ fn suggest_for_compute_rule(text: &str, span: Span) -> Option<CompletionResult> 
 fn suggest_for_context(
     before: &str,
     span: Span,
+    partial: &str,
     policy: FilterPolicy,
     params: &[ParamItem],
 ) -> Option<CompletionResult> {
@@ -1262,12 +1305,12 @@ fn suggest_for_context(
 
     match first {
         "where" | "filter" if policy == FilterPolicy::Include => {
-            suggest_filter_context(before, span, &words, last, params, None)
+            suggest_filter_context(before, span, partial, &words, last, params, None)
         }
         // `sample` takes a single numeric argument; no further completions
         "sample" => None,
         f if f.starts_with("ifdef") && policy == FilterPolicy::Include => {
-            suggest_ifdef_context(before, span, after_pipe, params)
+            suggest_ifdef_context(before, span, partial, after_pipe, params)
         }
         "group"
             if words.len() >= 2 && words[1] == "by" && (last == "by" || last.ends_with(',')) =>
@@ -1279,7 +1322,7 @@ fn suggest_for_context(
                 metric,
             })
         }
-        _ => suggest_pipe_rule(first, last, &words, span, params),
+        _ => suggest_pipe_rule(before, first, last, &words, span, partial, params),
     }
 }
 
@@ -1300,6 +1343,7 @@ fn suggest_for_context(
 fn suggest_ifdef_context(
     before: &str,
     span: Span,
+    partial: &str,
     after_pipe: &str,
     params: &[ParamItem],
 ) -> Option<CompletionResult> {
@@ -1342,6 +1386,7 @@ fn suggest_ifdef_context(
         return suggest_inside_filter_body(
             before,
             span,
+            partial,
             after_pipe[if_open + 1..].trim(),
             params,
             active_gate,
@@ -1384,7 +1429,7 @@ fn suggest_ifdef_context(
     if else_body.contains('}') {
         return None;
     }
-    suggest_inside_filter_body(before, span, else_body.trim(), params, active_gate)
+    suggest_inside_filter_body(before, span, partial, else_body.trim(), params, active_gate)
 }
 
 /// Shared body of cases (c) and (f): cursor sits inside a `{ ... }` filter
@@ -1394,6 +1439,7 @@ fn suggest_ifdef_context(
 fn suggest_inside_filter_body(
     before: &str,
     span: Span,
+    partial: &str,
     body: &str,
     params: &[ParamItem],
     active_gate: Option<&str>,
@@ -1412,7 +1458,15 @@ fn suggest_inside_filter_body(
     let body_first = body_words[0];
     let body_last = body_words.last().copied().unwrap_or(body_first);
     if matches!(body_first, "where" | "filter") {
-        suggest_filter_context(before, span, &body_words, body_last, params, active_gate)
+        suggest_filter_context(
+            before,
+            span,
+            partial,
+            &body_words,
+            body_last,
+            params,
+            active_gate,
+        )
     } else {
         None
     }
@@ -1446,10 +1500,12 @@ fn suggest_optional_params(span: Span, params: &[ParamItem]) -> Option<Completio
 /// Shared logic for `pipe_rule` keyword completions (align/map/group/bucket/
 /// as). Used by both simple queries and compute outer tails.
 fn suggest_pipe_rule(
+    before: &str,
     first: &str,
     last: &str,
     words: &[&str],
     span: Span,
+    partial: &str,
     params: &[ParamItem],
 ) -> Option<CompletionResult> {
     match first {
@@ -1532,7 +1588,7 @@ fn suggest_pipe_rule(
             span,
             options: vec![],
         }),
-        "extend" => suggest_extend_pipe(words, last, span, params),
+        "extend" => suggest_extend_pipe(before, words, last, span, partial, params),
         _ => None,
     }
 }
@@ -1546,13 +1602,15 @@ fn suggest_pipe_rule(
 ///
 /// Cursor positions handled:
 ///   - `| extend foo `              → suggest `=`
-///   - `| extend foo = `            → suggest params (string/int/float/bool)
+///   - `| extend foo = `            → suggest tags/params (the value is an expr)
 ///   - `| extend foo = "x" `      → suggest `,` to continue, or no-op
 ///   - `| extend foo = "x", `     → free-form ident, no completions
 fn suggest_extend_pipe(
+    before: &str,
     words: &[&str],
     last: &str,
     span: Span,
+    partial: &str,
     params: &[ParamItem],
 ) -> Option<CompletionResult> {
     // `extend` alone or with a trailing comma waits for the user to type a
@@ -1575,9 +1633,14 @@ fn suggest_extend_pipe(
         });
     }
 
-    // After `=` token — suggest declared params with scalar types.
+    // After `=` token the value is an `expr` (tag, param, or const literal).
     if last == "=" {
-        return suggest_extend_value_params(span, params);
+        return suggest_expr_position(before, span, partial, params, None, |typ| {
+            matches!(
+                typ,
+                ParamType::String | ParamType::Bool | ParamType::Int | ParamType::Float
+            )
+        });
     }
 
     // After a bare identifier (`| extend foo `) — suggest the `=` operator.
@@ -1612,17 +1675,6 @@ fn is_extend_value_literal(tok: &str) -> bool {
         && tok
             .chars()
             .all(|c| c.is_ascii_digit() || c == '.' || c == '-' || c == 'e' || c == 'E' || c == '+')
-}
-
-/// Params allowed on the RHS of an extend. Mirrors the predicate used by
-/// `suggest_filter_value_params` minus regex (regex is not a tag value).
-fn suggest_extend_value_params(span: Span, params: &[ParamItem]) -> Option<CompletionResult> {
-    suggest_params(span, params, None, |typ| {
-        matches!(
-            typ,
-            ParamType::String | ParamType::Bool | ParamType::Int | ParamType::Float
-        )
-    })
 }
 
 fn suggest_bucket_pipe(
@@ -1766,6 +1818,7 @@ fn suggest_bucket_args(words: &[&str], span: Span) -> Option<CompletionResult> {
 fn suggest_filter_context(
     before: &str,
     span: Span,
+    partial: &str,
     words: &[&str],
     last: &str,
     params: &[ParamItem],
@@ -1811,7 +1864,21 @@ fn suggest_filter_context(
             });
         }
         if matches!(last, "==" | "!=" | "<" | ">" | "<=" | ">=") {
-            return suggest_filter_value_params(span, last, params, active_gate);
+            // The comparison RHS is an `expr`: a tag, a param, or a const. The
+            // operator decides whether a regex param is also acceptable.
+            let op = last;
+            return suggest_expr_position(
+                before,
+                span,
+                partial,
+                params,
+                active_gate,
+                |typ| match typ {
+                    ParamType::String | ParamType::Bool | ParamType::Int | ParamType::Float => true,
+                    ParamType::Regex => matches!(op, "==" | "!="),
+                    _ => false,
+                },
+            );
         }
         Some(CompletionResult::Keywords {
             span,
@@ -1876,24 +1943,6 @@ fn suggest_filter_context(
             ],
         })
     }
-}
-
-/// Returns param completions for the filter value position (after a comparison
-/// operator). Allows string/bool/int/float params for all operators, and regex
-/// params only for `==` and `!=`. Optional params are gated by `active_gate`
-/// so a `where` outside any `ifdef` never suggests them, and an `ifdef($x)`
-/// body suggests `$x` only — not other optional params.
-fn suggest_filter_value_params(
-    span: Span,
-    op: &str,
-    params: &[ParamItem],
-    active_gate: Option<&str>,
-) -> Option<CompletionResult> {
-    suggest_params(span, params, active_gate, |typ| match typ {
-        ParamType::String | ParamType::Bool | ParamType::Int | ParamType::Float => true,
-        ParamType::Regex => matches!(op, "==" | "!="),
-        _ => false,
-    })
 }
 
 /// Returns `true` when every line in `text` is a preamble construct

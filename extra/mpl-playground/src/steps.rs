@@ -372,30 +372,52 @@ fn get_param<T>(p: &Parameterized<T>) -> Result<&T> {
     }
 }
 
-/// Renders an expression to the string value used for filtering and `extend`.
+/// Resolves an expression to the string value used for filtering and `extend`,
+/// against the tags of the series currently being evaluated.
 ///
 /// Constant string interpolations (`"a ${ 1 }"`, including nested ones) are
 /// folded by concatenating their fragments. Params cannot be resolved in the
 /// playground, so any param — including one embedded inside an interpolation —
 /// is rejected.
-fn expr_to_string(e: &Expr) -> Result<String> {
+///
+/// A tag reference (`Expr::Tag`) resolves to that tag's value on the current
+/// series. Returns `Ok(None)` when a referenced tag is absent from the series
+/// so callers can decide the policy: filters treat a missing operand as a
+/// non-match, while `extend` treats it as an error (it must materialise a
+/// concrete value). A missing tag inside an interpolation poisons the whole
+/// string, since the result is no longer well-defined.
+fn eval_expr(e: &Expr, tags: &HashMap<String, String>) -> Result<Option<String>> {
     match e {
-        Expr::Const(v) => Ok(raw_tag(v)),
+        Expr::Const(v) => Ok(Some(raw_tag(v))),
         Expr::Param { .. } => {
             bail!("Parameterized values are not supported in the playground")
         }
+        Expr::Tag(name) => Ok(tags.get(name).cloned()),
         Expr::String(fragments) => {
             let mut out = String::new();
             for fragment in fragments {
                 match fragment {
                     StringFragment::Text(text) => out.push_str(text),
-                    StringFragment::Expr(inner) => out.push_str(&expr_to_string(inner)?),
+                    StringFragment::Expr(inner) => match eval_expr(inner, tags)? {
+                        Some(v) => out.push_str(&v),
+                        None => return Ok(None),
+                    },
                 }
             }
-            Ok(out)
+            Ok(Some(out))
         }
-        Expr::Tag(_) => todo!(),
     }
+}
+
+/// Resolves an expression that must yield a concrete value (used by `extend`).
+///
+/// Errors when the expression references a tag absent from the current series,
+/// because `extend` has to stamp a concrete value onto every output series.
+fn require_expr(e: &Expr, tags: &HashMap<String, String>) -> Result<String> {
+    eval_expr(e, tags)?.ok_or_else(|| match e {
+        Expr::Tag(name) => eyre!("extend value references missing tag: {name}"),
+        _ => eyre!("extend value references a tag that is missing on this series"),
+    })
 }
 
 fn raw_tag(v: &TagValue) -> String {
@@ -438,30 +460,28 @@ fn eval_source(src: &Source, datasets: &Datasets) -> Result<Vec<Series>> {
         .unwrap_or_default())
 }
 
-fn evaluate_cmp(tag_val: &str, rhs: &Cmp) -> Result<bool> {
+fn evaluate_cmp(tag_val: &str, rhs: &Cmp, tags: &HashMap<String, String>) -> Result<bool> {
+    // A comparison against a missing tag reference cannot be evaluated, so it
+    // is treated as a non-match for every operator (including `!=`).
+    let numeric_cmp = |p: &Expr, op: fn(f64, f64) -> bool| -> Result<bool> {
+        Ok(match eval_expr(p, tags)? {
+            Some(rhs) => {
+                let lhs: f64 = tag_val.parse().unwrap_or(f64::NAN);
+                let rhs_f: f64 = rhs.parse().unwrap_or(f64::NAN);
+                op(lhs, rhs_f)
+            }
+            None => false,
+        })
+    };
     match rhs {
-        Cmp::Eq(p) => Ok(tag_val == expr_to_string(p)?),
-        Cmp::Ne(p) => Ok(tag_val != expr_to_string(p)?),
-        Cmp::Gt(p) => {
-            let lhs: f64 = tag_val.parse().unwrap_or(f64::NAN);
-            let rhs_f: f64 = expr_to_string(p)?.parse().unwrap_or(f64::NAN);
-            Ok(lhs > rhs_f)
-        }
-        Cmp::Ge(p) => {
-            let lhs: f64 = tag_val.parse().unwrap_or(f64::NAN);
-            let rhs_f: f64 = expr_to_string(p)?.parse().unwrap_or(f64::NAN);
-            Ok(lhs >= rhs_f)
-        }
-        Cmp::Lt(p) => {
-            let lhs: f64 = tag_val.parse().unwrap_or(f64::NAN);
-            let rhs_f: f64 = expr_to_string(p)?.parse().unwrap_or(f64::NAN);
-            Ok(lhs < rhs_f)
-        }
-        Cmp::Le(p) => {
-            let lhs: f64 = tag_val.parse().unwrap_or(f64::NAN);
-            let rhs_f: f64 = expr_to_string(p)?.parse().unwrap_or(f64::NAN);
-            Ok(lhs <= rhs_f)
-        }
+        Cmp::Eq(p) => Ok(eval_expr(p, tags)?.as_deref() == Some(tag_val)),
+        Cmp::Ne(p) => Ok(eval_expr(p, tags)?
+            .as_deref()
+            .is_some_and(|rhs| tag_val != rhs)),
+        Cmp::Gt(p) => numeric_cmp(p, |a, b| a > b),
+        Cmp::Ge(p) => numeric_cmp(p, |a, b| a >= b),
+        Cmp::Lt(p) => numeric_cmp(p, |a, b| a < b),
+        Cmp::Le(p) => numeric_cmp(p, |a, b| a <= b),
         Cmp::RegEx(p) => {
             let re = get_param(p)?;
             Ok(re.is_match(tag_val))
@@ -483,7 +503,7 @@ fn evaluate_cmp(tag_val: &str, rhs: &Cmp) -> Result<bool> {
 fn evaluate_filter(s: &Series, filter: &Filter) -> Result<bool> {
     match filter {
         Filter::Cmp { field, rhs } => match s.tags.get(field.as_str()) {
-            Some(tag_val) => evaluate_cmp(tag_val, rhs),
+            Some(tag_val) => evaluate_cmp(tag_val, rhs, &s.tags),
             None => Ok(false),
         },
         Filter::And(filters) => {
@@ -506,9 +526,40 @@ fn evaluate_filter(s: &Series, filter: &Filter) -> Result<bool> {
     }
 }
 
+/// Collects the tag names a comparison RHS expression references, recursing
+/// into string interpolations. Constants and params reference no tags.
+fn expr_tag_refs(e: &Expr) -> Vec<&str> {
+    match e {
+        Expr::Tag(name) => vec![name.as_str()],
+        Expr::String(frags) => frags
+            .iter()
+            .flat_map(|frag| match frag {
+                StringFragment::Expr(inner) => expr_tag_refs(inner),
+                StringFragment::Text(_) => vec![],
+            })
+            .collect(),
+        Expr::Const(_) | Expr::Param { .. } => vec![],
+    }
+}
+
+/// Returns the RHS expression of a comparison, if it carries one. Regex and
+/// `is` comparisons do not hold an `Expr`.
+fn cmp_expr(rhs: &Cmp) -> Option<&Expr> {
+    match rhs {
+        Cmp::Eq(e) | Cmp::Ne(e) | Cmp::Gt(e) | Cmp::Ge(e) | Cmp::Lt(e) | Cmp::Le(e) => Some(e),
+        Cmp::RegEx(_) | Cmp::RegExNot(_) | Cmp::Is(_) => None,
+    }
+}
+
 fn filter_fields(filter: &Filter) -> Vec<&str> {
     match filter {
-        Filter::Cmp { field, .. } => vec![field.as_str()],
+        Filter::Cmp { field, rhs } => {
+            let mut fields = vec![field.as_str()];
+            if let Some(e) = cmp_expr(rhs) {
+                fields.extend(expr_tag_refs(e));
+            }
+            fields
+        }
         Filter::And(fs) | Filter::Or(fs) => fs.iter().flat_map(filter_fields).collect(),
         Filter::Not(f) => filter_fields(f),
     }
@@ -544,26 +595,28 @@ fn apply_extend(series: &[Series], extends: &[TagExtend]) -> Result<Vec<Series>>
             );
         }
     }
-    let new_pairs: Vec<(String, String)> = extends
-        .iter()
-        .map(|ext| Ok((ext.tag.clone(), expr_to_string(&ext.value)?)))
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(series
+    series
         .iter()
         .map(|s| {
+            // Evaluate every extend value against the ORIGINAL series tags so
+            // that extends in one clause cannot observe each other (e.g.
+            // `extend a = host, b = a` never sees the freshly added `a`).
+            let new_pairs: Vec<(String, String)> = extends
+                .iter()
+                .map(|ext| Ok((ext.tag.clone(), require_expr(&ext.value, &s.tags)?)))
+                .collect::<Result<Vec<_>>>()?;
             let mut tags = s.tags.clone();
-            for (k, v) in &new_pairs {
-                tags.insert(k.clone(), v.clone());
+            for (k, v) in new_pairs {
+                tags.insert(k, v);
             }
-            Series {
+            Ok(Series {
                 name: series_name(&tags),
                 tags,
                 timestamps: s.timestamps.clone(),
                 values: s.values.clone(),
-            }
+            })
         })
-        .collect())
+        .collect()
 }
 
 fn apply_sample(series: &[Series], rate: f64) -> Result<Vec<Series>> {
