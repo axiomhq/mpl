@@ -28,6 +28,30 @@ pub struct Token {
     pub kind: TokenType,
 }
 
+/// Returns `true` when the string literal `text` (including its surrounding
+/// quotes) contains at least one `${` interpolation whose `$` is *not*
+/// escaped. A `$` is escaped when preceded by an odd number of backslashes,
+/// so `"\${x}"` is literal text while `"\\${x}"` interpolates.
+fn has_interpolation(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut escaped = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        if escaped {
+            escaped = false;
+            i += 1;
+            continue;
+        }
+        match bytes[i] {
+            b'\\' => escaped = true,
+            b'$' if i + 1 < bytes.len() && bytes[i + 1] == b'{' => return true,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Returns `Option` rather than adding a `None` variant to `TokenType` because
 /// the absence drives control flow in the visitor (recurse into children)
 /// and `TokenType` is serialized directly to the JS consumer.
@@ -70,6 +94,29 @@ struct TokenCollector<'a> {
 
 impl PairVisitor for TokenCollector<'_> {
     fn enter(&mut self, node: Node) -> VisitAction {
+        // Interpolated strings need special handling: highlight the literal
+        // text (`string_chars`) and quotes as `String`, but descend into the
+        // `${ … }` expressions so embedded params/numbers get their own tokens
+        // (the `${`/`}` delimiters are left as gaps). Recursion handles
+        // nesting. Plain strings fall through to the generic `token_type` path
+        // below, which emits a single `String` token for the whole literal.
+        if node.rule == Rule::string
+            && has_interpolation(&self.source[node.span.from..node.span.to])
+        {
+            self.tokens.push(Token {
+                span: Span::new(node.span.from, node.span.from + 1),
+                kind: TokenType::String,
+            });
+            return VisitAction::Walk;
+        }
+        if node.rule == Rule::string_chars {
+            self.tokens.push(Token {
+                span: node.span,
+                kind: TokenType::String,
+            });
+            return VisitAction::Skip;
+        }
+
         // `time_relative_parameterized` can be either `1m` (Number) or `$dur`
         // (Variable). Inspect the source text to decide.
         if node.rule == Rule::time_relative_parameterized {
@@ -118,6 +165,19 @@ impl PairVisitor for TokenCollector<'_> {
             VisitAction::Skip
         } else {
             VisitAction::Walk
+        }
+    }
+
+    fn leave(&mut self, node: Node) {
+        // Closing quote of an interpolated string. Emitted in `leave` so it is
+        // pushed after the string's inner tokens, preserving sorted order.
+        if node.rule == Rule::string
+            && has_interpolation(&self.source[node.span.from..node.span.to])
+        {
+            self.tokens.push(Token {
+                span: Span::new(node.span.to - 1, node.span.to),
+                kind: TokenType::String,
+            });
         }
     }
 }

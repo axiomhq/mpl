@@ -34,6 +34,92 @@ fn string_token() {
     assert_eq!(&query[s.span.from..s.span.to], r#""hello""#);
 }
 
+/// Tokens must be sorted by `from` and non-overlapping (CodeMirror requires
+/// this). Asserted across the interpolation tests since the new string
+/// handling emits multiple tokens per literal.
+fn assert_sorted_non_overlapping(tokens: &[super::Token]) {
+    for w in tokens.windows(2) {
+        assert!(
+            w[0].span.to <= w[1].span.from,
+            "tokens overlap or unsorted: {:?} then {:?}",
+            w[0].span,
+            w[1].span
+        );
+    }
+}
+
+#[test]
+fn string_interpolation_highlights_inner_param() {
+    let query = r#"ds:metric | where tag == "host ${ $h } end""#;
+    let tokens = collect_tokens(query).expect("should tokenize");
+    assert_sorted_non_overlapping(&tokens);
+
+    // The interpolated param is highlighted as a Variable, not swallowed.
+    let var = tokens
+        .iter()
+        .find(|t| t.kind == TokenType::Variable && &query[t.span.from..t.span.to] == "$h")
+        .expect("interpolated param should be a Variable token");
+    // It sits between the opening and closing String tokens of the literal.
+    let first_string = tokens
+        .iter()
+        .find(|t| t.kind == TokenType::String)
+        .expect("opening quote string token");
+    let last_string = tokens
+        .iter()
+        .rev()
+        .find(|t| t.kind == TokenType::String)
+        .expect("closing quote string token");
+    assert!(first_string.span.to <= var.span.from);
+    assert!(var.span.to <= last_string.span.from);
+
+    // The literal text segments are String tokens.
+    assert!(
+        tokens
+            .iter()
+            .any(|t| t.kind == TokenType::String && &query[t.span.from..t.span.to] == "host ")
+    );
+}
+
+#[test]
+fn string_interpolation_highlights_number() {
+    let query = r#"ds:metric | extend url = "port ${ 8080 }""#;
+    let tokens = collect_tokens(query).expect("should tokenize");
+    assert_sorted_non_overlapping(&tokens);
+    assert!(
+        tokens
+            .iter()
+            .any(|t| t.kind == TokenType::Number && &query[t.span.from..t.span.to] == "8080")
+    );
+}
+
+#[test]
+fn string_interpolation_nested() {
+    let query = r#"ds:metric | where tag == "a ${ "b ${ 42 }" } c""#;
+    let tokens = collect_tokens(query).expect("should tokenize");
+    assert_sorted_non_overlapping(&tokens);
+    // The deeply nested number is highlighted.
+    assert!(
+        tokens
+            .iter()
+            .any(|t| t.kind == TokenType::Number && &query[t.span.from..t.span.to] == "42")
+    );
+}
+
+#[test]
+fn string_escaped_dollar_is_not_interpolation() {
+    // `\$` is a literal dollar, so the whole thing stays one String token.
+    let query = r#"ds:metric | where tag == "price \${ 5 }""#;
+    let tokens = collect_tokens(query).expect("should tokenize");
+    assert_sorted_non_overlapping(&tokens);
+    let s = tokens
+        .iter()
+        .find(|t| t.kind == TokenType::String)
+        .expect("should have string token");
+    assert_eq!(&query[s.span.from..s.span.to], r#""price \${ 5 }""#);
+    // No Number token, because the braces are literal text.
+    assert!(!tokens.iter().any(|t| t.kind == TokenType::Number));
+}
+
 // ── Number tokens ────────────────────────────────────────────────
 
 #[test]

@@ -5,8 +5,8 @@ use mpl_lang::STDLIB;
 
 use super::{
     CompletionResult, ParamItem, ParamType, QueryContext, compute_completions,
-    extract_declared_params, extract_partial_word, is_char_escaped, locate_query_context,
-    lookup_function,
+    cursor_in_interpolation, extract_declared_params, extract_partial_word, is_char_escaped,
+    locate_query_context, lookup_function, skip_string_literal,
 };
 
 fn tag_info(r: &CompletionResult) -> Option<(&str, &str)> {
@@ -1504,6 +1504,19 @@ fn completions_at(input: &str) -> Option<CompletionResult> {
 #[test_case("ds:metric | extend foo = \"x\", #"                   => None             ; "extend after comma free-form ident")]
 // ── extend in compute tail ─────────────────────────────────────────
 #[test_case("( a:b , c:d ) | compute r using / | extend foo #"     => Some("keywords") ; "extend in compute tail also suggests equals")]
+// ── string interpolation ───────────────────────────────────────────
+#[test_case("param $h: string;\nds:metric | where tag == \"host ${ #\""        => Some("params")  ; "interpolation empty suggests params")]
+#[test_case("param $h: string;\nds:metric | where tag == \"host ${ $#\""       => Some("params")  ; "interpolation dollar suggests params")]
+#[test_case("param $h: string;\nds:metric | where tag == \"host ${ $h#\""      => Some("params")  ; "interpolation partial param suggests params")]
+#[test_case("param $h: string;\nds:metric | extend url = \"x${ $#\""           => Some("params")  ; "interpolation in extend value suggests params")]
+#[test_case("param $h: string;\nds:metric | where tag == \"a ${ \"b ${ $#\""   => Some("params")  ; "nested interpolation suggests params")]
+#[test_case("param $h: string;\nds:metric | where tag == \"p ${ 4#\""          => None            ; "interpolation const literal partial offers nothing")]
+#[test_case("ds:metric | where tag == \"host ${ $#\""                          => None            ; "interpolation with no params returns none")]
+// A query whose string contains a nested-string interpolation must not confuse
+// the pipe/context scanner: the next pipe still offers pipe keywords.
+#[test_case("param $h: string;\nds:metric | where tag == \"a ${ \"b\" } c\" | #" => Some("keywords") ; "pipe after nested-string interpolation still suggests keywords")]
+// An escaped backtick inside an escaped identifier must not break the scanner.
+#[test_case("`a\\`b`:metric | #"                                              => Some("keywords") ; "pipe after escaped-backtick dataset suggests keywords")]
 fn test_completion_kind(input: &str) -> Option<&'static str> {
     completions_at(input).map(|r| r.kind())
 }
@@ -1550,6 +1563,9 @@ fn test_completion_kind(input: &str) -> Option<&'static str> {
 #[test_case("ds:metric | where tag is #",                  &["string", "int", "float", "bool"] ; "is suggests all tag types")]
 #[test_case("ds:metric | where tag is string #",           &["and", "or", "not"]      ; "after is string suggests boolean ops")]
 #[test_case("ds:metric | filter tag is bool #",            &["and", "or"]             ; "after is bool suggests boolean ops")]
+// ── string interpolation ────────────────────────────────────────
+#[test_case("param $host: string;\nparam $env: string;\nds:metric | where tag == \"h ${ $#\"", &["$host", "$env"] ; "interpolation suggests all declared params")]
+#[test_case("param $host: string;\nparam $env: string;\nds:metric | where tag == \"h ${ $ho#\"", &["$host"] ; "interpolation filters params by partial")]
 fn test_completion_labels_contain(input: &str, expected: &[&str]) {
     let r = completions_at(input).expect("should produce completions");
     let labels = r.option_labels();
@@ -1827,4 +1843,69 @@ fn inline_decl_shadows_system_param_with_same_name() {
         count, 1,
         "inline decl + system param with same name must yield exactly one entry, got: {labels:?}"
     );
+}
+
+// ── interpolation-aware byte scanners ───────────────────────────
+// White-box tests for the escape/comment/EOF edge branches that are hard to
+// drive deterministically through `compute_completions`.
+
+#[test]
+fn skip_string_literal_handles_escapes_and_nested_interpolation() {
+    // Escaped quote stays inside the string; a `${ "c" }` interpolation with a
+    // nested string is skipped as a unit. `*i` must land on the final quote.
+    let src = r#""a\" b ${ "c" } d" rest"#;
+    let mut i = 0;
+    skip_string_literal(src.as_bytes(), src.len(), &mut i);
+    assert_eq!(src.as_bytes()[i], b'"');
+    assert_eq!(&src[..=i], r#""a\" b ${ "c" } d""#);
+    assert_eq!(&src[i + 1..], " rest");
+}
+
+#[test]
+fn skip_string_literal_skips_backtick_ident_in_interpolation() {
+    // A `}` (and an escaped backtick `\``) inside a backtick identifier must
+    // not close the interpolation or the identifier prematurely.
+    let src = r#""x ${ $`a\`}b` } y" rest"#;
+    let mut i = 0;
+    skip_string_literal(src.as_bytes(), src.len(), &mut i);
+    assert_eq!(&src[..=i], r#""x ${ $`a\`}b` } y""#);
+    assert_eq!(&src[i + 1..], " rest");
+}
+
+#[test]
+fn skip_string_literal_clamps_on_trailing_backslash() {
+    // Unterminated string ending in a backslash must not run `*i` past `len`.
+    let src = r#""ab\"#;
+    let mut i = 0;
+    skip_string_literal(src.as_bytes(), src.len(), &mut i);
+    assert_eq!(i, src.len());
+}
+
+#[test]
+fn cursor_in_interpolation_true_cases() {
+    // Escaped char in the string text before the interpolation.
+    let q = "x == \"a\\nb ${ ";
+    assert!(cursor_in_interpolation(q, q.len()));
+    // A `//` comment in code before the string is skipped.
+    let q = "ds // note\n| x == \"${ ";
+    assert!(cursor_in_interpolation(q, q.len()));
+    // A backtick identifier in code does not open a string.
+    let q = "`a b`:m | x == \"${ ";
+    assert!(cursor_in_interpolation(q, q.len()));
+    // Nested interpolation: innermost `${` is interpolation code.
+    let q = "x == \"a ${ \"b ${ ";
+    assert!(cursor_in_interpolation(q, q.len()));
+}
+
+#[test]
+fn cursor_in_interpolation_false_cases() {
+    // Plain string text is not interpolation.
+    let q = "x == \"abc";
+    assert!(!cursor_in_interpolation(q, q.len()));
+    // Ordinary query code is not interpolation.
+    let q = "ds:metric | where ";
+    assert!(!cursor_in_interpolation(q, q.len()));
+    // After the interpolation closes, the trailing string text is not code.
+    let q = "x == \"a ${ $h } b";
+    assert!(!cursor_in_interpolation(q, q.len()));
 }

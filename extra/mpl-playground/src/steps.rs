@@ -20,7 +20,7 @@ use mpl_lang::{
     linker::{AlignFunction, ComputeFunction, GroupFunction, MapFunction},
     query::{
         Aggregate, Align, As, BucketBy, Cmp, Expr, Filter, FilterOrIfDef, GroupBy, Mapping,
-        ParamDeclaration, RelativeTime, Source, TagExtend, TagType, TimeUnit,
+        ParamDeclaration, RelativeTime, Source, StringFragment, TagExtend, TagType, TimeUnit,
     },
     tags::TagValue,
     types::{BucketSpec, MapType, Parameterized, TagsType, TimeType},
@@ -372,14 +372,27 @@ fn get_param<T>(p: &Parameterized<T>) -> Result<&T> {
     }
 }
 
-fn get_expr(e: &Expr) -> Result<&TagValue> {
+/// Renders an expression to the string value used for filtering and `extend`.
+///
+/// Constant string interpolations (`"a ${ 1 }"`, including nested ones) are
+/// folded by concatenating their fragments. Params cannot be resolved in the
+/// playground, so any param — including one embedded inside an interpolation —
+/// is rejected.
+fn expr_to_string(e: &Expr) -> Result<String> {
     match e {
-        Expr::Const(v) => Ok(v),
+        Expr::Const(v) => Ok(raw_tag(v)),
         Expr::Param { .. } => {
             bail!("Parameterized values are not supported in the playground")
         }
-        Expr::String(_) => {
-            bail!("String values are not supported in the playground")
+        Expr::String(fragments) => {
+            let mut out = String::new();
+            for fragment in fragments {
+                match fragment {
+                    StringFragment::Text(text) => out.push_str(text),
+                    StringFragment::Expr(inner) => out.push_str(&expr_to_string(inner)?),
+                }
+            }
+            Ok(out)
         }
     }
 }
@@ -426,26 +439,26 @@ fn eval_source(src: &Source, datasets: &Datasets) -> Result<Vec<Series>> {
 
 fn evaluate_cmp(tag_val: &str, rhs: &Cmp) -> Result<bool> {
     match rhs {
-        Cmp::Eq(p) => Ok(tag_val == raw_tag(get_expr(p)?)),
-        Cmp::Ne(p) => Ok(tag_val != raw_tag(get_expr(p)?)),
+        Cmp::Eq(p) => Ok(tag_val == expr_to_string(p)?),
+        Cmp::Ne(p) => Ok(tag_val != expr_to_string(p)?),
         Cmp::Gt(p) => {
             let lhs: f64 = tag_val.parse().unwrap_or(f64::NAN);
-            let rhs_f: f64 = raw_tag(get_expr(p)?).parse().unwrap_or(f64::NAN);
+            let rhs_f: f64 = expr_to_string(p)?.parse().unwrap_or(f64::NAN);
             Ok(lhs > rhs_f)
         }
         Cmp::Ge(p) => {
             let lhs: f64 = tag_val.parse().unwrap_or(f64::NAN);
-            let rhs_f: f64 = raw_tag(get_expr(p)?).parse().unwrap_or(f64::NAN);
+            let rhs_f: f64 = expr_to_string(p)?.parse().unwrap_or(f64::NAN);
             Ok(lhs >= rhs_f)
         }
         Cmp::Lt(p) => {
             let lhs: f64 = tag_val.parse().unwrap_or(f64::NAN);
-            let rhs_f: f64 = raw_tag(get_expr(p)?).parse().unwrap_or(f64::NAN);
+            let rhs_f: f64 = expr_to_string(p)?.parse().unwrap_or(f64::NAN);
             Ok(lhs < rhs_f)
         }
         Cmp::Le(p) => {
             let lhs: f64 = tag_val.parse().unwrap_or(f64::NAN);
-            let rhs_f: f64 = raw_tag(get_expr(p)?).parse().unwrap_or(f64::NAN);
+            let rhs_f: f64 = expr_to_string(p)?.parse().unwrap_or(f64::NAN);
             Ok(lhs <= rhs_f)
         }
         Cmp::RegEx(p) => {
@@ -532,7 +545,7 @@ fn apply_extend(series: &[Series], extends: &[TagExtend]) -> Result<Vec<Series>>
     }
     let new_pairs: Vec<(String, String)> = extends
         .iter()
-        .map(|ext| Ok((ext.tag.clone(), raw_tag(get_expr(&ext.value)?))))
+        .map(|ext| Ok((ext.tag.clone(), expr_to_string(&ext.value)?)))
         .collect::<Result<Vec<_>>>()?;
 
     Ok(series

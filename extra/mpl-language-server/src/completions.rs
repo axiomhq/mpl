@@ -440,22 +440,19 @@ fn is_compute_paren(bytes: &[u8], pos: usize) -> bool {
 /// Finds the byte offset of the first `//` on a line that is not inside a
 /// string or backtick-escaped identifier.
 fn find_line_comment(line: &[u8]) -> Option<usize> {
+    let len = line.len();
     let mut i = 0;
-    while i + 1 < line.len() {
+    while i + 1 < len {
         match line[i] {
-            b'"' | b'`' => {
-                let delim = line[i];
-                i += 1;
-                while i < line.len() && line[i] != delim {
-                    if line[i] == b'\\' {
-                        i += 1;
-                    }
-                    i += 1;
-                }
-                if i < line.len() {
+            // Interpolation-aware so a `//` inside a nested string (e.g.
+            // `"a ${ "b // c" }"`) is not mistaken for a comment.
+            b'"' => {
+                skip_string_literal(line, len, &mut i);
+                if i < len {
                     i += 1;
                 }
             }
+            b'`' => skip_backtick(line, len, &mut i),
             b'/' if line[i + 1] == b'/' => return Some(i),
             _ => i += 1,
         }
@@ -582,15 +579,29 @@ pub fn compute_completions_with_params(
     }
 
     let span = Span::new(word_start, cursor);
-    let mut result = match locate_query_context(before) {
-        QueryContext::Subquery(text) => {
-            suggest_for_context(text, span, FilterPolicy::Include, &params)
-                .or_else(|| suggest_for_preamble(text, partial, span))
-                .or_else(|| suggest_for_source(text, partial, span, &params))?
+    let mut result = if cursor_in_interpolation(query, word_start) {
+        // Inside a `${ \u2026 }` string interpolation the grammar only accepts an
+        // `expr` (`param_ident | const`), so the only useful completion is a
+        // param. Only offer it when the user is typing a param (`$\u2026`) or has
+        // typed nothing yet; a partial like `42` or `tru` is a const literal we
+        // cannot complete, so we return nothing rather than misfiring.
+        if !(partial.is_empty() || partial.starts_with('$')) {
+            return None;
         }
-        QueryContext::ComputeRulePipe(text) => suggest_for_compute_rule(text, span)?,
-        QueryContext::ComputeTailPipe(text) => {
-            suggest_for_context(text, span, FilterPolicy::Exclude, &params)?
+        // `active_gate = None` excludes optional params (only valid inside an
+        // `ifdef` body); this is the safe direction the rest of the engine uses.
+        suggest_params(span, &params, None, |_| true)?
+    } else {
+        match locate_query_context(before) {
+            QueryContext::Subquery(text) => {
+                suggest_for_context(text, span, FilterPolicy::Include, &params)
+                    .or_else(|| suggest_for_preamble(text, partial, span))
+                    .or_else(|| suggest_for_source(text, partial, span, &params))?
+            }
+            QueryContext::ComputeRulePipe(text) => suggest_for_compute_rule(text, span)?,
+            QueryContext::ComputeTailPipe(text) => {
+                suggest_for_context(text, span, FilterPolicy::Exclude, &params)?
+            }
         }
     };
 
@@ -701,15 +712,141 @@ pub fn is_char_escaped(bytes: &[u8], pos: usize) -> bool {
 }
 
 /// Advances `i` past a literal (double-quoted string, backtick identifier,
+/// Skips a backtick-escaped identifier starting at `bytes[*i] == '`'`,
+/// leaving `*i` just past the closing backtick (or at `len` if unterminated).
+/// Handles `\`` escapes inside the identifier.
+fn skip_backtick(bytes: &[u8], len: usize, i: &mut usize) {
+    *i += 1;
+    while *i < len {
+        match bytes[*i] {
+            b'\\' => *i += 2,
+            b'`' => {
+                *i += 1;
+                return;
+            }
+            _ => *i += 1,
+        }
+    }
+}
+
+/// Skips a double-quoted string starting at `bytes[*i] == '"'`, descending
+/// through any `${ … }` interpolations (which may contain nested strings).
+/// On return `*i` is on the closing quote, or at `len` if the string is
+/// unterminated. Mirrors the `skip_literal` contract so callers `*i += 1` past
+/// the closing quote.
+fn skip_string_literal(bytes: &[u8], len: usize, i: &mut usize) {
+    *i += 1;
+    while *i < len {
+        match bytes[*i] {
+            b'\\' => *i += 2,
+            b'"' => return,
+            b'$' if *i + 1 < len && bytes[*i + 1] == b'{' => {
+                *i += 2;
+                skip_interpolation(bytes, len, i);
+            }
+            _ => *i += 1,
+        }
+    }
+    // Unterminated: clamp so the index stays within bounds.
+    if *i > len {
+        *i = len;
+    }
+}
+
+/// Skips the body of a `${ … }` interpolation; `*i` starts just past the
+/// opening `${` and ends just past the matching `}` (or at `len`). The
+/// interpolation expr is `param_ident | const`, so the only constructs that
+/// can hide a `}` are nested strings and backtick identifiers; bare brace
+/// nesting cannot occur.
+fn skip_interpolation(bytes: &[u8], len: usize, i: &mut usize) {
+    while *i < len {
+        match bytes[*i] {
+            b'}' => {
+                *i += 1;
+                return;
+            }
+            b'"' => {
+                skip_string_literal(bytes, len, i);
+                // Step past the nested closing quote (skip_string_literal
+                // leaves us on it). Guard against the unterminated case.
+                if *i < len {
+                    *i += 1;
+                }
+            }
+            b'`' => skip_backtick(bytes, len, i),
+            _ => *i += 1,
+        }
+    }
+}
+
+/// Returns `true` when byte offset `pos` lies inside a `${ … }` string
+/// interpolation, i.e. in interpolation "code" context where the grammar
+/// expects an `expr`. Plain string text and ordinary query code both return
+/// `false`. Used to offer param completions inside `${ }`.
+fn cursor_in_interpolation(text: &str, pos: usize) -> bool {
+    let bytes = text.as_bytes();
+    let end = pos.min(bytes.len());
+    // Context stack: `false` = code, `true` = string text. The base frame is
+    // top-level code; an interpolation pushes a code frame on top of a string
+    // frame, so "in interpolation" == top is code while nested in a string.
+    let mut stack = vec![false];
+    let mut i = 0;
+    while i < end {
+        let in_string = stack.last().copied().unwrap_or(false);
+        if in_string {
+            match bytes[i] {
+                b'\\' => i += 2,
+                b'"' => {
+                    stack.pop();
+                    i += 1;
+                }
+                b'$' if i + 1 < end && bytes[i + 1] == b'{' => {
+                    stack.push(false);
+                    i += 2;
+                }
+                _ => i += 1,
+            }
+        } else {
+            match bytes[i] {
+                b'"' => {
+                    stack.push(true);
+                    i += 1;
+                }
+                b'`' => skip_backtick(bytes, end, &mut i),
+                // Close the current interpolation; never pop the base frame.
+                b'}' if stack.len() > 1 => {
+                    stack.pop();
+                    i += 1;
+                }
+                b'/' if i + 1 < end && bytes[i + 1] == b'/' => {
+                    while i < end && bytes[i] != b'\n' {
+                        i += 1;
+                    }
+                }
+                _ => i += 1,
+            }
+        }
+    }
+    !stack.last().copied().unwrap_or(false) && stack.len() > 1
+}
+
 /// `//` line comment, `/regex/`, or `s/src/dst/` regex replace) if one starts
 /// at `bytes[i]`. After returning `true`, `i` points at the closing delimiter
 /// so the caller's `i += 1` skips past it.
 fn skip_literal(bytes: &[u8], len: usize, i: &mut usize) -> bool {
     match bytes[*i] {
-        b'"' | b'`' => {
-            let delim = bytes[*i];
+        // Strings may contain `${ \u2026 }` interpolations, which can themselves hold
+        // nested strings (and thus nested `${ }`). A naive "scan to the next
+        // quote" would stop at a nested string's opening quote, so use the
+        // interpolation-aware skipper. It leaves `*i` on the closing quote,
+        // matching the contract (the caller's `*i += 1` steps past it).
+        b'"' => {
+            skip_string_literal(bytes, len, i);
+            true
+        }
+        b'`' => {
             *i += 1;
-            while *i < len && bytes[*i] != delim {
+            while *i < len && bytes[*i] != b'`' {
                 if bytes[*i] == b'\\' {
                     *i += 1;
                 }

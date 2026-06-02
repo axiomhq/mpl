@@ -144,6 +144,108 @@ fn filter_eq() {
     assert_eq!(result[1].as_ref().unwrap()[0].values, vec![1.0]);
 }
 
+/// End-to-end through the real `run()` path: an interpolated string in a query
+/// *string* is parsed, planned, and evaluated — it must NOT report
+/// "String values are not supported".
+#[test]
+fn run_path_interpolated_string_filter() {
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(&[("host", "v1")], vec![0.0], vec![1.0]),
+            s(&[("host", "v2")], vec![0.0], vec![2.0]),
+        ],
+    );
+    let (query, _) = compile("ds:m | where host == \"v${ 1 }\"", HashMap::new())
+        .expect("query with interpolation must compile");
+    let steps = query_steps(query);
+    let results = interpret(&steps, &datasets);
+    let filtered = results
+        .last()
+        .expect("a filter step")
+        .as_ref()
+        .unwrap_or_else(|e| panic!("interpolated filter must evaluate, got error: {e:#}"));
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].values, vec![1.0]);
+}
+
+/// A constant string interpolation (`host == "v${ 1 }"`) is folded and matched.
+#[test]
+fn filter_eq_constant_interpolation() {
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(&[("host", "v1")], vec![0.0], vec![1.0]),
+            s(&[("host", "v2")], vec![0.0], vec![2.0]),
+        ],
+    );
+    let filter = Filter::Cmp {
+        field: "host".into(),
+        rhs: Cmp::Eq(Expr::String(vec![
+            StringFragment::Text("v".into()),
+            StringFragment::Expr(Expr::Const(TagValue::Int(1))),
+        ])),
+    };
+    let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
+    let result = interpret(&steps, &datasets);
+    let kept = result[1]
+        .as_ref()
+        .expect("interpolated filter must evaluate");
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].values, vec![1.0]);
+}
+
+/// Nested constant interpolation folds recursively (`"a${ "b${ 2 }" }"`).
+#[test]
+fn filter_eq_nested_interpolation() {
+    let datasets = ds("ds", "m", vec![s(&[("host", "ab2")], vec![0.0], vec![1.0])]);
+    let filter = Filter::Cmp {
+        field: "host".into(),
+        rhs: Cmp::Eq(Expr::String(vec![
+            StringFragment::Text("a".into()),
+            StringFragment::Expr(Expr::String(vec![
+                StringFragment::Text("b".into()),
+                StringFragment::Expr(Expr::Const(TagValue::Int(2))),
+            ])),
+        ])),
+    };
+    let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
+    let result = interpret(&steps, &datasets);
+    assert_eq!(result[1].as_ref().expect("nested interp").len(), 1);
+}
+
+/// A param embedded in an interpolation cannot be resolved in the playground,
+/// so it is rejected — and the message reflects the param, not "strings".
+#[test]
+fn filter_eq_param_interpolation_rejected() {
+    let datasets = ds("ds", "m", vec![s(&[("host", "x")], vec![0.0], vec![1.0])]);
+    let filter = Filter::Cmp {
+        field: "host".into(),
+        rhs: Cmp::Eq(Expr::String(vec![
+            StringFragment::Text("p".into()),
+            StringFragment::Expr(Expr::Param {
+                span: span(),
+                param: ParamDeclaration {
+                    span: span(),
+                    name: "p".into(),
+                    typ: ParamType::Terminal(TerminalParamType::Tag(TagType::String)),
+                },
+            }),
+        ])),
+    };
+    let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
+    let result = interpret(&steps, &datasets);
+    let err = result[1]
+        .as_ref()
+        .expect_err("param interpolation must fail");
+    assert!(
+        err.to_string().contains("Parameterized"),
+        "expected a param error, got: {err}"
+    );
+}
+
 #[test]
 fn filter_regex() {
     let datasets = ds(
@@ -1617,6 +1719,28 @@ fn extend_supports_multiple_tags() {
     assert_eq!(
         extended[0].tags.get("healthy").map(String::as_str),
         Some("true")
+    );
+}
+
+/// A constant interpolation on the RHS of `extend` is folded into the value.
+#[test]
+fn extend_constant_interpolation() {
+    let datasets = ds("ds", "m", vec![s(&[("host", "a")], vec![0.0], vec![1.0])]);
+    let steps = vec![
+        step(source_node("ds", "m")),
+        step(StepNode::Extend(vec![TagExtend {
+            tag: "url".into(),
+            value: Expr::String(vec![
+                StringFragment::Text("port-".into()),
+                StringFragment::Expr(Expr::Const(TagValue::Int(8080))),
+            ]),
+        }])),
+    ];
+    let result = interpret(&steps, &datasets);
+    let extended = result[1].as_ref().expect("extend must succeed");
+    assert_eq!(
+        extended[0].tags.get("url").map(String::as_str),
+        Some("port-8080")
     );
 }
 
