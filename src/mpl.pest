@@ -16,19 +16,21 @@ ident = _{ plain_ident | escaped_ident }
 
 as = { "as" ~ metric_name }
 
-string       = ${ "\"" ~ string_inner* ~ "\"" }
-string_inner = !{ string_chars | ("${" ~ expr ~ "}") }
-string_chars = @{ string_char+ }
-string_char  =  {
+string        = ${ "\"" ~ string_inner* ~ "\"" }
+string_inner  = !{ string_chars | ("${" ~ expr ~ "}") }
+string_chars  = @{ string_char+ }
+string_char   =  {
     !("\"" | "\\" | "${") ~ ANY
   | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t" | "$")
   | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
 }
-inf          =  { "inf" | "+inf" | "-inf" }
-number       =  { inf | float | int }
-float        = @{ int ~ ("." ~ ASCII_DIGIT*) ~ (^"e" ~ int)? }
-int          =  { ("+" | "-")? ~ ASCII_DIGIT+ }
-bool         = @{ "true" | "false" }
+word_boundary = _{ !(ASCII_ALPHANUMERIC | "_") }
+
+inf    = @{ ("inf" | "+inf" | "-inf") ~ word_boundary }
+number =  { inf | float | int }
+float  = @{ int ~ ("." ~ ASCII_DIGIT*) ~ (^"e" ~ int)? }
+int    =  { ("+" | "-")? ~ ASCII_DIGIT+ }
+bool   = @{ ("true" | "false") ~ word_boundary }
 
 regex_replace_src =  { regex_inner }
 regex_replace_dst =  { regex_inner }

@@ -192,6 +192,54 @@ dataset:metric
 }
 
 #[test]
+fn parse_idents() -> Result<(), Box<dyn std::error::Error>> {
+    let s = r"
+dataset:metric
+| where tag == infra
+| where tag2 == trueish
+| where tag3 == falseish
+| where tag4 == inf|where tag5==true|where tag6==false";
+    let (res, _) = super::compile(s, HashMap::new())?;
+    let expected = [
+        Filter::Cmp {
+            field: "tag".into(),
+            rhs: Cmp::Eq(Expr::Tag("infra".to_string())),
+        },
+        Filter::Cmp {
+            field: "tag2".into(),
+            rhs: Cmp::Eq(Expr::Tag("trueish".to_string())),
+        },
+        Filter::Cmp {
+            field: "tag3".into(),
+            rhs: Cmp::Eq(Expr::Tag("falseish".to_string())),
+        },
+        Filter::Cmp {
+            field: "tag4".into(),
+            rhs: Cmp::Eq(Expr::Const(f64::INFINITY.into())),
+        },
+        Filter::Cmp {
+            field: "tag5".into(),
+            rhs: Cmp::Eq(Expr::Const(true.into())),
+        },
+        Filter::Cmp {
+            field: "tag6".into(),
+            rhs: Cmp::Eq(Expr::Const(false.into())),
+        },
+    ];
+    match res {
+        crate::Query::Simple { filters, .. } => {
+            assert_eq!(6, filters.len());
+            for (i, filter) in filters.iter().enumerate() {
+                assert_eq!(&expected[i], filter.filter());
+            }
+        }
+        crate::Query::Compute { .. } => panic!("not a simple query"),
+    }
+
+    Ok(())
+}
+
+#[test]
 fn parse_params() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
 param $dataset: Dataset;
