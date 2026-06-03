@@ -335,7 +335,22 @@ backslash is used to introduce an escape sequence. The supported escape sequence
 - `\f` — form feed
 - `\n` — line feed
 - `\r` — carriage return
-- `\t` — tab
+- `\$` — dollar sign
+
+
+### String Interpolation
+
+MPL supports string interpolation using `${}` syntax. Interpolations are evaluated as normal expressions, nested interpolations are supported.
+
+Inside a interpolation parameters and tags can be referenced, the interpolation fails if the referenced parameter or tag is not defined.
+
+If it is not certain if tags exist, using a `| where tag is <type>` filter before referencing the tag can prevent the interpolation from failing.
+
+```mpl
+dataset:metric
+| where host is string and port is int
+| extend url = "http://${host}:${port}"
+```
 
 ## Integer
 
