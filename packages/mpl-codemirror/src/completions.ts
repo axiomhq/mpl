@@ -1,4 +1,4 @@
-import { autocompletion, CompletionContext, CompletionResult, snippet } from "@codemirror/autocomplete";
+import { autocompletion, Completion, CompletionContext, CompletionResult, snippet } from "@codemirror/autocomplete";
 import { EditorState } from "@codemirror/state";
 import * as mpl from "@axiomhq/mpl";
 import { type WasmArgType, formatArgs } from "./wasm-types";
@@ -95,99 +95,120 @@ type WasmCompletionResult =
   | WasmMetricCompletion
   | WasmParamResult;
 
-function mplCompletionSource(context: CompletionContext): CompletionResult | null {
-  const doc = context.state.doc.toString();
-  const systemParams = context.state.facet(mplSystemParams);
-  let result: WasmCompletionResult | null = null;
+/**
+ * The engine returns an array of results. Most positions yield zero or one
+ * result; an empty `expr` position (e.g. inside `${ }`, after `where tag ==`,
+ * or `extend foo =`) yields both a `params` and a `tag` result so the editor
+ * can offer params and tags at once and let its own prefix filter separate
+ * `$param` references from bare tag names.
+ */
+type WasmCompletions = WasmCompletionResult[] | null;
+
+function callCompletions(doc: string, pos: number, systemParams: unknown): WasmCompletions {
   try {
-    result = mpl.completions(doc, context.pos, systemParams) as WasmCompletionResult | null;
+    const raw = mpl.completions(doc, pos, systemParams) as unknown;
+    // Tolerate older single-object payloads defensively; normalise to an array.
+    if (raw == null) {
+      return null;
+    }
+    return (Array.isArray(raw) ? raw : [raw]) as WasmCompletionResult[];
   } catch {
     // WASM not ready or error
     return null;
   }
+}
 
-  if (!result) {
-    return null;
-  }
+/**
+ * Tag/dataset/metric options come from the host unfiltered, so CodeMirror
+ * filters them; the engine already prefix-filters the inline kinds (params,
+ * keywords, functions), so those are passed through verbatim.
+ */
+function filterForKind(kind: WasmCompletionResult["kind"]): boolean {
+  return kind === "tag" || kind === "dataset" || kind === "metric";
+}
 
-  // Parameter completions — declared $variables
+/**
+ * Builds options for the kinds the engine fully describes inline (params,
+ * keywords, stdlib functions). Returns `[]` for host-resolved kinds (tag,
+ * dataset, metric), which each source handles itself.
+ */
+function inlineOptions(result: WasmCompletionResult): Completion[] {
   if (result.kind === "params") {
-    if (result.options.length === 0) {
-      return null;
-    }
-    return {
-      from: result.from,
-      to: result.to,
-      options: result.options.map(item => ({
-        label: item.label,
-        type: "variable" as const,
-        detail: item.optional ? `Option<${item.type}>` : item.type,
-      })),
-      filter: false,
-    };
+    return result.options.map(item => ({
+      label: item.label,
+      type: "variable" as const,
+      detail: item.optional ? `Option<${item.type}>` : item.type,
+    }));
   }
-
-  // Tag completions — placeholder labels until the host environment supplies real tag names
-  if (result.kind === "tag") {
-    return {
-      from: result.from,
-      to: result.to,
-      options: [
-        { label: `<tag for ${result.dataset}:${result.metric}>`, type: "variable", info: "Tag completions not yet connected" },
-      ],
-      filter: false,
-    };
-  }
-
-  // Dataset completions — placeholder until connected to an API
-  if (result.kind === "dataset") {
-    return {
-      from: result.from,
-      to: result.to,
-      options: [
-        { label: "<dataset>", type: "variable", info: "Dataset completions not yet connected" },
-      ],
-      filter: false,
-    };
-  }
-
-  // Metric completions — placeholder until connected to an API
-  if (result.kind === "metric") {
-    return {
-      from: result.from,
-      to: result.to,
-      options: [
-        { label: `<metric for ${result.dataset}>`, type: "variable", info: "Metric completions not yet connected" },
-      ],
-      filter: false,
-    };
-  }
-
-  if (result.options.length === 0) {
-    return null;
-  }
-
-  // Rust already filters by partial word; let WASM be the source of truth.
   if (result.kind === "keywords") {
-    return {
-      from: result.from,
-      to: result.to,
-      options: result.options.map(mapKeywordItem),
-      filter: false,
-    };
+    return result.options.map(mapKeywordItem);
   }
-
-  return {
-    from: result.from,
-    to: result.to,
-    options: result.options.map(item => ({
+  if (
+    result.kind === "align_functions" ||
+    result.kind === "map_functions" ||
+    result.kind === "group_functions" ||
+    result.kind === "bucket_functions" ||
+    result.kind === "compute_functions"
+  ) {
+    return result.options.map(item => ({
       label: item.label,
       type: "function" as const,
       detail: formatArgs(item.args),
       info: item.info,
-    })),
-    filter: false,
-  };
+    }));
+  }
+  return [];
+}
+
+/**
+ * Combines per-result option lists into a single CodeMirror result. A merged
+ * (multi-result) completion always lets CodeMirror filter the union so the
+ * typed prefix selects params or tags; a single result keeps that kind's
+ * native filtering.
+ */
+function combine(results: WasmCompletionResult[], optionLists: Completion[][]): CompletionResult | null {
+  const options = optionLists.flat();
+  if (options.length === 0) {
+    return null;
+  }
+  const filter = results.length > 1 ? true : filterForKind(results[0].kind);
+  return { from: results[0].from, to: results[0].to, options, filter };
+}
+
+function mplCompletionSource(context: CompletionContext): CompletionResult | null {
+  const doc = context.state.doc.toString();
+  const systemParams = context.state.facet(mplSystemParams);
+  const results = callCompletions(doc, context.pos, systemParams);
+  if (!results || results.length === 0) {
+    return null;
+  }
+
+  // Placeholder source: tag/dataset/metric are not connected to an API, so
+  // emit a single descriptive placeholder for each.
+  const optionLists = results.map((result): Completion[] => {
+    if (result.kind === "tag") {
+      return [{
+        label: `<tag for ${result.dataset}:${result.metric}>`,
+        type: "variable",
+        info: "Tag completions not yet connected",
+      }];
+    }
+    if (result.kind === "dataset") {
+      return [{ label: "<dataset>", type: "variable", info: "Dataset completions not yet connected" }];
+    }
+    if (result.kind === "metric") {
+      return [{ label: `<metric for ${result.dataset}>`, type: "variable", info: "Metric completions not yet connected" }];
+    }
+    return inlineOptions(result);
+  });
+
+  const merged = combine(results, optionLists);
+  if (!merged) {
+    return null;
+  }
+  // Placeholder labels are descriptive (`<tag for …>`) and would be filtered
+  // out by prefix matching, so never let CodeMirror filter this source.
+  return { ...merged, filter: false };
 }
 
 /**
@@ -198,7 +219,7 @@ function mplCompletionSource(context: CompletionContext): CompletionResult | nul
  * literal `apply` text from the wasm payload, or no `apply` at all when the
  * wasm side did not supply one.
  */
-function mapKeywordItem(item: WasmKeywordItem) {
+function mapKeywordItem(item: WasmKeywordItem): Completion {
   if (item.label === "ifdef") {
     return {
       label: item.label,
@@ -229,41 +250,17 @@ export interface MplCompletionConfig {
   cacheTtlMs?: number;
 }
 
-function createMplCompletionSource(config: MplCompletionConfig) {
+export function createMplCompletionSource(config: MplCompletionConfig) {
   const datasetCache = new CompletionCache<string[]>(config.cacheTtlMs);
   const metricCache = new CompletionCache<string[]>(config.cacheTtlMs);
   const tagCache = new CompletionCache<string[]>(config.cacheTtlMs);
 
-  return async (context: CompletionContext): Promise<CompletionResult | null> => {
-    const doc = context.state.doc.toString();
-    const systemParams = context.state.facet(mplSystemParams);
-    let result: WasmCompletionResult | null = null;
-    try {
-      result = mpl.completions(doc, context.pos, systemParams) as WasmCompletionResult | null;
-    } catch {
-      return null;
-    }
-
-    if (!result) {
-      return null;
-    }
-
-    if (result.kind === "params") {
-      if (result.options.length === 0) {
-        return null;
-      }
-      return {
-        from: result.from,
-        to: result.to,
-        options: result.options.map(item => ({
-          label: item.label,
-          type: "variable" as const,
-          detail: item.optional ? `Option<${item.type}>` : item.type,
-        })),
-        filter: false,
-      };
-    }
-
+  /**
+   * Resolves one engine result into CodeMirror options, fetching host data
+   * for tag/dataset/metric kinds. A failed host fetch yields `[]` so a
+   * sibling result (e.g. the params half of a merged completion) still shows.
+   */
+  async function optionsForResult(result: WasmCompletionResult, doc: string): Promise<Completion[]> {
     if (result.kind === "tag") {
       try {
         const cacheKey = `${result.dataset}\0${result.metric}`;
@@ -273,19 +270,14 @@ function createMplCompletionSource(config: MplCompletionConfig) {
           tagCache.set(cacheKey, tags);
         }
         const inBacktick = result.from > 0 && doc.charAt(result.from - 1) === "`";
-        return {
-          from: result.from,
-          to: result.to,
-          options: tags.map(t => {
-            const apply = applyTextForIdent(t, inBacktick);
-            return apply !== t
-              ? { label: t, apply, type: "variable" as const }
-              : { label: t, type: "variable" as const };
-          }),
-          filter: true,
-        };
+        return tags.map(t => {
+          const apply = applyTextForIdent(t, inBacktick);
+          return apply !== t
+            ? { label: t, apply, type: "variable" as const }
+            : { label: t, type: "variable" as const };
+        });
       } catch {
-        return null;
+        return [];
       }
     }
 
@@ -297,19 +289,14 @@ function createMplCompletionSource(config: MplCompletionConfig) {
           datasetCache.set("", datasets);
         }
         const inBacktick = result.from > 0 && doc.charAt(result.from - 1) === "`";
-        return {
-          from: result.from,
-          to: result.to,
-          options: datasets.map(d => {
-            const apply = applyTextForIdent(d, inBacktick);
-            return apply !== d
-              ? { label: d, apply, type: "variable" as const }
-              : { label: d, type: "variable" as const };
-          }),
-          filter: true,
-        };
+        return datasets.map(d => {
+          const apply = applyTextForIdent(d, inBacktick);
+          return apply !== d
+            ? { label: d, apply, type: "variable" as const }
+            : { label: d, type: "variable" as const };
+        });
       } catch {
-        return null;
+        return [];
       }
     }
 
@@ -321,46 +308,30 @@ function createMplCompletionSource(config: MplCompletionConfig) {
           metricCache.set(result.dataset, metrics);
         }
         const inBacktick = result.from > 0 && doc.charAt(result.from - 1) === "`";
-        return {
-          from: result.from,
-          to: result.to,
-          options: metrics.map(m => {
-            const apply = applyTextForIdent(m, inBacktick);
-            return apply !== m
-              ? { label: m, apply, type: "variable" as const }
-              : { label: m, type: "variable" as const };
-          }),
-          filter: true,
-        };
+        return metrics.map(m => {
+          const apply = applyTextForIdent(m, inBacktick);
+          return apply !== m
+            ? { label: m, apply, type: "variable" as const }
+            : { label: m, type: "variable" as const };
+        });
       } catch {
-        return null;
+        return [];
       }
     }
 
-    if (result.options.length === 0) {
+    return inlineOptions(result);
+  }
+
+  return async (context: CompletionContext): Promise<CompletionResult | null> => {
+    const doc = context.state.doc.toString();
+    const systemParams = context.state.facet(mplSystemParams);
+    const results = callCompletions(doc, context.pos, systemParams);
+    if (!results || results.length === 0) {
       return null;
     }
 
-    if (result.kind === "keywords") {
-      return {
-        from: result.from,
-        to: result.to,
-        options: result.options.map(mapKeywordItem),
-        filter: false,
-      };
-    }
-
-    return {
-      from: result.from,
-      to: result.to,
-      options: result.options.map(item => ({
-        label: item.label,
-        type: "function" as const,
-        detail: formatArgs(item.args),
-        info: item.info,
-      })),
-      filter: false,
-    };
+    const optionLists = await Promise.all(results.map(result => optionsForResult(result, doc)));
+    return combine(results, optionLists);
   };
 }
 

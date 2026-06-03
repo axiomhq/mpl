@@ -1096,6 +1096,25 @@ fn completions_filter_value_position_gte_suggests_tag() {
     assert_eq!(result.as_ref().map(CompletionResult::kind), Some("tag"));
 }
 
+/// Leading `//` comment lines (which every example query has) must not break
+/// source extraction. Regression: the commented header was fed into pest's
+/// `source` rule, which does not skip leading comments, so the parse failed and
+/// tag completion silently vanished — the playground showed no tag suggestions.
+#[test]
+fn completions_tag_survives_leading_comments() {
+    for input in [
+        "// a comment\nds:metric | filter #",
+        "// one\n// two\n// three\nds:metric | where foo != #",
+        "// header\nds:metric | group by #",
+    ] {
+        let kinds = completion_kinds_at(input);
+        assert!(
+            kinds.contains(&"tag"),
+            "expected a tag completion for {input:?}, got {kinds:?}"
+        );
+    }
+}
+
 /// An escaped tag after regex filters: the value position resolves the source
 /// (`dev.metrics`:`http_requests_total`) and offers tag completions there.
 #[test]
@@ -1772,11 +1791,95 @@ use super::compute_completions_with_params;
 /// Variant of `completions_at` that splices in host-supplied system params,
 /// mirroring what the wasm bridge does after decoding the JS payload.
 fn completions_at_with_params(input: &str, extra: &[ParamItem]) -> Option<CompletionResult> {
+    all_completions_at_with_params(input, extra)
+        .into_iter()
+        .next()
+}
+
+/// Like `completions_at_with_params`, but returns every result so tests can
+/// assert that an empty `expr` position offers both params and tags.
+fn all_completions_at_with_params(input: &str, extra: &[ParamItem]) -> Vec<CompletionResult> {
     let cursor = input
         .find('#')
         .expect("input must contain a # cursor marker");
     let query = format!("{}{}", &input[..cursor], &input[cursor + 1..]);
     compute_completions_with_params(&query, cursor, extra)
+}
+
+/// Returns the ordered list of completion result kinds at the cursor (no
+/// system params). Used to assert that an empty `expr` position yields both a
+/// `params` and a `tag` result.
+fn completion_kinds_at(input: &str) -> Vec<&'static str> {
+    all_completions_at_with_params(input, &[])
+        .iter()
+        .map(CompletionResult::kind)
+        .collect()
+}
+
+#[test]
+fn empty_interpolation_with_param_offers_both_params_and_tag() {
+    // The bug this guards: a declared (or host-injected) param must not hide
+    // tag completion inside `${ }`. Both must be offered so the editor's own
+    // prefix filter can separate `$param` from bare tag names.
+    let kinds = completion_kinds_at("param $h: string;\nds:metric | where tag == \"host ${ #\"");
+    assert_eq!(kinds, vec!["params", "tag"]);
+}
+
+#[test]
+fn system_param_does_not_hide_tag_in_interpolation() {
+    // A host-injected system param (e.g. `$__interval`) is always in scope, so
+    // it previously masked tag completion at every empty `${ }` position.
+    let input = "ds:metric | where code == \"${ #\"";
+    let kinds: Vec<&str> = all_completions_at_with_params(input, &[duration_param("$__interval")])
+        .iter()
+        .map(CompletionResult::kind)
+        .collect();
+    assert_eq!(kinds, vec!["params", "tag"]);
+}
+
+#[test]
+fn empty_filter_value_with_param_offers_both() {
+    let kinds = completion_kinds_at("param $s: string;\nds:metric | where tag == #");
+    assert_eq!(kinds, vec!["params", "tag"]);
+}
+
+#[test]
+fn empty_extend_value_with_param_offers_both() {
+    let kinds = completion_kinds_at("param $s: string;\nds:metric | extend foo = #");
+    assert_eq!(kinds, vec!["params", "tag"]);
+}
+
+#[test]
+fn empty_interpolation_without_params_offers_only_tag() {
+    let kinds = completion_kinds_at("ds:metric | where tag == \"host ${ #\"");
+    assert_eq!(kinds, vec!["tag"]);
+}
+
+#[test]
+fn dollar_in_interpolation_offers_only_params() {
+    let kinds = completion_kinds_at("param $h: string;\nds:metric | where tag == \"host ${ $#\"");
+    assert_eq!(kinds, vec!["params"]);
+}
+
+#[test]
+fn bare_ident_in_interpolation_offers_only_tag() {
+    let kinds = completion_kinds_at("param $h: string;\nds:metric | where tag == \"host ${ id#\"");
+    assert_eq!(kinds, vec!["tag"]);
+}
+
+#[test]
+fn inside_plain_string_literal_offers_nothing() {
+    // A `"…"` value on the RHS of a comparison is a `const`; the cursor inside
+    // it must not complete anything. Regression: the unterminated leading `"`
+    // was mis-read as a bare token and the dispatcher suggested and/or/not.
+    assert!(completion_kinds_at("ds:metric | where tag == \"#").is_empty());
+    assert!(completion_kinds_at("ds:metric | where tag == \"#\"").is_empty());
+    assert!(completion_kinds_at("ds:metric | where tag == \"ab#\"").is_empty());
+    // But after the closed string, boolean operators are still offered.
+    assert_eq!(
+        completions_at("ds:metric | where tag == \"x\" #").map(|r| r.kind()),
+        Some("keywords")
+    );
 }
 
 fn duration_param(name: &str) -> ParamItem {
