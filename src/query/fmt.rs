@@ -11,7 +11,12 @@ use crate::{
 };
 
 fn escape_ident(f: &mut std::fmt::Formatter<'_>, ident: &str) -> std::fmt::Result {
-    if ident.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+    let mut chars = ident.chars();
+
+    if let Some(c) = chars.next()
+        && (c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
         write!(f, "{ident}")
     } else {
         write!(f, "`{}`", ident.replace('\\', "\\\\").replace('`', "\\`"))
@@ -412,5 +417,18 @@ impl Display for Mapping {
         }
 
         Ok(())
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ident_escaping() {
+        assert_eq!("a", format!("{}", Expr::Tag("a".into())));
+        assert_eq!("a1_2", format!("{}", Expr::Tag("a1_2".into())));
+        assert_eq!("`a1.2`", format!("{}", Expr::Tag("a1.2".into())));
+        assert_eq!("`1`", format!("{}", Expr::Tag("1".into())));
+        assert_eq!("`1abc`", format!("{}", Expr::Tag("1abc".into())));
     }
 }
