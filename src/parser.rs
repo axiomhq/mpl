@@ -502,6 +502,7 @@ fn parse_param_native_type(state: &mut State, source: &Pair<Rule>) -> Result<Ter
             Ok(TerminalParamType::Duration)
         }
         "Regex" => Ok(TerminalParamType::Regex),
+        "Timestamp" => Ok(TerminalParamType::Timestamp),
         _ => Err(ParseError::Unexpected {
             span: pair_to_source_span(source),
             rule: Rule::param_type,
@@ -525,7 +526,9 @@ fn parse_param_type(state: &mut State, source: Pair<Rule>) -> Result<ParamType> 
                     ParamType::Optional(TerminalParamType::Tag(parse_tag_type(&next)?))
                 }
                 Rule::param_native_type => match parse_param_native_type(state, &next)? {
-                    TerminalParamType::Duration | TerminalParamType::Dataset => {
+                    TerminalParamType::Duration
+                    | TerminalParamType::Dataset
+                    | TerminalParamType::Timestamp => {
                         return Err(ParseError::Unexpected {
                             span: pair_to_source_span(&next),
                             rule: Rule::param_native_type,
@@ -714,6 +717,15 @@ pub(crate) fn parse_param_value(
     let next = inner.n()?;
 
     match param.typ() {
+        TerminalParamType::Timestamp => match next.as_rule() {
+            Rule::time_relative | Rule::time_rfc_3339 | Rule::time_timestamp => {
+                Ok(ParamValue::Timestamp(parse_time(next)?))
+            }
+            rule => Err(ParseParamError::TypeMismatch {
+                declared_typ: param.typ,
+                rule,
+            }),
+        },
         TerminalParamType::Dataset => match next.as_rule() {
             Rule::plain_ident | Rule::escaped_ident => {
                 Ok(ParamValue::Dataset(Dataset::new(parse_ident(&next)?)))

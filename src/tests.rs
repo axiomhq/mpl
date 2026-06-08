@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     CompileError, ParseError, TypeError,
-    query::{Cmp, DirectiveValue, Expr, Filter, TagType, TerminalParamType},
+    query::{Cmp, DirectiveValue, Expr, Filter, StringFragment, TagType, TerminalParamType},
 };
 
 #[test]
@@ -493,6 +493,42 @@ dataset:metric
     let printed = query.to_string();
     super::compile(&printed, HashMap::new())
         .unwrap_or_else(|e| panic!("printed query did not re-parse: {e}\nprinted:\n{printed}"));
+    Ok(())
+}
+
+#[test]
+fn extend_timestamp_param_interpolation() -> Result<(), Box<dyn std::error::Error>> {
+    // Tags can't hold a Timestamp directly, but a Timestamp param can be
+    // formatted into a tag value via string interpolation.
+    let src = r#"param $ts: Timestamp;
+dataset:metric
+| extend something = "${ $ts }""#;
+    let (query, _warnings) = super::compile(src, HashMap::new())?;
+
+    let extends = match &query {
+        crate::Query::Simple { extends, .. } => extends,
+        crate::Query::Compute { .. } => panic!("not a simple query"),
+    };
+    let [extend] = extends.as_slice() else {
+        panic!("expected exactly one extend, got {extends:?}");
+    };
+    assert_eq!("something", extend.tag);
+
+    // The value is an interpolated string whose only fragment is the param.
+    let Expr::String(fragments) = &extend.value else {
+        panic!("expected interpolated string value, got {:?}", extend.value);
+    };
+    let [StringFragment::Expr(Expr::Param { param, .. })] = fragments.as_slice() else {
+        panic!("expected a single interpolated param fragment, got {fragments:?}");
+    };
+    assert_eq!("ts", param.name);
+    assert_eq!(TerminalParamType::Timestamp, param.typ());
+
+    // The query round-trips through display + re-parse.
+    let printed = query.to_string();
+    let (reparsed, _warnings) = super::compile(&printed, HashMap::new())?;
+    assert_eq!(printed, reparsed.to_string());
+
     Ok(())
 }
 

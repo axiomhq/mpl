@@ -66,7 +66,7 @@ pub struct RelativeTime {
 }
 
 /// A point in time
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Time {
     /// A time relative to now
     Relative(RelativeTime),
@@ -377,6 +377,8 @@ pub enum TerminalParamType {
     Duration,
     /// Dataset
     Dataset,
+    /// Timestamp
+    Timestamp,
     /// Regex
     Regex,
     /// A tag value type
@@ -388,6 +390,7 @@ impl std::fmt::Display for TerminalParamType {
             TerminalParamType::Dataset => write!(f, "Dataset"),
             TerminalParamType::Duration => write!(f, "Duration"),
             TerminalParamType::Regex => write!(f, "Regex"),
+            TerminalParamType::Timestamp => write!(f, "Timestamp"),
             TerminalParamType::Tag(t) => t.fmt(f),
         }
     }
@@ -480,6 +483,8 @@ pub enum ParamValue {
     Bool(bool),
     /// Regex
     Regex(EncodableRegex),
+    /// Timestamp
+    Timestamp(Time),
 }
 
 impl ParamValue {
@@ -494,6 +499,7 @@ impl ParamValue {
             ParamValue::Int(_) => TerminalParamType::Tag(TagType::Int),
             ParamValue::Float(_) => TerminalParamType::Tag(TagType::Float),
             ParamValue::Bool(_) => TerminalParamType::Tag(TagType::Bool),
+            ParamValue::Timestamp(_) => TerminalParamType::Timestamp,
         }
     }
 }
