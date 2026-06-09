@@ -45,6 +45,24 @@ const SYSTEM_PARAM_PREFIX: &str = "__";
 
 type Result<T> = std::result::Result<T, ParseError>;
 
+#[derive(Debug, thiserror::Error)]
+pub enum ParseParamError {
+    #[error("Failed to parse: {0}")]
+    Parse(#[from] ParseError),
+    #[error("Failed to param as bool: {0}")]
+    ParseBool(<bool as FromStr>::Err),
+    #[error("Failed to parse as float: {0}")]
+    ParseFloat(#[from] ParseFloatError),
+    #[error("Failed to parse identifier: {0}")]
+    SharedStringError(#[from] strumbra::Error),
+    #[error(
+        "Param is declared as type {declared_typ}, but the provided type was parsed as `{rule:?}`"
+    )]
+    TypeMismatch { declared_typ: ParamType, rule: Rule },
+    #[error("None Type Params are not supported")]
+    NoneParam,
+}
+
 trait PairsHelper<'i, R>
 where
     R: pest::RuleType,
@@ -98,6 +116,22 @@ impl PairHelper<Rule> for Pair<'_, Rule> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Copy)]
+enum Number {
+    Int(i64),
+    Float(f64),
+}
+impl Number {
+    // Can't do anything about it
+    #[allow(clippy::cast_precision_loss)]
+    fn as_f64(self) -> f64 {
+        match self {
+            Number::Int(value) => value as f64,
+            Number::Float(value) => value,
+        }
+    }
+}
+
 fn unescape_and_trim(data: &str, delim: char) -> String {
     unescape(
         data.trim_start_matches(delim).trim_end_matches(delim),
@@ -145,31 +179,6 @@ fn parse_ident(source: &Pair<'_, Rule>) -> Result<String> {
         }),
     }
 }
-
-fn resolve_param<'p>(source: &Pair<'_, Rule>, state: &'p State) -> Result<&'p ParamDeclaration> {
-    let name = match source.as_rule() {
-        Rule::plain_ident => source.as_str(),
-        rule => {
-            return Err(ParseError::Unexpected {
-                span: pair_to_source_span(source),
-                rule,
-                expected: vec![Rule::plain_ident],
-            });
-        }
-    };
-
-    let param = state
-        .params
-        .iter()
-        .find(|p| p.name == name)
-        .ok_or(ParseError::UndefinedParam {
-            span: pair_to_source_span(source),
-            param: name.to_string(),
-        })?;
-
-    Ok(param)
-}
-
 fn parse_source_ident(source: &Pair<'_, Rule>) -> Result<String> {
     match source.as_rule() {
         Rule::plain_ident => Ok(source.as_str().to_string()),
@@ -178,33 +187,6 @@ fn parse_source_ident(source: &Pair<'_, Rule>) -> Result<String> {
             span: pair_to_source_span(source),
             rule,
             expected: vec![Rule::ident],
-        }),
-    }
-}
-
-fn parse_source_ident_param(
-    source: Pair<'_, Rule>,
-    state: &State,
-) -> Result<Parameterized<String>> {
-    match source.as_rule() {
-        Rule::plain_ident => Ok(Parameterized::Concrete(source.as_str().to_string())),
-        Rule::escaped_ident => Ok(Parameterized::Concrete(
-            unescape_and_trim(source.as_str(), '`').clone(),
-        )),
-        Rule::param_ident => {
-            let span = pair_to_source_span(&source);
-            let mut inner = source.into_inner();
-            let next = inner.n()?;
-            let param = resolve_param(&next, state)?;
-            Ok(Parameterized::Param {
-                span,
-                param: param.clone(),
-            })
-        }
-        rule => Err(ParseError::Unexpected {
-            span: pair_to_source_span(&source),
-            rule,
-            expected: vec![Rule::ident, Rule::param_ident],
         }),
     }
 }
@@ -231,15 +213,6 @@ fn parse_param_ident(source: Pair<'_, Rule>) -> Result<String> {
     }
 }
 
-fn parse_dataset(source: Pair<Rule>, state: &State) -> Result<Parameterized<Dataset>> {
-    source.assert_type(Rule::dataset)?;
-    let mut inner = source.into_inner();
-
-    let source = inner.n()?;
-    let dataset = parse_source_ident_param(source, state)?.map_concrete(Dataset::new);
-    Ok(dataset)
-}
-
 fn parse_metric_name(source: Pair<Rule>) -> Result<Metric> {
     source.assert_type(Rule::metric_name)?;
     let mut inner = source.into_inner();
@@ -247,39 +220,6 @@ fn parse_metric_name(source: Pair<Rule>) -> Result<Metric> {
     let source = inner.n()?;
     let metric = Metric::try_from(parse_source_ident(&source)?)?;
     Ok(metric)
-}
-
-fn parse_metric_id(source: Pair<Rule>, state: &State) -> Result<MetricId> {
-    source.assert_type(Rule::metric_id)?;
-    let mut inner = source.into_inner();
-    let dataset = parse_dataset(inner.n()?, state)?;
-    let metric = parse_metric_name(inner.n()?)?;
-    inner.assert_empty()?;
-    Ok(MetricId { dataset, metric })
-}
-
-fn parse_parameterized_relative_time(
-    source: Pair<Rule>,
-    state: &State,
-) -> Result<Parameterized<RelativeTime>> {
-    source.assert_type(Rule::time_relative_parameterized)?;
-    let mut inner = source.into_inner();
-
-    let next = inner.n()?;
-
-    // do we have a param that we need to resolve first?
-    if matches!(next.as_rule(), Rule::param_ident) {
-        let span = pair_to_source_span(&next);
-        let mut inner = next.into_inner();
-        let next = inner.n()?;
-        let param = resolve_param(&next, state)?;
-        return Ok(Parameterized::Param {
-            span,
-            param: param.clone(),
-        });
-    }
-
-    parse_relative_time_inner(inner, &next).map(Parameterized::Concrete)
 }
 
 fn parse_relative_time(source: Pair<Rule>) -> Result<RelativeTime> {
@@ -360,50 +300,6 @@ fn parse_time_range(source: Pair<Rule>) -> Result<TimeRange> {
     Ok(TimeRange { start, end })
 }
 
-pub(crate) fn parse_source(source: Pair<Rule>, state: &State) -> Result<(Source, Option<As>)> {
-    source.assert_type(Rule::source)?;
-    let mut inner = source.into_inner();
-
-    let metric_id = parse_metric_id(inner.n()?, state)?;
-    let next = inner.next();
-
-    match next {
-        Some(next) if next.as_rule() == Rule::r#as => {
-            let as_ = parse_as(next)?;
-            inner.assert_empty()?;
-            Ok((
-                Source {
-                    metric_id,
-                    time: None,
-                },
-                Some(as_),
-            ))
-        }
-        Some(next) if next.as_rule() == Rule::time_range => {
-            let time = Some(parse_time_range(next)?);
-            if let Some(next) = inner.next() {
-                let as_ = parse_as(next)?;
-                inner.assert_empty()?;
-                Ok((Source { metric_id, time }, Some(as_)))
-            } else {
-                Ok((Source { metric_id, time }, None))
-            }
-        }
-        Some(next) => Err(ParseError::Unexpected {
-            span: pair_to_source_span(&next),
-            rule: next.as_rule(),
-            expected: vec![Rule::r#as, Rule::time_range],
-        }),
-        None => Ok((
-            Source {
-                metric_id,
-                time: None,
-            },
-            None,
-        )),
-    }
-}
-
 fn parse_cmp<'input>(source: &Pair<'input, Rule>) -> Result<&'input str> {
     source.assert_type(Rule::cmp)?;
     Ok(source.as_str())
@@ -411,22 +307,6 @@ fn parse_cmp<'input>(source: &Pair<'input, Rule>) -> Result<&'input str> {
 fn parse_cmp_re<'input>(source: &Pair<'input, Rule>) -> Result<&'input str> {
     source.assert_type(Rule::cmp_re)?;
     Ok(source.as_str())
-}
-
-#[derive(Debug, Clone, PartialEq, Copy)]
-enum Number {
-    Int(i64),
-    Float(f64),
-}
-impl Number {
-    // Can't do anything about it
-    #[allow(clippy::cast_precision_loss)]
-    fn as_f64(self) -> f64 {
-        match self {
-            Number::Int(value) => value as f64,
-            Number::Float(value) => value,
-        }
-    }
 }
 
 fn parse_int(source: &Pair<Rule>) -> Result<i64> {
@@ -491,81 +371,6 @@ fn parse_directive_value(source: Pair<Rule>) -> Result<DirectiveValue> {
         }),
     }
 }
-fn parse_param_native_type(state: &mut State, source: &Pair<Rule>) -> Result<TerminalParamType> {
-    source.assert_type(Rule::param_native_type)?;
-    let span = pair_to_source_span(source);
-    match source.as_str() {
-        "Dataset" => Ok(TerminalParamType::Dataset),
-        "Duration" => Ok(TerminalParamType::Duration),
-        "duration" => {
-            state.warnings.push_span(span, WarningReason::OldDuration);
-            Ok(TerminalParamType::Duration)
-        }
-        "Regex" => Ok(TerminalParamType::Regex),
-        "Timestamp" => Ok(TerminalParamType::Timestamp),
-        _ => Err(ParseError::Unexpected {
-            span: pair_to_source_span(source),
-            rule: Rule::param_type,
-            expected: vec![Rule::param_type],
-        }),
-    }
-}
-
-fn parse_param_type(state: &mut State, source: Pair<Rule>) -> Result<ParamType> {
-    source.assert_type(Rule::param_type)?;
-    let mut inner = source.into_inner();
-    let next = inner.n()?;
-    let r = match next.as_rule() {
-        Rule::tag_type => ParamType::Terminal(TerminalParamType::Tag(parse_tag_type(&next)?)),
-        Rule::param_native_type => ParamType::Terminal(parse_param_native_type(state, &next)?),
-        Rule::optional_type => {
-            let mut inner = next.into_inner();
-            let next = inner.n()?;
-            let r = match next.as_rule() {
-                Rule::tag_type => {
-                    ParamType::Optional(TerminalParamType::Tag(parse_tag_type(&next)?))
-                }
-                Rule::param_native_type => match parse_param_native_type(state, &next)? {
-                    TerminalParamType::Duration
-                    | TerminalParamType::Dataset
-                    | TerminalParamType::Timestamp => {
-                        return Err(ParseError::Unexpected {
-                            span: pair_to_source_span(&next),
-                            rule: Rule::param_native_type,
-                            expected: vec![Rule::tag_type],
-                        });
-                    }
-                    TerminalParamType::Regex => ParamType::Optional(TerminalParamType::Regex),
-                    TerminalParamType::Tag(tag_type) => {
-                        ParamType::Optional(TerminalParamType::Tag(tag_type))
-                    }
-                },
-                _ => {
-                    return Err(ParseError::Unexpected {
-                        span: pair_to_source_span(&next),
-                        rule: Rule::param_type,
-                        expected: vec![
-                            Rule::tag_type,
-                            Rule::param_native_type,
-                            Rule::optional_type,
-                        ],
-                    });
-                }
-            };
-            inner.assert_empty()?;
-            r
-        }
-        _ => {
-            return Err(ParseError::Unexpected {
-                span: pair_to_source_span(&next),
-                rule: Rule::param_type,
-                expected: vec![Rule::tag_type, Rule::param_native_type, Rule::optional_type],
-            });
-        }
-    };
-    inner.assert_empty()?;
-    Ok(r)
-}
 
 fn parse_regex(source: &Pair<'_, Rule>) -> Result<Regex> {
     source.assert_type(Rule::regex)?;
@@ -573,138 +378,6 @@ fn parse_regex(source: &Pair<'_, Rule>) -> Result<Regex> {
         &source.as_str()[1..],
         '/',
     ))?)
-}
-
-fn parse_expr(source: Pair<Rule>, state: &State) -> Result<Expr> {
-    source.assert_type(Rule::expr)?;
-    let mut inner = source.into_inner();
-    let next = inner.n()?;
-
-    match next.as_rule() {
-        Rule::param_ident => {
-            // param
-            let span = pair_to_source_span(&next);
-            let mut inner = next.into_inner();
-            let next = inner.n()?;
-            let param = resolve_param(&next, state)?;
-            Ok(Expr::Param {
-                span,
-                param: param.clone(),
-            })
-        }
-        Rule::r#const => {
-            next.assert_type(Rule::r#const)?;
-            let mut inner = next.into_inner();
-            let next = inner.n()?;
-
-            // concrete value
-            match next.as_rule() {
-                Rule::string => parse_string(next, state),
-                Rule::float | Rule::inf => Ok(Expr::Const(TagValue::Float(parse_float(&next)?))),
-                Rule::int => Ok(Expr::Const(TagValue::Int(parse_int(&next)?))),
-                Rule::bool => Ok(Expr::Const(TagValue::Bool(
-                    next.as_str().to_string().parse()?,
-                ))),
-                rule => Err(ParseError::Unexpected {
-                    span: pair_to_source_span(&next),
-                    rule,
-                    expected: vec![Rule::string, Rule::float, Rule::inf, Rule::int, Rule::bool],
-                }),
-            }
-        }
-        Rule::plain_ident | Rule::escaped_ident => Ok(Expr::Tag(parse_ident(&next)?)),
-        _ => Err(ParseError::Unexpected {
-            span: pair_to_source_span(&next),
-            rule: next.as_rule(),
-            expected: vec![Rule::param_ident, Rule::r#const, Rule::ident],
-        }),
-    }
-}
-
-fn parse_string(source: Pair<Rule>, state: &State) -> Result<Expr> {
-    source.assert_type(Rule::string)?;
-    let inner = source.into_inner();
-
-    let mut parts = Vec::new();
-    for part in inner {
-        part.assert_type(Rule::string_inner)?;
-        let mut inner_part = part.into_inner();
-        let next = inner_part.n()?;
-        inner_part.assert_empty()?;
-        match next.as_rule() {
-            Rule::string_chars => parts.push(StringFragment::Text(unescape(next.as_str(), '"'))),
-            Rule::expr => parts.push(StringFragment::Expr(parse_expr(next, state)?)),
-            _ => {
-                return Err(ParseError::Unexpected {
-                    span: pair_to_source_span(&next),
-                    rule: next.as_rule(),
-                    expected: vec![Rule::string, Rule::expr],
-                });
-            }
-        }
-    }
-    if parts
-        .iter()
-        .all(|part| matches!(part, StringFragment::Text(_)))
-    {
-        return Ok(Expr::Const(TagValue::String(
-            parts
-                .into_iter()
-                .map(|part| match part {
-                    StringFragment::Text(text) => text,
-                    StringFragment::Expr(_) => {
-                        unreachable!("we tested that all fragments are Text")
-                    }
-                })
-                .collect::<String>()
-                .try_into()?,
-        )));
-    }
-    Ok(Expr::String(parts))
-}
-
-fn parse_value_filter(field: String, source: Pair<Rule>, state: &State) -> Result<Filter> {
-    source.assert_type(Rule::value_filter)?;
-    let mut inner = source.into_inner();
-    let operator_pair = inner.n()?;
-    let operator = parse_cmp(&operator_pair)?;
-    let next = inner.n()?;
-
-    let value = parse_expr(next, state)?;
-
-    let rhs = match operator {
-        "==" => Cmp::Eq(value),
-        "!=" => Cmp::Ne(value),
-        ">" => Cmp::Gt(value),
-        ">=" => Cmp::Ge(value),
-        "<" => Cmp::Lt(value),
-        "<=" => Cmp::Le(value),
-        other => {
-            return Err(ParseError::UnsupportedTagComparison {
-                span: pair_to_source_span(&operator_pair),
-                op: other.to_string(),
-            });
-        }
-    };
-    Ok(Filter::Cmp { field, rhs })
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum ParseParamError {
-    #[error("Failed to parse: {0}")]
-    Parse(#[from] ParseError),
-    #[error("Failed to param as bool: {0}")]
-    ParseBool(<bool as FromStr>::Err),
-    #[error("Failed to parse as float: {0}")]
-    ParseFloat(#[from] ParseFloatError),
-    #[error("Failed to parse identifier: {0}")]
-    SharedStringError(#[from] strumbra::Error),
-    #[error(
-        "Param is declared as type {declared_typ}, but the provided type was parsed as `{rule:?}`"
-    )]
-    TypeMismatch { declared_typ: ParamType, rule: Rule },
-    #[error("None Type Params are not supported")]
-    NoneParam,
 }
 
 pub(crate) fn parse_param_value(
@@ -791,6 +464,338 @@ pub(crate) fn parse_param_value(
     }
 }
 
+impl Parser {
+    fn resolve_param<'p>(&'p self, source: &Pair<'_, Rule>) -> Result<&'p ParamDeclaration> {
+        let name = match source.as_rule() {
+            Rule::plain_ident => source.as_str(),
+            rule => {
+                return Err(ParseError::Unexpected {
+                    span: pair_to_source_span(source),
+                    rule,
+                    expected: vec![Rule::plain_ident],
+                });
+            }
+        };
+
+        let param = self.state.params.iter().find(|p| p.name == name).ok_or(
+            ParseError::UndefinedParam {
+                span: pair_to_source_span(source),
+                param: name.to_string(),
+            },
+        )?;
+
+        Ok(param)
+    }
+
+    fn parse_source_ident_param(&self, source: Pair<'_, Rule>) -> Result<Parameterized<String>> {
+        match source.as_rule() {
+            Rule::plain_ident => Ok(Parameterized::Concrete(source.as_str().to_string())),
+            Rule::escaped_ident => Ok(Parameterized::Concrete(
+                unescape_and_trim(source.as_str(), '`').clone(),
+            )),
+            Rule::param_ident => {
+                let span = pair_to_source_span(&source);
+                let mut inner = source.into_inner();
+                let next = inner.n()?;
+                let param = self.resolve_param(&next)?;
+                Ok(Parameterized::Param {
+                    span,
+                    param: param.clone(),
+                })
+            }
+            rule => Err(ParseError::Unexpected {
+                span: pair_to_source_span(&source),
+                rule,
+                expected: vec![Rule::ident, Rule::param_ident],
+            }),
+        }
+    }
+
+    fn parse_dataset(&self, source: Pair<Rule>) -> Result<Parameterized<Dataset>> {
+        source.assert_type(Rule::dataset)?;
+        let mut inner = source.into_inner();
+
+        let source = inner.n()?;
+        let dataset = self
+            .parse_source_ident_param(source)?
+            .map_concrete(Dataset::new);
+        Ok(dataset)
+    }
+
+    fn parse_metric_id(&self, source: Pair<Rule>) -> Result<MetricId> {
+        source.assert_type(Rule::metric_id)?;
+        let mut inner = source.into_inner();
+        let dataset = self.parse_dataset(inner.n()?)?;
+        let metric = parse_metric_name(inner.n()?)?;
+        inner.assert_empty()?;
+        Ok(MetricId { dataset, metric })
+    }
+
+    fn parse_parameterized_relative_time(
+        &self,
+        source: Pair<Rule>,
+    ) -> Result<Parameterized<RelativeTime>> {
+        source.assert_type(Rule::time_relative_parameterized)?;
+        let mut inner = source.into_inner();
+
+        let next = inner.n()?;
+
+        // do we have a param that we need to resolve first?
+        if matches!(next.as_rule(), Rule::param_ident) {
+            let span = pair_to_source_span(&next);
+            let mut inner = next.into_inner();
+            let next = inner.n()?;
+            let param = self.resolve_param(&next)?;
+            return Ok(Parameterized::Param {
+                span,
+                param: param.clone(),
+            });
+        }
+
+        parse_relative_time_inner(inner, &next).map(Parameterized::Concrete)
+    }
+
+    pub(crate) fn parse_source(&self, source: Pair<Rule>) -> Result<(Source, Option<As>)> {
+        source.assert_type(Rule::source)?;
+        let mut inner = source.into_inner();
+
+        let metric_id = self.parse_metric_id(inner.n()?)?;
+        let next = inner.next();
+
+        match next {
+            Some(next) if next.as_rule() == Rule::r#as => {
+                let as_ = parse_as(next)?;
+                inner.assert_empty()?;
+                Ok((
+                    Source {
+                        metric_id,
+                        time: None,
+                    },
+                    Some(as_),
+                ))
+            }
+            Some(next) if next.as_rule() == Rule::time_range => {
+                let time = Some(parse_time_range(next)?);
+                if let Some(next) = inner.next() {
+                    let as_ = parse_as(next)?;
+                    inner.assert_empty()?;
+                    Ok((Source { metric_id, time }, Some(as_)))
+                } else {
+                    Ok((Source { metric_id, time }, None))
+                }
+            }
+            Some(next) => Err(ParseError::Unexpected {
+                span: pair_to_source_span(&next),
+                rule: next.as_rule(),
+                expected: vec![Rule::r#as, Rule::time_range],
+            }),
+            None => Ok((
+                Source {
+                    metric_id,
+                    time: None,
+                },
+                None,
+            )),
+        }
+    }
+
+    fn parse_param_native_type(&mut self, source: &Pair<Rule>) -> Result<TerminalParamType> {
+        source.assert_type(Rule::param_native_type)?;
+        let span = pair_to_source_span(source);
+        match source.as_str() {
+            "Dataset" => Ok(TerminalParamType::Dataset),
+            "Duration" => Ok(TerminalParamType::Duration),
+            "duration" => {
+                self.state
+                    .warnings
+                    .push_span(span, WarningReason::OldDuration);
+                Ok(TerminalParamType::Duration)
+            }
+            "Regex" => Ok(TerminalParamType::Regex),
+            "Timestamp" => Ok(TerminalParamType::Timestamp),
+            _ => Err(ParseError::Unexpected {
+                span: pair_to_source_span(source),
+                rule: Rule::param_type,
+                expected: vec![Rule::param_type],
+            }),
+        }
+    }
+
+    fn parse_param_type(&mut self, source: Pair<Rule>) -> Result<ParamType> {
+        source.assert_type(Rule::param_type)?;
+        let mut inner = source.into_inner();
+        let next = inner.n()?;
+        let r = match next.as_rule() {
+            Rule::tag_type => ParamType::Terminal(TerminalParamType::Tag(parse_tag_type(&next)?)),
+            Rule::param_native_type => ParamType::Terminal(self.parse_param_native_type(&next)?),
+            Rule::optional_type => {
+                let mut inner = next.into_inner();
+                let next = inner.n()?;
+                let r = match next.as_rule() {
+                    Rule::tag_type => {
+                        ParamType::Optional(TerminalParamType::Tag(parse_tag_type(&next)?))
+                    }
+                    Rule::param_native_type => match self.parse_param_native_type(&next)? {
+                        TerminalParamType::Duration
+                        | TerminalParamType::Dataset
+                        | TerminalParamType::Timestamp => {
+                            return Err(ParseError::Unexpected {
+                                span: pair_to_source_span(&next),
+                                rule: Rule::param_native_type,
+                                expected: vec![Rule::tag_type],
+                            });
+                        }
+                        TerminalParamType::Regex => ParamType::Optional(TerminalParamType::Regex),
+                        TerminalParamType::Tag(tag_type) => {
+                            ParamType::Optional(TerminalParamType::Tag(tag_type))
+                        }
+                    },
+                    _ => {
+                        return Err(ParseError::Unexpected {
+                            span: pair_to_source_span(&next),
+                            rule: Rule::param_type,
+                            expected: vec![
+                                Rule::tag_type,
+                                Rule::param_native_type,
+                                Rule::optional_type,
+                            ],
+                        });
+                    }
+                };
+                inner.assert_empty()?;
+                r
+            }
+            _ => {
+                return Err(ParseError::Unexpected {
+                    span: pair_to_source_span(&next),
+                    rule: Rule::param_type,
+                    expected: vec![Rule::tag_type, Rule::param_native_type, Rule::optional_type],
+                });
+            }
+        };
+        inner.assert_empty()?;
+        Ok(r)
+    }
+
+    fn parse_expr(&self, source: Pair<Rule>) -> Result<Expr> {
+        source.assert_type(Rule::expr)?;
+        let mut inner = source.into_inner();
+        let next = inner.n()?;
+
+        match next.as_rule() {
+            Rule::param_ident => {
+                // param
+                let span = pair_to_source_span(&next);
+                let mut inner = next.into_inner();
+                let next = inner.n()?;
+                let param = self.resolve_param(&next)?;
+                Ok(Expr::Param {
+                    span,
+                    param: param.clone(),
+                })
+            }
+            Rule::r#const => {
+                next.assert_type(Rule::r#const)?;
+                let mut inner = next.into_inner();
+                let next = inner.n()?;
+
+                // concrete value
+                match next.as_rule() {
+                    Rule::string => self.parse_string(next),
+                    Rule::float | Rule::inf => {
+                        Ok(Expr::Const(TagValue::Float(parse_float(&next)?)))
+                    }
+                    Rule::int => Ok(Expr::Const(TagValue::Int(parse_int(&next)?))),
+                    Rule::bool => Ok(Expr::Const(TagValue::Bool(
+                        next.as_str().to_string().parse()?,
+                    ))),
+                    rule => Err(ParseError::Unexpected {
+                        span: pair_to_source_span(&next),
+                        rule,
+                        expected: vec![Rule::string, Rule::float, Rule::inf, Rule::int, Rule::bool],
+                    }),
+                }
+            }
+            Rule::plain_ident | Rule::escaped_ident => Ok(Expr::Tag(parse_ident(&next)?)),
+            _ => Err(ParseError::Unexpected {
+                span: pair_to_source_span(&next),
+                rule: next.as_rule(),
+                expected: vec![Rule::param_ident, Rule::r#const, Rule::ident],
+            }),
+        }
+    }
+
+    fn parse_string(&self, source: Pair<Rule>) -> Result<Expr> {
+        source.assert_type(Rule::string)?;
+        let inner = source.into_inner();
+
+        let mut parts = Vec::new();
+        for part in inner {
+            part.assert_type(Rule::string_inner)?;
+            let mut inner_part = part.into_inner();
+            let next = inner_part.n()?;
+            inner_part.assert_empty()?;
+            match next.as_rule() {
+                Rule::string_chars => {
+                    parts.push(StringFragment::Text(unescape(next.as_str(), '"')));
+                }
+                Rule::expr => parts.push(StringFragment::Expr(self.parse_expr(next)?)),
+                _ => {
+                    return Err(ParseError::Unexpected {
+                        span: pair_to_source_span(&next),
+                        rule: next.as_rule(),
+                        expected: vec![Rule::string, Rule::expr],
+                    });
+                }
+            }
+        }
+        if parts
+            .iter()
+            .all(|part| matches!(part, StringFragment::Text(_)))
+        {
+            return Ok(Expr::Const(TagValue::String(
+                parts
+                    .into_iter()
+                    .map(|part| match part {
+                        StringFragment::Text(text) => text,
+                        StringFragment::Expr(_) => {
+                            unreachable!("we tested that all fragments are Text")
+                        }
+                    })
+                    .collect::<String>()
+                    .try_into()?,
+            )));
+        }
+        Ok(Expr::String(parts))
+    }
+
+    fn parse_value_filter(&self, field: String, source: Pair<Rule>) -> Result<Filter> {
+        source.assert_type(Rule::value_filter)?;
+        let mut inner = source.into_inner();
+        let operator_pair = inner.n()?;
+        let operator = parse_cmp(&operator_pair)?;
+        let next = inner.n()?;
+
+        let value = self.parse_expr(next)?;
+
+        let rhs = match operator {
+            "==" => Cmp::Eq(value),
+            "!=" => Cmp::Ne(value),
+            ">" => Cmp::Gt(value),
+            ">=" => Cmp::Ge(value),
+            "<" => Cmp::Lt(value),
+            "<=" => Cmp::Le(value),
+            other => {
+                return Err(ParseError::UnsupportedTagComparison {
+                    span: pair_to_source_span(&operator_pair),
+                    op: other.to_string(),
+                });
+            }
+        };
+        Ok(Filter::Cmp { field, rhs })
+    }
+}
+
 fn const_type(
     src: Pair<Rule>,
     rule_type: Rule,
@@ -858,151 +863,150 @@ fn parse_is_filter(field: String, source: Pair<Rule>) -> Result<Filter> {
     inner.assert_empty()?;
     Ok(Filter::Cmp { field, rhs })
 }
+impl Parser {
+    fn parse_filter_atom(&self, source: Pair<Rule>) -> Result<Filter> {
+        source.assert_type(Rule::filter_atom)?;
+        let mut inner = source.into_inner();
 
-fn parse_filter_atom(source: Pair<Rule>, state: &State) -> Result<Filter> {
-    source.assert_type(Rule::filter_atom)?;
-    let mut inner = source.into_inner();
-
-    let next = inner.n()?;
-    let field = parse_ident(&next)?;
-
-    let next = inner.n()?;
-    let res = match next.as_rule() {
-        Rule::regex_filter => parse_regex_filter(field, next),
-        Rule::value_filter => parse_value_filter(field, next, state),
-        Rule::is_filter => parse_is_filter(field, next),
-        rule => Err(ParseError::Unexpected {
-            span: pair_to_source_span(&next),
-            rule,
-            expected: vec![Rule::regex_filter, Rule::value_filter, Rule::is_filter],
-        }),
-    }?;
-
-    inner.assert_empty()?;
-    Ok(res)
-}
-
-fn parse_filter_clause(source: Pair<'_, Rule>, state: &State) -> Result<Filter> {
-    source.assert_type(Rule::filter_clause)?;
-    let mut inner = source.into_inner();
-    let next = inner.n()?;
-    let res = match next.as_rule() {
-        Rule::filter_atom => parse_filter_atom(next, state),
-        Rule::filter_or => parse_or(next, state),
-        rule => Err(ParseError::Unexpected {
-            span: pair_to_source_span(&next),
-            rule,
-            expected: vec![Rule::filter_atom, Rule::filter_or],
-        }),
-    }?;
-
-    inner.assert_empty()?;
-    Ok(res)
-}
-
-fn parse_filter_not(source: Pair<'_, Rule>, state: &State) -> Result<Filter> {
-    source.assert_type(Rule::filter_not)?;
-    let mut inner = source.into_inner();
-    let next = inner.n()?;
-    let res = if next.as_rule() == Rule::kw_not {
-        Filter::Not(Box::new(parse_filter_clause(inner.n()?, state)?))
-    } else {
-        parse_filter_clause(next, state)?
-    };
-    inner.assert_empty()?;
-    Ok(res)
-}
-fn parse_and(source: Pair<Rule>, state: &State) -> Result<Filter> {
-    source.assert_type(Rule::filter_and)?;
-    let inner = source.into_inner();
-    let mut res = inner
-        .into_iter()
-        .map(|source| parse_filter_not(source, state))
-        .collect::<Result<Vec<_>>>()?;
-    if res.len() == 1 {
-        res.pop().ok_or(ParseError::Unreachable(
-            "len 1 filter should never be empty",
-        ))
-    } else {
-        Ok(Filter::And(res))
-    }
-}
-fn parse_or(source: Pair<Rule>, state: &State) -> Result<Filter> {
-    source.assert_type(Rule::filter_or)?;
-    let inner = source.into_inner();
-    let mut res = inner
-        .into_iter()
-        .map(|source| parse_and(source, state))
-        .collect::<Result<Vec<_>>>()?;
-    if res.len() == 1 {
-        res.pop().ok_or(ParseError::Unreachable(
-            "len 1 filter should never be empty",
-        ))
-    } else {
-        Ok(Filter::Or(res))
-    }
-}
-
-pub(crate) fn parse_filter(source: Pair<Rule>, state: &State) -> Result<Filter> {
-    source.assert_type(Rule::filter_rule)?;
-    let mut inner = source.into_inner();
-
-    let keyword = inner.n()?;
-    keyword.assert_type(Rule::pipe_keyword)?;
-
-    parse_where_part(&mut inner, state)
-}
-
-fn parse_where_part(source: &mut Pairs<Rule>, state: &State) -> Result<Filter> {
-    let _filter_kw = source.n()?; // kw_filter / kw_where
-    let next = source.n()?;
-    parse_or(next, state)
-    // Intentionally no `assert_empty`: `parse_ifdef` reuses this to parse the
-    // if-branch and then expects more pairs (`kw_else`, the else-branch's
-    // `kw_where` + `filter_or`). The grammar already prevents trailing
-    // garbage in `filter_rule`, so the defensive check is redundant.
-}
-
-pub(crate) fn parse_ifdef(
-    source: Pair<Rule>,
-    state: &State,
-) -> Result<(ParamDeclaration, Filter, Option<Filter>)> {
-    source.assert_type(Rule::ifdef_rule)?;
-    let mut inner = source.into_inner();
-
-    let keyword = inner.n()?;
-    keyword.assert_type(Rule::pipe_keyword)?;
-
-    let kw_ifdef = inner.n()?;
-    kw_ifdef.assert_type(Rule::kw_ifdef)?;
-
-    let param = inner.n()?;
-    let span = pair_to_source_span(&param);
-    let param = if matches!(param.as_rule(), Rule::param_ident) {
-        let mut inner = param.into_inner();
         let next = inner.n()?;
-        let param = resolve_param(&next, state)?.clone();
-        if !param.is_optional() {
-            return Err(ParseError::IfdefNotOptional { span, param });
+        let field = parse_ident(&next)?;
+
+        let next = inner.n()?;
+        let res = match next.as_rule() {
+            Rule::regex_filter => parse_regex_filter(field, next),
+            Rule::value_filter => self.parse_value_filter(field, next),
+            Rule::is_filter => parse_is_filter(field, next),
+            rule => Err(ParseError::Unexpected {
+                span: pair_to_source_span(&next),
+                rule,
+                expected: vec![Rule::regex_filter, Rule::value_filter, Rule::is_filter],
+            }),
+        }?;
+
+        inner.assert_empty()?;
+        Ok(res)
+    }
+
+    fn parse_filter_clause(&self, source: Pair<'_, Rule>) -> Result<Filter> {
+        source.assert_type(Rule::filter_clause)?;
+        let mut inner = source.into_inner();
+        let next = inner.n()?;
+        let res = match next.as_rule() {
+            Rule::filter_atom => self.parse_filter_atom(next),
+            Rule::filter_or => self.parse_or(next),
+            rule => Err(ParseError::Unexpected {
+                span: pair_to_source_span(&next),
+                rule,
+                expected: vec![Rule::filter_atom, Rule::filter_or],
+            }),
+        }?;
+
+        inner.assert_empty()?;
+        Ok(res)
+    }
+
+    fn parse_filter_not(&self, source: Pair<'_, Rule>) -> Result<Filter> {
+        source.assert_type(Rule::filter_not)?;
+        let mut inner = source.into_inner();
+        let next = inner.n()?;
+        let res = if next.as_rule() == Rule::kw_not {
+            Filter::Not(Box::new(self.parse_filter_clause(inner.n()?)?))
+        } else {
+            self.parse_filter_clause(next)?
+        };
+        inner.assert_empty()?;
+        Ok(res)
+    }
+    fn parse_and(&self, source: Pair<Rule>) -> Result<Filter> {
+        source.assert_type(Rule::filter_and)?;
+        let inner = source.into_inner();
+        let mut res = inner
+            .into_iter()
+            .map(|source| self.parse_filter_not(source))
+            .collect::<Result<Vec<_>>>()?;
+        if res.len() == 1 {
+            res.pop().ok_or(ParseError::Unreachable(
+                "len 1 filter should never be empty",
+            ))
+        } else {
+            Ok(Filter::And(res))
         }
-        param
-    } else {
-        return Err(ParseError::Unexpected {
-            span,
-            rule: param.as_rule(),
-            expected: vec![Rule::param_ident],
-        });
-    };
+    }
+    fn parse_or(&self, source: Pair<Rule>) -> Result<Filter> {
+        source.assert_type(Rule::filter_or)?;
+        let inner = source.into_inner();
+        let mut res = inner
+            .into_iter()
+            .map(|source| self.parse_and(source))
+            .collect::<Result<Vec<_>>>()?;
+        if res.len() == 1 {
+            res.pop().ok_or(ParseError::Unreachable(
+                "len 1 filter should never be empty",
+            ))
+        } else {
+            Ok(Filter::Or(res))
+        }
+    }
 
-    let filter = parse_where_part(&mut inner, state)?;
-    let Ok(kw_else) = inner.n() else {
-        return Ok((param, filter, None));
-    };
-    kw_else.assert_type(Rule::kw_else)?;
-    let filter_else = parse_where_part(&mut inner, state)?;
-    Ok((param, filter, Some(filter_else)))
+    pub(crate) fn parse_filter(&self, source: Pair<Rule>) -> Result<Filter> {
+        source.assert_type(Rule::filter_rule)?;
+        let mut inner = source.into_inner();
+
+        let keyword = inner.n()?;
+        keyword.assert_type(Rule::pipe_keyword)?;
+        self.parse_where_part(&mut inner)
+    }
+
+    fn parse_where_part(&self, source: &mut Pairs<Rule>) -> Result<Filter> {
+        let _filter_kw = source.n()?; // kw_filter / kw_where
+        let next = source.n()?;
+        self.parse_or(next)
+        // Intentionally no `assert_empty`: `parse_ifdef` reuses this to parse the
+        // if-branch and then expects more pairs (`kw_else`, the else-branch's
+        // `kw_where` + `filter_or`). The grammar already prevents trailing
+        // garbage in `filter_rule`, so the defensive check is redundant.
+    }
+
+    pub(crate) fn parse_ifdef(
+        &self,
+        source: Pair<Rule>,
+    ) -> Result<(ParamDeclaration, Filter, Option<Filter>)> {
+        source.assert_type(Rule::ifdef_rule)?;
+        let mut inner = source.into_inner();
+
+        let keyword = inner.n()?;
+        keyword.assert_type(Rule::pipe_keyword)?;
+
+        let kw_ifdef = inner.n()?;
+        kw_ifdef.assert_type(Rule::kw_ifdef)?;
+
+        let param = inner.n()?;
+        let span = pair_to_source_span(&param);
+        let param = if matches!(param.as_rule(), Rule::param_ident) {
+            let mut inner = param.into_inner();
+            let next = inner.n()?;
+            let param = self.resolve_param(&next)?.clone();
+            if !param.is_optional() {
+                return Err(ParseError::IfdefNotOptional { span, param });
+            }
+            param
+        } else {
+            return Err(ParseError::Unexpected {
+                span,
+                rule: param.as_rule(),
+                expected: vec![Rule::param_ident],
+            });
+        };
+
+        let filter = self.parse_where_part(&mut inner)?;
+        let Ok(kw_else) = inner.n() else {
+            return Ok((param, filter, None));
+        };
+        kw_else.assert_type(Rule::kw_else)?;
+        let filter_else = self.parse_where_part(&mut inner)?;
+        Ok((param, filter, Some(filter_else)))
+    }
 }
-
 pub(crate) fn parse_sample(source: Pair<Rule>) -> Result<f64> {
     source.assert_type(Rule::sample_rule)?;
     let mut inner = source.into_inner();
@@ -1119,49 +1123,49 @@ fn parse_bucket_fn_call(source: Pair<Rule>) -> Result<(BucketType, Vec<BucketSpe
     inner.assert_empty()?;
     result
 }
+impl Parser {
+    fn parse_bucket_by(&self, source: Pair<Rule>) -> Result<BucketBy> {
+        source.assert_type(Rule::bucket_by)?;
+        let span = pair_to_source_span(&source);
+        let mut inner = source.into_inner();
+        let next = inner.n()?;
 
-fn parse_bucket_by(source: Pair<Rule>, state: &State) -> Result<BucketBy> {
-    source.assert_type(Rule::bucket_by)?;
-    let span = pair_to_source_span(&source);
-    let mut inner = source.into_inner();
-    let next = inner.n()?;
+        let (tags, next) = if next.as_rule() == Rule::tags {
+            let fields = next
+                .into_inner()
+                .map(|field| parse_ident(&field))
+                .collect::<Result<_>>()?;
+            (fields, inner.n()?)
+        } else {
+            (Vec::new(), next)
+        };
 
-    let (tags, next) = if next.as_rule() == Rule::tags {
-        let fields = next
-            .into_inner()
-            .map(|field| parse_ident(&field))
-            .collect::<Result<_>>()?;
-        (fields, inner.n()?)
-    } else {
-        (Vec::new(), next)
-    };
+        if next.as_rule() == Rule::bucket_fn_call {
+            let (function, spec) = parse_bucket_fn_call(next)?;
+            inner.assert_empty()?;
 
-    if next.as_rule() == Rule::bucket_fn_call {
-        let (function, spec) = parse_bucket_fn_call(next)?;
-        inner.assert_empty()?;
+            Ok(BucketBy {
+                span,
+                function,
+                time: None,
+                tags,
+                spec,
+            })
+        } else {
+            let time = self.parse_parameterized_relative_time(next)?;
+            let (function, spec) = parse_bucket_fn_call(inner.n()?)?;
 
-        Ok(BucketBy {
-            span,
-            function,
-            time: None,
-            tags,
-            spec,
-        })
-    } else {
-        let time = parse_parameterized_relative_time(next, state)?;
-        let (function, spec) = parse_bucket_fn_call(inner.n()?)?;
-
-        inner.assert_empty()?;
-        Ok(BucketBy {
-            span,
-            function,
-            time: Some(time),
-            tags,
-            spec,
-        })
+            inner.assert_empty()?;
+            Ok(BucketBy {
+                span,
+                function,
+                time: Some(time),
+                tags,
+                spec,
+            })
+        }
     }
 }
-
 fn parse_function_id(source: Pair<Rule>) -> Result<Function> {
     let mut inner = source.into_inner();
     let mut next = inner.n()?;
@@ -1181,15 +1185,9 @@ fn parse_function_id(source: Pair<Rule>) -> Result<Function> {
     })
 }
 
-pub(crate) struct State {
-    params: Params,
-    directives: Directives,
-    warnings: Warnings,
-}
-
 impl Parser {
     pub(crate) fn parse_query<H: BuildHasher>(
-        &self,
+        mut self,
         pairs: &mut Pairs<Rule>,
         system_params: HashMap<String, ParamType, H>,
     ) -> Result<(Query, Warnings)> {
@@ -1197,46 +1195,38 @@ impl Parser {
             span: miette::SourceSpan::new(0.into(), 0),
         })?;
 
-        let mut params = Params::default();
-
         // add system params
         for (name, typ) in system_params {
             if !name.starts_with(SYSTEM_PARAM_PREFIX) {
                 return Err(ParseError::SystemParamMissingPrefix { param: name });
             }
-            params.push(ParamDeclaration {
+            self.state.params.push(ParamDeclaration {
                 span: SourceSpan::new(0.into(), 0),
                 name,
                 typ,
             });
         }
 
-        let mut state = State {
-            params,
-            directives: Directives::default(),
-            warnings: Warnings::new(),
-        };
-
         loop {
             match next.as_rule() {
                 Rule::directive => {
                     let span = pair_to_source_span(&next);
                     let (directive, value) = Parser::parse_directive(next)?;
-                    state.directives.insert(directive, value);
+                    self.state.directives.insert(directive, value);
                     next = pairs.next().ok_or(ParseError::EOF { span })?;
                 }
                 Rule::param => {
                     let span = pair_to_source_span(&next);
-                    let param = Parser::parse_param(&mut state, next)?;
-                    state.params.push(param);
+                    let param = self.parse_param(next)?;
+                    self.state.params.push(param);
                     next = pairs.next().ok_or(ParseError::EOF { span })?;
                 }
                 _ => break,
             }
         }
 
-        let r = self.parse_query_(&state, next)?;
-        Ok((r, state.warnings))
+        let r = self.parse_query_(next)?;
+        Ok((r, self.state.warnings))
     }
 
     pub(crate) fn parse_directive(source: Pair<'_, Rule>) -> Result<(String, DirectiveValue)> {
@@ -1258,10 +1248,7 @@ impl Parser {
         Ok((directive, value))
     }
 
-    pub(crate) fn parse_param(
-        state: &mut State,
-        source: Pair<'_, Rule>,
-    ) -> Result<ParamDeclaration> {
+    pub(crate) fn parse_param(&mut self, source: Pair<'_, Rule>) -> Result<ParamDeclaration> {
         let mut inner = source.into_inner();
         let next = inner.n()?;
         let span = pair_to_source_span(&next);
@@ -1269,30 +1256,30 @@ impl Parser {
         let name = parse_param_ident(next)?;
 
         if name.starts_with(SYSTEM_PARAM_PREFIX) {
-            state.warnings.push_span(
+            self.state.warnings.push_span(
                 span,
                 WarningReason::ParamUsingSystemPrefix {
                     param: name.clone(),
                 },
             );
-        } else if state.params.iter().any(|p| p.name == name) {
+        } else if self.state.params.iter().any(|p| p.name == name) {
             return Err(ParseError::ParamDefinedMultipleTimes { span, param: name });
         }
 
-        let typ = parse_param_type(state, inner.n()?)?;
+        let typ = self.parse_param_type(inner.n()?)?;
 
         Ok(ParamDeclaration { span, name, typ })
     }
 
-    fn parse_query_(&self, state: &State, query: Pair<Rule>) -> Result<Query> {
+    fn parse_query_(&self, query: Pair<Rule>) -> Result<Query> {
         match query.as_rule() {
             Rule::simple_query => {
                 let inner = query.into_inner();
-                self.parse_simple_query(state, inner)
+                self.parse_simple_query(inner)
             }
             Rule::compute_query => {
                 let inner = query.into_inner();
-                self.parse_compute_query(state, inner)
+                self.parse_compute_query(inner)
             }
             rule => Err(ParseError::Unexpected {
                 span: pair_to_source_span(&query),
@@ -1302,15 +1289,15 @@ impl Parser {
         }
     }
 
-    fn parse_compute_query(&self, state: &State, mut pairs: Pairs<Rule>) -> Result<Query> {
+    fn parse_compute_query(&self, mut pairs: Pairs<Rule>) -> Result<Query> {
         let next = pairs.next().ok_or(ParseError::EOF {
             span: miette::SourceSpan::new(0.into(), 0),
         })?;
-        let left = Box::new(self.parse_query_(state, next)?);
+        let left = Box::new(self.parse_query_(next)?);
         let next = pairs.next().ok_or(ParseError::EOF {
             span: miette::SourceSpan::new(0.into(), 0),
         })?;
-        let right = Box::new(self.parse_query_(state, next)?);
+        let right = Box::new(self.parse_query_(next)?);
 
         let next = pairs.next().ok_or(ParseError::EOF {
             span: miette::SourceSpan::new(0.into(), 0),
@@ -1353,8 +1340,8 @@ impl Parser {
         for next in &mut pairs {
             match next.as_rule() {
                 Rule::EOI => break,
-                Rule::pipe_rule => aggregates.push(self.parse_pipe(next, state)?),
-                Rule::extend_rule => extends.extend(self.parse_extend(next, state)?),
+                Rule::pipe_rule => aggregates.push(self.parse_pipe(next)?),
+                Rule::extend_rule => extends.extend(self.parse_extend(next)?),
 
                 rule => {
                     return Err(ParseError::Unexpected {
@@ -1373,12 +1360,12 @@ impl Parser {
             op,
             aggregates,
             extends,
-            directives: state.directives.clone(),
-            params: state.params.clone(),
+            directives: self.state.directives.clone(),
+            params: self.state.params.clone(),
         })
     }
-    fn parse_simple_query(&self, state: &State, mut pairs: Pairs<Rule>) -> Result<Query> {
-        let (source, as_) = parse_source(pairs.n()?, state)?;
+    fn parse_simple_query(&self, mut pairs: Pairs<Rule>) -> Result<Query> {
+        let (source, as_) = self.parse_source(pairs.n()?)?;
         let mut sample = None;
         let mut filters = Vec::new();
         let mut aggregates = Vec::new();
@@ -1394,7 +1381,7 @@ impl Parser {
                 Rule::sample_rule if sample.is_some() => {}
                 Rule::sample_rule => sample = Some(parse_sample(next)?),
                 Rule::ifdef_rule => {
-                    let (param, filter, else_filter) = parse_ifdef(next, state)?;
+                    let (param, filter, else_filter) = self.parse_ifdef(next)?;
                     filters.push(FilterOrIfDef::Ifdef {
                         param,
                         filter,
@@ -1402,10 +1389,10 @@ impl Parser {
                     });
                 }
                 Rule::filter_rule => {
-                    filters.push(FilterOrIfDef::Filter(parse_filter(next, state)?));
+                    filters.push(FilterOrIfDef::Filter(self.parse_filter(next)?));
                 }
-                Rule::pipe_rule => aggregates.push(self.parse_pipe(next, state)?),
-                Rule::extend_rule => extends.extend(self.parse_extend(next, state)?),
+                Rule::pipe_rule => aggregates.push(self.parse_pipe(next)?),
+                Rule::extend_rule => extends.extend(self.parse_extend(next)?),
                 rule => {
                     return Err(ParseError::Unexpected {
                         span: pair_to_source_span(&next),
@@ -1422,12 +1409,12 @@ impl Parser {
             filters,
             aggregates,
             extends,
-            directives: state.directives.clone(),
-            params: state.params.clone(),
+            directives: self.state.directives.clone(),
+            params: self.state.params.clone(),
         })
     }
 
-    pub(crate) fn parse_pipe(&self, source: Pair<Rule>, state: &State) -> Result<Aggregate> {
+    pub(crate) fn parse_pipe(&self, source: Pair<Rule>) -> Result<Aggregate> {
         source.assert_type(Rule::pipe_rule)?;
         let mut inner = source.into_inner();
 
@@ -1438,9 +1425,9 @@ impl Parser {
         inner.assert_empty()?;
         match next.as_rule() {
             Rule::map => Ok(Aggregate::Map(self.parse_map(next)?)),
-            Rule::align => Ok(Aggregate::Align(self.parse_align(next, state)?)),
+            Rule::align => Ok(Aggregate::Align(self.parse_align(next)?)),
             Rule::group_by => Ok(Aggregate::GroupBy(self.parse_group_by(next)?)),
-            Rule::bucket_by => Ok(Aggregate::Bucket(parse_bucket_by(next, state)?)),
+            Rule::bucket_by => Ok(Aggregate::Bucket(self.parse_bucket_by(next)?)),
             rule @ (Rule::join | Rule::replace) => Err(ParseError::NotSupported {
                 span: pair_to_source_span(&next),
                 rule,
@@ -1463,19 +1450,19 @@ impl Parser {
     }
 
     #[allow(clippy::unused_self)] // we will need self
-    fn parse_extend_expr(&self, source: Pair<Rule>, state: &State) -> Result<TagExtend> {
+    fn parse_extend_expr(&self, source: Pair<Rule>) -> Result<TagExtend> {
         source.assert_type(Rule::extend_expr)?;
         let mut inner = source.into_inner();
 
         let next = inner.n()?;
         let tag = parse_ident(&next)?;
         let next = inner.n()?;
-        let value = parse_expr(next, state)?;
+        let value = self.parse_expr(next)?;
         Ok(TagExtend { tag, value })
     }
 
     #[allow(clippy::unused_self)] // we will need self
-    fn parse_extend(&self, source: Pair<Rule>, state: &State) -> Result<Vec<TagExtend>> {
+    fn parse_extend(&self, source: Pair<Rule>) -> Result<Vec<TagExtend>> {
         source.assert_type(Rule::extend_rule)?;
         let mut inner = source.into_inner();
 
@@ -1487,9 +1474,9 @@ impl Parser {
         let mut result = Vec::with_capacity(1);
 
         let next = inner.n()?;
-        result.push(self.parse_extend_expr(next, state)?);
+        result.push(self.parse_extend_expr(next)?);
         while let Ok(next) = inner.n() {
-            result.push(self.parse_extend_expr(next, state)?);
+            result.push(self.parse_extend_expr(next)?);
         }
         Ok(result)
     }
@@ -1567,7 +1554,7 @@ impl Parser {
         })
     }
 
-    fn parse_align(&self, source: Pair<Rule>, state: &State) -> Result<Align> {
+    fn parse_align(&self, source: Pair<Rule>) -> Result<Align> {
         source.assert_type(Rule::align)?;
         let mut inner = source.into_inner();
 
@@ -1581,10 +1568,10 @@ impl Parser {
             });
         }
 
-        let time = parse_parameterized_relative_time(next, state)?;
+        let time = self.parse_parameterized_relative_time(next)?;
         let next = inner.n()?;
         if next.as_rule() == Rule::time_relative_parameterized {
-            let _sliding_window = parse_parameterized_relative_time(next, state)?;
+            let _sliding_window = self.parse_parameterized_relative_time(next)?;
             let _function = self.parse_align_fn(inner.n()?)?;
             inner.assert_empty()?;
             Err(ParseError::NotImplemented("sliding windows"))
@@ -1679,13 +1666,23 @@ impl Parser {
         Ok(function.clone())
     }
 }
+#[derive(Debug, Default)]
+pub(crate) struct State {
+    params: Params,
+    directives: Directives,
+    warnings: Warnings,
+}
 
 pub(crate) struct Parser {
     stdlib: &'static Module,
+    state: State,
 }
 
 impl Default for Parser {
     fn default() -> Self {
-        Parser { stdlib: &STDLIB }
+        Parser {
+            stdlib: &STDLIB,
+            state: State::default(),
+        }
     }
 }
