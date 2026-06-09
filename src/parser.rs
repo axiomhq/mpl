@@ -487,21 +487,35 @@ impl Parser {
         Ok(param)
     }
 
-    fn parse_source_ident_param(&self, source: Pair<'_, Rule>) -> Result<Parameterized<String>> {
+    fn parse_dataset(&self, source: Pair<Rule>) -> Result<Parameterized<Dataset>> {
+        source.assert_type(Rule::dataset)?;
+        let mut inner = source.into_inner();
+
+        let source = inner.n()?;
         match source.as_rule() {
-            Rule::plain_ident => Ok(Parameterized::Concrete(source.as_str().to_string())),
-            Rule::escaped_ident => Ok(Parameterized::Concrete(
+            Rule::plain_ident => Ok(Parameterized::Concrete(Dataset::new(
+                source.as_str().to_string(),
+            ))),
+            Rule::escaped_ident => Ok(Parameterized::Concrete(Dataset::new(
                 unescape_and_trim(source.as_str(), '`').clone(),
-            )),
+            ))),
             Rule::param_ident => {
                 let span = pair_to_source_span(&source);
                 let mut inner = source.into_inner();
                 let next = inner.n()?;
                 let param = self.resolve_param(&next)?;
-                Ok(Parameterized::Param {
-                    span,
-                    param: param.clone(),
-                })
+
+                if param.typ == ParamType::Terminal(TerminalParamType::Dataset) {
+                    Ok(Parameterized::Param {
+                        span,
+                        param: param.clone(),
+                    })
+                } else {
+                    Err(ParseError::InvalidTagType {
+                        tpe: param.typ.to_string(),
+                        span,
+                    })
+                }
             }
             rule => Err(ParseError::Unexpected {
                 span: pair_to_source_span(&source),
@@ -509,17 +523,6 @@ impl Parser {
                 expected: vec![Rule::ident, Rule::param_ident],
             }),
         }
-    }
-
-    fn parse_dataset(&self, source: Pair<Rule>) -> Result<Parameterized<Dataset>> {
-        source.assert_type(Rule::dataset)?;
-        let mut inner = source.into_inner();
-
-        let source = inner.n()?;
-        let dataset = self
-            .parse_source_ident_param(source)?
-            .map_concrete(Dataset::new);
-        Ok(dataset)
     }
 
     fn parse_metric_id(&self, source: Pair<Rule>) -> Result<MetricId> {
@@ -546,10 +549,17 @@ impl Parser {
             let mut inner = next.into_inner();
             let next = inner.n()?;
             let param = self.resolve_param(&next)?;
-            return Ok(Parameterized::Param {
-                span,
-                param: param.clone(),
-            });
+            return if param.typ == ParamType::Terminal(TerminalParamType::Duration) {
+                Ok(Parameterized::Param {
+                    span,
+                    param: param.clone(),
+                })
+            } else {
+                Err(ParseError::InvalidTagType {
+                    tpe: param.typ.to_string(),
+                    span,
+                })
+            };
         }
 
         parse_relative_time_inner(inner, &next).map(Parameterized::Concrete)
