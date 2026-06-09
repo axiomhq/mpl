@@ -857,12 +857,7 @@ impl ProvidedParams {
                             .into_iter()
                             .map(|part| match part {
                                 StringFragment::Text(text) => text,
-                                // we need to split this out so we avoid the PII safe
-                                // string formating
-                                StringFragment::Expr(Expr::Const(TagValue::String(s))) => {
-                                    s.to_string()
-                                }
-                                StringFragment::Expr(Expr::Const(c)) => c.to_string(),
+                                StringFragment::Expr(Expr::Const(c)) => c.stringify(),
                                 StringFragment::Expr(_) => {
                                     "unreachable string collapse".to_string()
                                 }

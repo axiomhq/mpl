@@ -38,6 +38,16 @@ impl TagValue {
             Self::String(_) => TagType::String,
         }
     }
+
+    pub(crate) fn stringify(&self) -> String {
+        match self {
+            Self::Null => "null".to_string(),
+            Self::Bool(arg0) => arg0.to_string(),
+            Self::Int(arg0) => arg0.to_string(),
+            Self::Float(arg0) => arg0.to_string(),
+            Self::String(arg0) => arg0.to_string(),
+        }
+    }
 }
 
 impl fmt::Debug for TagValue {
