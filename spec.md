@@ -118,13 +118,13 @@ Types that are currently supported include:
 - `float` - a float value
 - `bool` - a boolean value
 
-the syntax is as follows `| filter the_tag is string`
+the syntax is as follows `| where the_tag is string`
 
 This allows building expressions for metrics where tags are lacking or of an inconsistent type. For example the following query would allow to filter 200 replies  that are stored as integers or incorrectly in prometheus style as strings.
 
 ```
 production:http_codes
-| filter (code is int and code == 200) or (code is string and code == "200")
+| where (code is int and code == 200) or (code is string and code == "200")
 | map rate
 | align to 5m using avg
 ```
