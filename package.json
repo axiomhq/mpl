@@ -6,14 +6,16 @@
   "workspaces": [
     "playground",
     "packages/mpl",
-    "packages/mpl-codemirror"
+    "packages/mpl-codemirror",
+    "packages/mpl-vscode"
   ],
   "scripts": {
-    "dev": "npm run dev -w playground",
+    "dev:playground": "npm run dev -w playground",
     "build:mpl": "./packages/build-mpl-wasm.sh",
     "build:codemirror": "npm run build -w @axiomhq/mpl-codemirror",
+    "build:vscode": "npm run build -w mpl-vscode",
     "build:playground": "npm run build -w playground",
-    "build": "npm run build:mpl && npm run build:codemirror && npm run build:playground",
-    "clean": "rm -rf node_modules playground/node_modules playground/wasm packages/mpl-codemirror/node_modules packages/mpl-codemirror/dist pkg packages/mpl extra/mpl-language-server-wasm/pkg extra/mpl-playground/pkg"
+    "build": "npm run build:mpl && npm run build:codemirror && npm run build:vscode && npm run build:playground",
+    "clean": "rm -rf node_modules playground/node_modules playground/wasm packages/mpl-codemirror/node_modules packages/mpl-codemirror/dist packages/mpl-vscode/dist packages/mpl-vscode/server packages/mpl-vscode/*.vsix pkg packages/mpl extra/mpl-language-server-wasm/pkg extra/mpl-playground/pkg"
   }
 }
