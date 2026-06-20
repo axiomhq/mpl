@@ -1,9 +1,20 @@
 use std::collections::HashMap;
 
+use miette::NarratableReportHandler;
+
 use crate::{
     CompileError, ParseError, TypeError,
     query::{Cmp, DirectiveValue, Expr, Filter, TagType, TerminalParamType},
 };
+
+fn render_diagnostic(err: CompileError, src: &str) -> String {
+    let report = miette::Report::new(err).with_source_code(src.to_string());
+    let mut out = String::new();
+    NarratableReportHandler::new()
+        .render_report(&mut out, report.as_ref())
+        .expect("rendering a miette diagnostic should not fail");
+    out
+}
 
 #[test]
 fn parse_align_without_time() -> Result<(), Box<dyn std::error::Error>> {
@@ -28,10 +39,10 @@ fn align_with_time_but_without_to_reports_missing_to() {
     let s = "dataset:metric | align 1m using avg";
     let err = super::compile(s, HashMap::new())
         .expect_err("`align 1m using avg` is missing `to` and must fail");
-    let msg = err.to_string();
+    let rendered = render_diagnostic(err, s);
     assert!(
-        msg.contains("missing") && msg.contains("`to`") && msg.contains("align"),
-        "expected the error to point out that `to` is missing after `align`, got: {msg}"
+        rendered.contains("to") && rendered.contains("align"),
+        "expected the diagnostic to point out that `to` is missing after `align`, got:\n{rendered}"
     );
 }
 

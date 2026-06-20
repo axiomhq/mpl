@@ -1560,7 +1560,11 @@ impl Parser {
         let mut inner = source.into_inner();
 
         let next = inner.n()?;
-        if next.as_rule() == Rule::func {
+        next.assert_type(Rule::kw_align)?;
+
+        let next = inner.n()?;
+        if next.as_rule() == Rule::kw_using {
+            let next = inner.n()?;
             let function = self.parse_align_fn(next)?;
             inner.assert_empty()?;
             return Ok(Align {
@@ -1568,25 +1572,37 @@ impl Parser {
                 time: None,
             });
         }
-
+        next.assert_type(Rule::kw_to)?;
+        let next = inner.n()?;
         let time = parse_parameterized_relative_time(next, state)?;
         let next = inner.n()?;
-        if next.as_rule() == Rule::time_relative_parameterized {
+        if next.as_rule() == Rule::kw_over {
+            let next = inner.n()?;
             let _sliding_window = parse_parameterized_relative_time(next, state)?;
+            let next = inner.n()?;
+            next.assert_type(Rule::kw_using)?;
             let _function = self.parse_align_fn(inner.n()?)?;
             inner.assert_empty()?;
             Err(ParseError::NotImplemented("sliding windows"))
-        } else {
+        } else if next.as_rule() == Rule::kw_using {
+            let next = inner.n()?;
             let function = self.parse_align_fn(next)?;
             inner.assert_empty()?;
             Ok(Align {
                 function,
                 time: Some(time),
             })
+        } else {
+            Err(ParseError::Unexpected {
+                span: pair_to_source_span(&next),
+                rule: next.as_rule(),
+                expected: vec![Rule::kw_using],
+            })
         }
     }
 
     fn parse_align_fn(&self, source: Pair<Rule>) -> Result<AlignFunction> {
+        source.assert_type(Rule::func)?;
         let span = pair_to_source_span(&source);
         let f = parse_function_id(source)?;
         let Some(function) = self.stdlib.align_fn(&f) else {

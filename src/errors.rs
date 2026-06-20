@@ -488,6 +488,10 @@ fn friendly_rule(rule: Rule) -> String {
         Rule::map => "a map operation".to_string(),
         Rule::replace => "a replace operation".to_string(),
         Rule::join => "a join operation".to_string(),
+        Rule::kw_align => "align keyword".to_string(),
+        Rule::kw_using => "using keyword".to_string(),
+        Rule::kw_over => "over keyword".to_string(),
+        Rule::kw_to => "to keyword".to_string(),
 
         // Query types
         Rule::simple_query => "simple query".to_string(),
@@ -671,6 +675,11 @@ fn rules_keywords(rules: &[Rule]) -> Vec<&'static str> {
                 keywords.push("float");
                 keywords.push("bool");
             }
+            Rule::kw_else => keywords.push("else"),
+            Rule::kw_to => keywords.push("to"),
+            Rule::kw_using => keywords.push("using"),
+            Rule::kw_over => keywords.push("over"),
+
             _ => {}
         }
     }

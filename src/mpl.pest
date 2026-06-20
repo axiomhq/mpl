@@ -134,7 +134,11 @@ expr = { const | param_ident | ident }
 
 const = { string | float | int | bool | inf }
 
-align = { "align" ~ ("to" ~ time_relative_parameterized)? ~ ("over" ~ time_relative_parameterized)? ~ "using" ~ func }
+kw_to = { "to" }
+kw_over = { "over" }
+kw_using = { "using" }
+kw_align = { "align" }
+align = { kw_align ~ (kw_to ~ time_relative_parameterized)? ~ (kw_over ~ time_relative_parameterized)? ~ kw_using ~ func }
 
 group_by = { "group" ~ ("by" ~ tags)? ~ "using" ~ func }
 
