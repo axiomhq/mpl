@@ -1634,15 +1634,23 @@ impl Parser {
 
         let mut inner = source.into_inner();
         let next = inner.n()?;
+        next.assert_type(Rule::kw_group)?;
 
-        let (tags, function) = if next.as_rule() == Rule::tags {
+        let next = inner.n()?;
+        let (tags, function) = if next.as_rule() == Rule::kw_by {
+            let next = inner.n()?;
+            next.assert_type(Rule::tags)?;
             let fields = next
                 .into_inner()
                 .map(|field| parse_ident(&field))
                 .collect::<Result<_>>()?;
+            let next = inner.n()?;
+            next.assert_type(Rule::kw_using)?;
             let function = self.parse_group_by_fn(inner.n()?)?;
             (fields, function)
         } else {
+            next.assert_type(Rule::kw_using)?;
+            let next = inner.n()?;
             (Vec::new(), self.parse_group_by_fn(next)?)
         };
         inner.assert_empty()?;
