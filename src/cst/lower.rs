@@ -1057,20 +1057,15 @@ pub fn parse_param_value(
     param: &ParamDeclaration,
     value: &str,
 ) -> std::result::Result<ParamValue, ParseParamError> {
-    use logos::Logos as _;
-
-    // The leading (non-trivia) tokens of the value.
-    let toks: Vec<(SyntaxKind, &str)> = {
-        let mut lexer = SyntaxKind::lexer(value);
-        let mut out = Vec::new();
-        while let Some(res) = lexer.next() {
-            let kind = res.unwrap_or(SyntaxKind::ERROR);
-            if !kind.is_trivia() {
-                out.push((kind, &value[lexer.span()]));
-            }
-        }
-        out
-    };
+    // The leading (non-trivia) tokens of the value, lexed by the same CST lexer
+    // the parser uses. A plain (non-interpolated) string value comes out as a
+    // single `STRING_FRAGMENT` carrying both quotes (no `${ … }` to split on).
+    let (raw, _unterminated) = super::parser::lex(value);
+    let toks: Vec<(SyntaxKind, &str)> = raw
+        .into_iter()
+        .filter(|(kind, _)| !kind.is_trivia())
+        .map(|(kind, range)| (kind, &value[range]))
+        .collect();
     let mismatch = || ParseParamError::TypeMismatch {
         declared_typ: param.typ,
     };
@@ -1097,7 +1092,9 @@ pub fn parse_param_value(
             _ => Err(mismatch()),
         },
         TerminalParamType::Tag(TagType::String) => match first {
-            Some((SyntaxKind::STRING, t)) => Ok(ParamValue::String(unescape_and_trim(t, '"'))),
+            Some((SyntaxKind::STRING_FRAGMENT, t)) => {
+                Ok(ParamValue::String(unescape_and_trim(t, '"')))
+            }
             _ => Err(mismatch()),
         },
         TerminalParamType::Tag(TagType::Int) => match first {

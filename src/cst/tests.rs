@@ -68,16 +68,15 @@ fn interpolated_string_roundtrips_losslessly() {
     }
 }
 
-// Regression lock for the string-boundary bug, now FIXED by token-driven
-// boundary detection (Option B). An escaped ident whose name contains `}` is
-// valid MPL, but the old two-phase byte scanner (`string_end`/`find_interp_close`)
-// only skipped `\` and `"` — it was blind to backtick idents, `#/regex/`
-// literals and `//` comments, all of which can carry a `}` or `"`. So it
-// stopped at the `}` inside the ident name and mis-detected the `${ … }`
-// boundary (empty interpolation + an ERROR_NODE + 3 spurious errors). The new
-// lexer lexes each `${ … }` interior with `logos` and counts brace *tokens*, so
-// `` `a}b` `` is a single ESCAPED_IDENT and the `}` inside it is never a
-// delimiter; the interior parses as one ESCAPED_IDENT with no errors.
+// Regression lock for the string-boundary bug. An escaped ident whose name
+// contains `}` is valid MPL, but a naive byte scanner that only skips `\` and
+// `"` is blind to backtick idents, `#/regex/` literals and `//` comments, all
+// of which can carry a `}` or `"`, so it stops at the `}` inside the ident name
+// and mis-detects the `${ … }` boundary. The lexgen lexer lexes each `${ … }`
+// interior with the *same* `Init` rule set and closes the interpolation on a
+// `}` token only at brace depth 0 (a `LexState` stack frame), so `` `a}b` `` is
+// a single ESCAPED_IDENT and the `}` inside it is never a delimiter; the
+// interior parses as one ESCAPED_IDENT with no errors.
 #[test]
 fn interpolation_with_braced_escaped_ident_parses_cleanly() {
     let input = r#"ds:cpu | where t == "x ${ `a}b` }""#;
@@ -105,11 +104,11 @@ fn interpolation_with_braced_escaped_ident_parses_cleanly() {
 }
 
 // (a) The same class of bug, but the escaped ident carries a `"` instead of a
-// `}`. The old byte scanner's `string_end`/`find_interp_close` toggled on every
-// `"`, so the quote inside `` `a"b` `` was read as the string's closing quote
-// and the boundary collapsed. Lexing the interior with `logos` makes `` `a"b` ``
-// a single ESCAPED_IDENT, so the embedded `"` is part of that token, never a
-// delimiter. The interior must be exactly that one escaped ident, no errors.
+// `}`. A naive scanner that toggles string mode on every `"` reads the quote
+// inside `` `a"b` `` as the string's closing quote and the boundary collapses.
+// The lexgen `Init` rule set makes `` `a"b` `` a single ESCAPED_IDENT, so the
+// embedded `"` is part of that token and never re-enters the `InString` state.
+// The interior must be exactly that one escaped ident, no errors.
 #[test]
 fn interpolation_with_quoted_escaped_ident_parses_cleanly() {
     let input = r#"ds:cpu | where t == "x ${ `a"b` }""#;
@@ -137,11 +136,11 @@ fn interpolation_with_quoted_escaped_ident_parses_cleanly() {
 }
 
 // (b) A multi-line interpolation whose interior has a `//` line comment
-// containing a `}` before the *real* closing `}` on the next line. The old
-// `find_interp_close` byte scanner had no notion of comments, so it would stop
-// at the `}` inside the comment and mis-detect the boundary. Lexing the
-// interior with `logos` makes the `// …}` a single COMMENT token, so its `}` is
-// not a delimiter and the boundary is the real `}`. The interior may error on
+// containing a `}` before the *real* closing `}` on the next line. A scanner
+// with no notion of comments stops at the `}` inside the comment and mis-detects
+// the boundary. The lexgen `Init` rule set lexes the `// …}` as a single COMMENT
+// token, so its `}` is not a delimiter and the boundary is the real `}` (the
+// first `}` token seen at interpolation brace depth 0). The interior may error on
 // *semantics* (a bare `x` is not a complete expr value here), but the BOUNDARY
 // must be right: the outer STRING must span to the final `"`, and the whole
 // input must round-trip byte-for-byte.

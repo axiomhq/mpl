@@ -52,7 +52,8 @@ ordered-float = "5"
 ron = { version = "0.12", optional = true }
 arborium = { version = "2", optional = true, default-features = false, features = ["lang-ron", "lang-json"] }
 rowan = "0.16"
-logos = "0.16"
+lexgen = "0.16"
+lexgen_util = "0.16"
 serde_regex = "1"
 miette = { version = "7.6.0", features = ["serde"] }
 

@@ -12,10 +12,8 @@
 //! * is lowered to the existing [`crate::query`] AST by a thin [`lower`] pass
 //!   (which also hosts the `param_value` external entry point).
 
-use logos::Logos;
-
 pub mod lower;
-mod parser;
+pub(crate) mod parser;
 
 #[cfg(test)]
 mod tests;
@@ -24,141 +22,110 @@ pub use parser::{Parse, SyntaxError, parse};
 
 /// The kinds of tokens and nodes in the `MPL` syntax tree.
 ///
-/// Variants carrying a `#[token]` / `#[regex]` attribute are produced by the
-/// [`logos`] lexer. The remaining "token" variants ([`SyntaxKind::KEYWORD`] …
-/// [`SyntaxKind::TIME_UNIT`]) are *semantic relabelings* the parser assigns
-/// while building the tree (e.g. an `IDENT` used as the `filter` keyword is
-/// emitted as `KEYWORD`). The `*_NODE` / composite variants are interior
-/// nodes. Screaming-case mirrors the rust-analyzer convention.
-#[derive(Logos, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// The "token" variants up to [`SyntaxKind::SLASH`] are produced by the
+/// [`lexgen`](https://docs.rs/lexgen)-generated lexer (see [`parser`]). The
+/// relabeling variants ([`SyntaxKind::KEYWORD`] … [`SyntaxKind::TIME_UNIT`])
+/// are *semantic relabelings* the parser assigns while building the tree
+/// (e.g. an `IDENT` used as the `filter` keyword is emitted as `KEYWORD`).
+/// The `*_NODE` / composite variants are interior nodes. Screaming-case
+/// mirrors the rust-analyzer convention.
+///
+/// This is a *plain* enum: unlike the previous `logos` design, the lexer rules
+/// live in the `lexer! { … }` macro in [`parser`], not in attributes on these
+/// variants, so `SyntaxKind` keeps only its rowan node-kind role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u16)]
 #[allow(non_camel_case_types)]
 pub enum SyntaxKind {
     // ── trivia (lexer) ───────────────────────────────────────────
     /// Run of spaces, tabs, carriage returns and newlines.
-    #[regex(r"[ \t\r\n]+")]
     WHITESPACE,
     /// `// …` line comment.
-    #[regex(r"//[^\n]*", allow_greedy = true)]
     COMMENT,
 
     // ── literals & identifiers (lexer) ───────────────────────────
     /// RFC3339 timestamp literal, e.g. `2025-03-01T13:00:00Z`. Lexed ahead of
     /// `INT`/`FLOAT` because it is the longest match for a leading digit run.
-    #[regex(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z?")]
     RFC3339,
     /// Floating point literal, e.g. `3.14`. The fractional part requires at
     /// least one digit so a trailing `..` (range operator) after an integer
     /// timestamp is not swallowed as a float.
-    #[regex(r"[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?")]
     FLOAT,
     /// Integer literal, e.g. `42`.
-    #[regex(r"[0-9]+")]
     INT,
-    // A double-quoted string literal is lexed by `logos` as one raw token, but
-    // the parser immediately *descends* into it (see `parser::expand_string`):
-    // the raw token never reaches the tree. Instead the literal text becomes
-    // [`SyntaxKind::STRING_FRAGMENT`] tokens, the `${`/`}` interpolation
-    // delimiters become [`SyntaxKind::DOLLAR_BRACE`]/[`SyntaxKind::R_BRACE`]
-    // tokens, and the embedded expression is a real [`SyntaxKind::EXPR`] subtree
-    // parsed by the same expr parser. `STRING` is then reused as the *node*
-    // kind wrapping all of that, so the CST is lossless down into interpolations.
-    /// Raw double-quoted string match (lexer-only; reused as the string node kind).
-    #[regex(r#""([^"\\]|\\.)*""#)]
+    // A double-quoted string literal is lexed *natively* by the lexgen
+    // `InString` rule set: the literal text becomes [`SyntaxKind::STRING_FRAGMENT`]
+    // tokens, the `${`/`}` interpolation delimiters become
+    // [`SyntaxKind::DOLLAR_BRACE`]/[`SyntaxKind::R_BRACE`] tokens, and the
+    // embedded expression is a real [`SyntaxKind::EXPR`] subtree parsed by the
+    // same expr parser. `STRING` is reused as the *node* kind wrapping all of
+    // that, so the CST is lossless down into (and through nested) interpolations.
+    /// String literal node kind (no longer a lexer token — see `parser`).
     STRING,
     /// A run of literal string text inside a [`SyntaxKind::STRING`] node. The
-    /// boundary fragments carry the surrounding `"` quotes. Parser-emitted.
+    /// boundary fragments carry the surrounding `"` quotes. Lexer-emitted.
     STRING_FRAGMENT,
-    /// The `${` opening an interpolation inside a string. Parser-emitted.
+    /// The `${` opening an interpolation inside a string. Lexer-emitted.
     DOLLAR_BRACE,
     /// Regex literal `#/…/`.
-    #[regex(r"#/([^/\\]|\\.)*/")]
     REGEX,
     /// Regex-replace literal `#s/…/…/`.
-    #[regex(r"#s/([^/\\]|\\.)*/([^/\\]|\\.)*/")]
     REGEX_REPLACE,
     /// Parameter identifier, e.g. `$dur` or `` $`weird name` ``.
-    #[regex(r#"\$([A-Za-z_][A-Za-z0-9_]*|`([^`\\]|\\.)*`)"#)]
     PARAM_IDENT,
     /// Backtick-escaped identifier, e.g. `` `my-tag` ``.
-    #[regex(r"`([^`\\]|\\.)*`")]
     ESCAPED_IDENT,
     /// Plain identifier, e.g. `cpu`.
-    #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
     IDENT,
 
     // ── punctuation & operators (lexer) ──────────────────────────
     /// `|` pipe.
-    #[token("|")]
     PIPE,
     /// `::` module separator.
-    #[token("::")]
     COLON_COLON,
     /// `:` colon.
-    #[token(":")]
     COLON,
     /// `;` semicolon.
-    #[token(";")]
     SEMICOLON,
     /// `,` comma.
-    #[token(",")]
     COMMA,
     /// `[` left bracket.
-    #[token("[")]
     L_BRACK,
     /// `]` right bracket.
-    #[token("]")]
     R_BRACK,
     /// `{` left brace (ifdef bodies).
-    #[token("{")]
     L_BRACE,
-    /// `}` right brace (ifdef bodies).
-    #[token("}")]
+    /// `}` right brace (ifdef bodies / interpolation close).
     R_BRACE,
     /// `(` left parenthesis.
-    #[token("(")]
     L_PAREN,
     /// `)` right parenthesis.
-    #[token(")")]
     R_PAREN,
     /// `..` range separator.
-    #[token("..")]
     DOT_DOT,
     /// `==` equality.
-    #[token("==")]
     EQ_EQ,
     /// `!=` inequality.
-    #[token("!=")]
     BANG_EQ,
     /// `<=` less-or-equal.
-    #[token("<=")]
     LT_EQ,
     /// `>=` greater-or-equal.
-    #[token(">=")]
     GT_EQ,
     /// `<` less-than / `Option<` opener.
-    #[token("<")]
     L_ANGLE,
     /// `>` greater-than / `Option<…>` closer.
-    #[token(">")]
     R_ANGLE,
     /// `=` assignment (directives, `extend`).
-    #[token("=")]
     EQ,
     /// `~` replace operator.
-    #[token("~")]
     TILDE,
     /// `+` plus.
-    #[token("+")]
     PLUS,
     /// `-` minus.
-    #[token("-")]
     MINUS,
     /// `*` star.
-    #[token("*")]
     STAR,
     /// `/` slash.
-    #[token("/")]
     SLASH,
 
     // ── semantic relabelings (assigned by the parser) ────────────
