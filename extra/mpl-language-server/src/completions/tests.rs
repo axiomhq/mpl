@@ -5,8 +5,8 @@ use mpl_lang::STDLIB;
 
 use super::{
     CompletionResult, ParamItem, ParamType, QueryContext, compute_completions,
-    cursor_in_interpolation, extract_declared_params, extract_partial_word, is_char_escaped,
-    locate_query_context, lookup_function, skip_string_literal,
+    cursor_in_interpolation, declared_params, extract_declared_params, extract_partial_word,
+    locate_query_context, lookup_function,
 };
 
 fn tag_info(r: &CompletionResult) -> Option<(&str, &str)> {
@@ -280,34 +280,6 @@ fn partial_word_double_escaped_backslash_before_backtick() {
     let (start, partial) = extract_partial_word(text, text.len());
     assert_eq!(partial, r"`name\\`");
     assert_eq!(start, 0);
-}
-
-// ── is_char_escaped ──────────────────────────────────────────────
-
-#[test]
-fn is_char_escaped_no_backslash() {
-    assert!(!is_char_escaped(b"abc", 2)); // 'c' not escaped
-}
-
-#[test]
-fn is_char_escaped_one_backslash() {
-    assert!(is_char_escaped(b"a\\c", 2)); // 'c' escaped by single backslash
-}
-
-#[test]
-fn is_char_escaped_two_backslashes() {
-    // Two backslashes: first escapes second, so 'c' is NOT escaped
-    assert!(!is_char_escaped(b"a\\\\c", 3));
-}
-
-#[test]
-fn is_char_escaped_three_backslashes() {
-    assert!(is_char_escaped(b"a\\\\\\c", 4));
-}
-
-#[test]
-fn is_char_escaped_at_start() {
-    assert!(!is_char_escaped(b"c", 0)); // no room for backslash
 }
 
 // ── span assertions (cannot be parameterized) ───────────────────
@@ -1280,6 +1252,40 @@ fn extract_params_with_comments() {
     assert_eq!(params[0].label, "$x");
 }
 
+// ── declared_params (hover projection) ──────────────────────────
+
+#[test]
+fn declared_params_projects_canonical_type_and_optional_flag() {
+    let text = "\
+param $ds: Dataset;\n\
+param $w: Duration;\n\
+param $f: Option<int>;\n\
+param $r: Option<Regex>;\n\
+ds:metric";
+    let decls = declared_params(text);
+    assert_eq!(decls.len(), 4);
+
+    // Names keep the `$` prefix so the editor can key off the reference token.
+    assert_eq!(decls[0].name, "$ds");
+    // PascalCase types render canonically; lowercase scalars stay lowercase.
+    assert_eq!(decls[0].typ, "Dataset");
+    assert!(!decls[0].optional);
+    assert_eq!(decls[1].typ, "Duration");
+
+    // Option<T> is unwrapped to the inner type with `optional: true`, matching
+    // how hover re-wraps it as `Option<int>` for display.
+    assert_eq!(decls[2].name, "$f");
+    assert_eq!(decls[2].typ, "int");
+    assert!(decls[2].optional);
+    assert_eq!(decls[3].typ, "Regex");
+    assert!(decls[3].optional);
+}
+
+#[test]
+fn declared_params_empty_when_no_params() {
+    assert!(declared_params("ds:metric | where x == 1").is_empty());
+}
+
 // ── extract_partial_word includes $ ─────────────────────────────
 
 #[test]
@@ -1882,6 +1888,21 @@ fn inside_plain_string_literal_offers_nothing() {
     );
 }
 
+#[test]
+fn unterminated_interpolation_classifies_as_interpolation_mid_edit() {
+    // The whole point of the CST string recovery: an *unterminated* string
+    // (no closing quote) must still classify its `${ … }` region as
+    // interpolation so a `$param` is offered there. Before the lexer descended
+    // into open strings, this collapsed into one opaque ERROR token and the
+    // dispatcher mis-read the dangling `"` as a bare token (suggesting
+    // boolean operators). Note: no closing quote after the cursor.
+    let kinds = completion_kinds_at("param $h: string;\nds:metric | where tag == \"host ${ $#");
+    assert_eq!(kinds, vec!["params"]);
+
+    // And the plain text of an unterminated string still offers nothing.
+    assert!(completion_kinds_at("ds:metric | where tag == \"host #").is_empty());
+}
+
 fn duration_param(name: &str) -> ParamItem {
     ParamItem {
         label: name.to_string(),
@@ -1951,67 +1972,44 @@ fn inline_decl_shadows_system_param_with_same_name() {
     );
 }
 
-// ── interpolation-aware byte scanners ───────────────────────────
-// White-box tests for the escape/comment/EOF edge branches that are hard to
-// drive deterministically through `compute_completions`.
-
-#[test]
-fn skip_string_literal_handles_escapes_and_nested_interpolation() {
-    // Escaped quote stays inside the string; a `${ "c" }` interpolation with a
-    // nested string is skipped as a unit. `*i` must land on the final quote.
-    let src = r#""a\" b ${ "c" } d" rest"#;
-    let mut i = 0;
-    skip_string_literal(src.as_bytes(), src.len(), &mut i);
-    assert_eq!(src.as_bytes()[i], b'"');
-    assert_eq!(&src[..=i], r#""a\" b ${ "c" } d""#);
-    assert_eq!(&src[i + 1..], " rest");
-}
-
-#[test]
-fn skip_string_literal_skips_backtick_ident_in_interpolation() {
-    // A `}` (and an escaped backtick `\``) inside a backtick identifier must
-    // not close the interpolation or the identifier prematurely.
-    let src = r#""x ${ $`a\`}b` } y" rest"#;
-    let mut i = 0;
-    skip_string_literal(src.as_bytes(), src.len(), &mut i);
-    assert_eq!(&src[..=i], r#""x ${ $`a\`}b` } y""#);
-    assert_eq!(&src[i + 1..], " rest");
-}
-
-#[test]
-fn skip_string_literal_clamps_on_trailing_backslash() {
-    // Unterminated string ending in a backslash must not run `*i` past `len`.
-    let src = r#""ab\"#;
-    let mut i = 0;
-    skip_string_literal(src.as_bytes(), src.len(), &mut i);
-    assert_eq!(i, src.len());
-}
+// ── CST string-context classification ───────────────────────────
+// `classify_string_context` (via `cursor_in_interpolation`) now reads the
+// recovering CST instead of a byte stack. These pin the same code/interp/text
+// behaviour the deleted byte-scanner tests covered, but on realistic queries
+// (a real source + `| where`) so the parser builds the `STRING` node the
+// classifier walks — the production shape, since completion always runs on an
+// editor's in-progress query, never a bare `x == "…` fragment.
 
 #[test]
 fn cursor_in_interpolation_true_cases() {
     // Escaped char in the string text before the interpolation.
-    let q = "x == \"a\\nb ${ ";
+    let q = "ds:m | where x == \"a\\nb ${ ";
     assert!(cursor_in_interpolation(q, q.len()));
-    // A `//` comment in code before the string is skipped.
-    let q = "ds // note\n| x == \"${ ";
+    // A `//` comment in code before the string is folded into a COMMENT token.
+    let q = "ds:m // note\n| where x == \"${ ";
     assert!(cursor_in_interpolation(q, q.len()));
-    // A backtick identifier in code does not open a string.
-    let q = "`a b`:m | x == \"${ ";
+    // A backtick dataset identifier does not open a string.
+    let q = "`a b`:m | where x == \"${ ";
     assert!(cursor_in_interpolation(q, q.len()));
-    // Nested interpolation: innermost `${` is interpolation code.
-    let q = "x == \"a ${ \"b ${ ";
+    // Nested interpolation: the innermost `${` is interpolation code. The
+    // lexer recovers nested unterminated strings into real nested `STRING`
+    // subtrees, so the classifier resolves the innermost interpolation.
+    let q = "ds:m | where x == \"a ${ \"b ${ ";
     assert!(cursor_in_interpolation(q, q.len()));
 }
 
 #[test]
 fn cursor_in_interpolation_false_cases() {
     // Plain string text is not interpolation.
-    let q = "x == \"abc";
+    let q = "ds:m | where x == \"abc";
     assert!(!cursor_in_interpolation(q, q.len()));
     // Ordinary query code is not interpolation.
     let q = "ds:metric | where ";
     assert!(!cursor_in_interpolation(q, q.len()));
     // After the interpolation closes, the trailing string text is not code.
-    let q = "x == \"a ${ $h } b";
+    let q = "ds:m | where x == \"a ${ $h } b";
+    assert!(!cursor_in_interpolation(q, q.len()));
+    // A fully closed string followed by a space is back to ordinary code.
+    let q = "ds:m | where x == \"abc\" ";
     assert!(!cursor_in_interpolation(q, q.len()));
 }

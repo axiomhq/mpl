@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    CompileError, ParseError, TypeError,
-    query::{Cmp, DirectiveValue, Expr, Filter, TagType, TerminalParamType},
+    CompileError, ParseError, Query, TypeError,
+    query::{Aggregate, Cmp, DirectiveValue, Expr, Filter, TagType, TerminalParamType},
 };
 
 #[test]
@@ -494,6 +494,110 @@ dataset:metric
     super::compile(&printed, HashMap::new())
         .unwrap_or_else(|e| panic!("printed query did not re-parse: {e}\nprinted:\n{printed}"));
     Ok(())
+}
+
+// ── moved from the (deleted) pest `parser::tests`: these exercise `compile`
+//    and are front-end agnostic, so they belong with the other compile tests.
+
+#[test]
+fn test_compute_query_post_compute_aggregates()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let query = "
+    (
+        test:metric_a[30m..]
+        | align to 1m using sum,
+        test:metric_b[30m..]
+        | align to 1m using sum,
+    )
+    | compute result using /
+    | map * 100
+    | align to 5m using last
+    ";
+
+    let (parsed, _) = crate::compile(query, HashMap::new())?;
+    let Query::Compute { aggregates, .. } = &parsed else {
+        panic!("expected Query::Compute, got {parsed:?}");
+    };
+
+    assert!(
+        matches!(&aggregates[0], Aggregate::Map(_)),
+        "first aggregate should be Map, got {:?}",
+        aggregates[0]
+    );
+    assert!(
+        matches!(&aggregates[1], Aggregate::Align(_)),
+        "second aggregate should be Align, got {:?}",
+        aggregates[1]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn optional_ok() {
+    let query = "
+        param $t: Option<string>;
+        dataset:metric
+        | ifdef($t) { where tag == $t }
+    ";
+
+    assert!(crate::compile(query, HashMap::new()).is_ok());
+}
+
+#[test]
+fn optional_use_without_ifdef() {
+    let query = "
+        param $t: Option<string>;
+        dataset:metric
+        | where tag == $t
+    ";
+    assert!(crate::compile(query, HashMap::new()).is_err());
+}
+
+#[test]
+fn optional_ok_with_else_branch() {
+    let query = "
+        param $t: Option<string>;
+        dataset:metric
+        | ifdef($t) { where tag == $t } else { where tag == \"default\" }
+    ";
+    let (q, _) = crate::compile(query, HashMap::new()).expect("ifdef with else should compile");
+    let rendered = q.to_string();
+    assert!(
+        rendered.contains("} else { where "),
+        "canonical form should preserve the else branch, got:\n{rendered}"
+    );
+}
+
+#[test]
+fn optional_ifdef_else_without_param_reference_in_either_branch_errors() {
+    let query = "
+        param $t: Option<string>;
+        dataset:metric
+        | ifdef($t) { where tag == \"a\" } else { where tag == \"b\" }
+    ";
+    assert!(crate::compile(query, HashMap::new()).is_err());
+}
+
+#[test]
+fn optional_ifdef_else_with_param_reference_in_else_branch_only_ok() {
+    let query = "
+        param $t: Option<string>;
+        dataset:metric
+        | ifdef($t) { where tag == \"a\" } else { where tag == $t }
+    ";
+    assert!(crate::compile(query, HashMap::new()).is_ok());
+}
+
+#[test]
+fn optional_ifdef_without_optional() {
+    let query = "
+        param $t: string;
+        dataset:metric
+        | ifdef($t) { where tag == $t }
+    ";
+
+    assert!(crate::compile(query, HashMap::new()).is_err());
 }
 
 #[test]

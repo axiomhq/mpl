@@ -8,15 +8,13 @@
 mod completions;
 mod diagnostics;
 mod lints;
-mod parser;
 mod system_params;
 mod tokenize;
-mod visit;
 
 pub use completions::{
     ALIGN_FN_NAMES, BUCKET_FN_NAMES, COMPUTE_FN_NAMES, CompletionArg, CompletionResult,
-    FunctionInfo, FunctionItem, GROUP_FN_NAMES, KeywordItem, MAP_FN_NAMES, ParamItem, ParamType,
-    compute_completions_with_params, function_info,
+    FunctionInfo, FunctionItem, GROUP_FN_NAMES, KeywordItem, MAP_FN_NAMES, ParamDeclaration,
+    ParamItem, ParamType, compute_completions_with_params, declared_params, function_info,
 };
 pub use diagnostics::{
     DiagnosticAction, DiagnosticItem, Severity, compute_diagnostics, compute_diagnostics_raw,
@@ -51,7 +49,7 @@ impl Span {
 pub fn query_spec() -> String {
     use std::fmt::Write;
 
-    use mpl_lang::stdlib::STDLIB;
+    use mpl_lang::STDLIB;
 
     let stdlib_docs = STDLIB
         .documentation(1)

@@ -5,11 +5,31 @@ use crate::{
     query::{
         Cmp, Expr, Filter, FilterOrIfDef, ParamDeclaration, ParamType, ParamValue,
         ParseProvidedParamsError, ProvidedParam, ProvidedParams, RelativeTime, ResolveError,
-        StringFragment, TagType, TerminalParamType, TimeUnit,
+        StringFragment, TagType, TerminalParamType, TimeUnit, is_plain_ident,
     },
     tags::TagValue,
     types::Dataset,
 };
+
+#[test]
+fn is_plain_ident_matches_ident_grammar() {
+    // Accepted: leading letter or underscore, then alphanumerics / underscores.
+    for ok in ["cpu", "myMetric", "a1", "foo_bar", "_foo", "_", "A"] {
+        assert!(is_plain_ident(ok), "{ok} should be a plain ident");
+    }
+    // Rejected: empty, leading digit, or any char outside the class.
+    for bad in [
+        "",
+        "1foo",
+        "metrixs-dev",
+        "dev.metrics",
+        "my app",
+        "`x`",
+        "a:b",
+    ] {
+        assert!(!is_plain_ident(bad), "{bad:?} should need escaping");
+    }
+}
 
 #[test]
 fn provided_params_parse() {

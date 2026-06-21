@@ -16,9 +16,9 @@ fn parse_examples() {
                 Ok(_) => println!("Parsed successfully"),
                 Err(mpl_lang::CompileError::Parse(mpl_lang::ParseError::NotSupported {
                     span,
-                    rule,
+                    feature,
                 })) => {
-                    println!("Parsed but not supported by the backend: {span:?}, {rule:?}")
+                    println!("Parsed but not supported by the backend: {span:?}, {feature}")
                 }
                 Err(mpl_lang::CompileError::Parse(mpl_lang::ParseError::NotImplemented(
                     feature,
@@ -50,9 +50,9 @@ fn parse_unimplemented_examples() {
                 Ok(_) => panic!("Unexpected successfully parsing"),
                 Err(mpl_lang::CompileError::Parse(mpl_lang::ParseError::NotSupported {
                     span,
-                    rule,
+                    feature,
                 })) => {
-                    panic!("Unexpected parse but unsupported: {span:?}, {rule:?}")
+                    panic!("Unexpected parse but unsupported: {span:?}, {feature}")
                 }
                 Err(_) => println!("Failing as expected."),
             }

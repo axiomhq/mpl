@@ -344,10 +344,22 @@ export function createMplCompletion(config: MplCompletionConfig) {
   ];
 }
 
-const PLAIN_IDENT_RE = /^[A-Za-z][A-Za-z0-9_]*$/;
-
+/**
+ * Whether `name` must be backtick-escaped to appear as an identifier.
+ *
+ * The `plain_ident` rule is grammar, so the decision is delegated to Rust
+ * (`is_plain_ident`, backed by the lexer's `IDENT` production) — a single
+ * source of truth the editor can't drift from (the old JS regex, for example,
+ * rejected leading underscores the grammar accepts). Falls back to "needs
+ * escaping" if wasm is unavailable: the safe direction, since a redundant
+ * backtick pair still parses.
+ */
 export function needsEscape(name: string): boolean {
-  return !PLAIN_IDENT_RE.test(name);
+  try {
+    return !mpl.is_plain_ident(name);
+  } catch {
+    return true; // WASM not ready: escape conservatively
+  }
 }
 
 export function escapeIdent(name: string): string {

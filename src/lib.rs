@@ -7,11 +7,8 @@
     missing_docs
 )]
 #![allow(clippy::missing_errors_doc)]
-#![allow(unused_assignments)] // We need this for the type error
 
-mod parser;
-pub use parser::{MPLParser, Rule};
-
+pub mod cst;
 pub mod enc_regex;
 pub mod errors;
 pub mod linker;
@@ -32,8 +29,7 @@ use std::{
 
 pub use errors::ParseError;
 use miette::{Diagnostic, SourceOffset, SourceSpan};
-use pest::Parser as _;
-pub use query::Query;
+pub use query::{Query, is_plain_ident};
 
 pub use stdlib::STDLIB;
 
@@ -71,9 +67,9 @@ pub fn compile<S: BuildHasher>(
     query: &str,
     system_params: HashMap<String, ParamType, S>,
 ) -> Result<(Query, Warnings), CompileError> {
-    // stage 1: parse
-    let mut parse = MPLParser::parse(Rule::file, query).map_err(ParseError::from)?;
-    let (mut query, warnings) = parser::Parser::default().parse_query(&mut parse, system_params)?;
+    // stage 1: parse + lower (the lossless `rowan` CST front end)
+    let parse = cst::parse(query);
+    let (mut query, warnings) = cst::lower::lower_with_params(&parse, system_params)?;
     // stage 2: typecheck
     let mut visitor = ParamTypecheckVisitor {};
     visitor.walk(&mut query)?;
@@ -270,7 +266,6 @@ pub enum TypeError {
         expected.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
     )]
     #[diagnostic(code(mpl_lang::typemismatch))]
-    #[allow(unused_assignments)]
     TypeMismatch {
         /// The location of the param used
         #[label("param")]

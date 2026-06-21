@@ -48,60 +48,67 @@ fn assert_sorted_non_overlapping(tokens: &[super::Token]) {
     }
 }
 
+// String-interpolation sub-highlighting: the lexer now DESCENDS into `${ … }`,
+// so the CST carries `STRING_FRAGMENT` tokens plus the embedded expression as a
+// real subtree. The `SyntaxKind -> TokenType` walk then sub-tokenizes the
+// literal automatically: the `${`/`}` delimiters are structural (unhighlighted)
+// and the interior expression lights up with its own type. These tests pin the
+// new, correct 3-token sequence (String fragment, embedded value, String fragment).
 #[test]
-fn string_interpolation_highlights_inner_param() {
+fn string_interpolation_is_sub_tokenized_in_slice() {
     let query = r#"ds:metric | where tag == "host ${ $h } end""#;
     let tokens = collect_tokens(query).expect("should tokenize");
     assert_sorted_non_overlapping(&tokens);
-
-    // The interpolated param is highlighted as a Variable, not swallowed.
+    // The literal is no longer one opaque String token spanning the interpolation.
+    assert!(
+        !tokens
+            .iter()
+            .any(|t| &query[t.span.from..t.span.to] == r#""host ${ $h } end""#)
+    );
+    // The embedded `$h` IS now its own Variable, flanked by String fragments:
+    // String("host ), Variable($h), String( end") — the 3-token sequence.
     let var = tokens
         .iter()
-        .find(|t| t.kind == TokenType::Variable && &query[t.span.from..t.span.to] == "$h")
-        .expect("interpolated param should be a Variable token");
-    // It sits between the opening and closing String tokens of the literal.
-    let first_string = tokens
-        .iter()
-        .find(|t| t.kind == TokenType::String)
-        .expect("opening quote string token");
-    let last_string = tokens
-        .iter()
-        .rev()
-        .find(|t| t.kind == TokenType::String)
-        .expect("closing quote string token");
-    assert!(first_string.span.to <= var.span.from);
-    assert!(var.span.to <= last_string.span.from);
-
-    // The literal text segments are String tokens.
-    assert!(
-        tokens
-            .iter()
-            .any(|t| t.kind == TokenType::String && &query[t.span.from..t.span.to] == "host ")
-    );
+        .position(|t| &query[t.span.from..t.span.to] == "$h")
+        .expect("embedded param is sub-tokenized");
+    assert_eq!(tokens[var].kind, TokenType::Variable);
+    assert_eq!(tokens[var - 1].kind, TokenType::String);
+    assert_eq!(tokens[var + 1].kind, TokenType::String);
 }
 
 #[test]
-fn string_interpolation_highlights_number() {
+fn string_interpolation_number_is_sub_tokenized_in_slice() {
     let query = r#"ds:metric | extend url = "port ${ 8080 }""#;
     let tokens = collect_tokens(query).expect("should tokenize");
     assert_sorted_non_overlapping(&tokens);
-    assert!(
-        tokens
-            .iter()
-            .any(|t| t.kind == TokenType::Number && &query[t.span.from..t.span.to] == "8080")
-    );
+    // The embedded number lights up as a Number between two String fragments.
+    let num = tokens
+        .iter()
+        .position(|t| &query[t.span.from..t.span.to] == "8080")
+        .expect("embedded number is sub-tokenized");
+    assert_eq!(tokens[num].kind, TokenType::Number);
+    assert_eq!(tokens[num - 1].kind, TokenType::String);
+    assert_eq!(tokens[num + 1].kind, TokenType::String);
 }
 
 #[test]
-fn string_interpolation_nested() {
-    let query = r#"ds:metric | where tag == "a ${ "b ${ 42 }" } c""#;
-    let tokens = collect_tokens(query).expect("should tokenize");
+fn unterminated_interpolation_still_sub_tokenizes_mid_edit() {
+    // No closing quote (the mid-edit case): highlighting must still descend
+    // into the string. The lexer recovers the interior, so `${ name` lights up
+    // as String("host ) followed by Variable(name) — not one opaque blob and
+    // not "nothing highlighted" (the pre-recovery behaviour).
+    let query = r#"ds:metric | where tag == "host ${ name"#;
+    let tokens = collect_tokens(query).expect("recovery never returns None");
     assert_sorted_non_overlapping(&tokens);
-    // The deeply nested number is highlighted.
-    assert!(
-        tokens
-            .iter()
-            .any(|t| t.kind == TokenType::Number && &query[t.span.from..t.span.to] == "42")
+    let var = tokens
+        .iter()
+        .position(|t| &query[t.span.from..t.span.to] == "name")
+        .expect("embedded ident is sub-tokenized even while the string is open");
+    assert_eq!(tokens[var].kind, TokenType::Variable);
+    assert_eq!(tokens[var - 1].kind, TokenType::String);
+    assert_eq!(
+        &query[tokens[var - 1].span.from..tokens[var - 1].span.to],
+        r#""host "#
     );
 }
 
@@ -630,41 +637,108 @@ fn is_filter_full_sequence() {
     assert_eq!(&query[tokens[6].span.from..tokens[6].span.to], "string");
 }
 
-// ── edge cases ───────────────────────────────────────────────────
+// ── edge cases: recovery on incomplete / invalid input ───────────
+//
+// The old pest tokenizer returned `None` (no highlighting at all) for any
+// input that did not parse end-to-end. The rowan recursive-descent parser
+// recovers instead, so highlighting keeps working mid-edit. These tests pin
+// that behaviour change — the editor win this slice exists to demonstrate.
 
 #[test]
-fn invalid_query_returns_none() {
-    assert!(collect_tokens("{{{}}}").is_none());
-}
-
-// ── dataset given, no metric ─────────────────────────────────────
-
-#[test]
-fn dataset_colon_no_metric_returns_none() {
-    assert!(collect_tokens("ds:").is_none());
-}
-
-#[test]
-fn backtick_dataset_colon_no_metric_returns_none() {
-    assert!(collect_tokens("`my-dataset`:").is_none());
+fn invalid_query_still_returns_tokens() {
+    // Pure garbage: no crash, just no highlightable tokens.
+    let tokens = collect_tokens("{{{}}}").expect("recovery never returns None");
+    assert!(tokens.is_empty());
 }
 
 #[test]
-fn dataset_no_colon_returns_none() {
-    assert!(collect_tokens("ds").is_none());
+fn incomplete_filter_highlights_recognised_prefix() {
+    // The classic mid-edit case: highlighting must survive a dangling `==`.
+    let query = "metric:cpu | filter region == ";
+    let tokens = collect_tokens(query).expect("recovery never returns None");
+    assert!(
+        tokens
+            .iter()
+            .any(|t| t.kind == TokenType::Keyword && &query[t.span.from..t.span.to] == "filter")
+    );
+    assert!(
+        tokens
+            .iter()
+            .any(|t| t.kind == TokenType::Operator && &query[t.span.from..t.span.to] == "==")
+    );
 }
 
 #[test]
-fn dataset_no_metric_with_filter_returns_none() {
-    assert!(collect_tokens("ds: | filter tag == \"x\"").is_none());
+fn incomplete_align_highlights_recognised_prefix() {
+    let query = "metric:cpu | align using ";
+    let tokens = collect_tokens(query).expect("recovery never returns None");
+    assert!(
+        tokens
+            .iter()
+            .any(|t| t.kind == TokenType::Keyword && &query[t.span.from..t.span.to] == "align")
+    );
+}
+
+// ── dataset given, no metric: the source prefix still highlights ─
+
+#[test]
+fn dataset_colon_no_metric_highlights_dataset() {
+    let tokens = collect_tokens("ds:").expect("recovery never returns None");
+    assert!(
+        tokens
+            .iter()
+            .any(|t| t.kind == TokenType::Variable && t.span.from == 0)
+    );
 }
 
 #[test]
-fn dataset_no_colon_with_filter_returns_none() {
-    assert!(collect_tokens("ds | filter tag == \"x\"").is_none());
+fn backtick_dataset_colon_no_metric_highlights_dataset() {
+    let query = "`my-dataset`:";
+    let tokens = collect_tokens(query).expect("recovery never returns None");
+    assert!(
+        tokens
+            .iter()
+            .any(|t| t.kind == TokenType::Variable
+                && &query[t.span.from..t.span.to] == "`my-dataset`")
+    );
 }
 
 #[test]
-fn backtick_dataset_no_colon_with_where_returns_none() {
-    assert!(collect_tokens("`my-dataset` | where tag == \"x\"").is_none());
+fn dataset_no_colon_highlights_dataset() {
+    let tokens = collect_tokens("ds").expect("recovery never returns None");
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(tokens[0].kind, TokenType::Variable);
+}
+
+#[test]
+fn dataset_no_metric_with_filter_still_highlights() {
+    let query = "ds: | filter tag == \"x\"";
+    let tokens = collect_tokens(query).expect("recovery never returns None");
+    assert!(
+        tokens
+            .iter()
+            .any(|t| t.kind == TokenType::Keyword && &query[t.span.from..t.span.to] == "filter")
+    );
+}
+
+#[test]
+fn dataset_no_colon_with_filter_still_highlights() {
+    let query = "ds | filter tag == \"x\"";
+    let tokens = collect_tokens(query).expect("recovery never returns None");
+    assert!(
+        tokens
+            .iter()
+            .any(|t| t.kind == TokenType::String && &query[t.span.from..t.span.to] == "\"x\"")
+    );
+}
+
+#[test]
+fn backtick_dataset_no_colon_with_where_still_highlights() {
+    let query = "`my-dataset` | where tag == \"x\"";
+    let tokens = collect_tokens(query).expect("recovery never returns None");
+    assert!(
+        tokens
+            .iter()
+            .any(|t| t.kind == TokenType::Keyword && &query[t.span.from..t.span.to] == "where")
+    );
 }

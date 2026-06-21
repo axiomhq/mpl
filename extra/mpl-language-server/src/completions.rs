@@ -1,12 +1,12 @@
 //! Autocompletion and function info for `MPL` queries.
 use std::sync::LazyLock;
 
-use pest::Parser as _;
 use serde::Serialize;
 
 use mpl_lang::STDLIB;
+use mpl_lang::cst::{self, SyntaxKind, SyntaxNode, SyntaxToken};
 use mpl_lang::linker::{ArgType, FunctionTrait, Module};
-use mpl_lang::{MPLParser, Rule};
+use rowan::TextSize;
 
 use crate::Span;
 
@@ -28,6 +28,38 @@ pub enum ParamType {
     Float,
     Bool,
     Regex,
+}
+
+impl ParamType {
+    /// The canonical MPL spelling of this type, matching how the AST renders
+    /// it (`Dataset`, `Duration`, `string`, …). Used for hover, where the
+    /// editor shows the type as it would be written in source.
+    #[must_use]
+    pub fn canonical_name(self) -> &'static str {
+        match self {
+            ParamType::Dataset => "Dataset",
+            ParamType::Metric => "Metric",
+            ParamType::Duration => "Duration",
+            ParamType::String => "string",
+            ParamType::Int => "int",
+            ParamType::Float => "float",
+            ParamType::Bool => "bool",
+            ParamType::Regex => "Regex",
+        }
+    }
+}
+
+/// A `param` declaration resolved from a query, shaped for editor hover: the
+/// `$`-prefixed name, the canonical type spelling, and whether it is optional.
+///
+/// Distinct from the AST's [`mpl_lang::query::ParamDeclaration`] — this is the
+/// editor-facing projection produced by [`declared_params`].
+#[derive(Clone, Debug, Serialize)]
+pub struct ParamDeclaration {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub typ: std::string::String,
+    pub optional: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -410,145 +442,97 @@ pub enum QueryContext<'a> {
     ComputeTailPipe(&'a str),
 }
 
-/// Returns `true` when `(` at `pos` opens a compute query tuple rather than a
-/// function call or filter grouping. A compute `(` is only preceded by
-/// start-of-input, `;` (directive end), `(` (nested compute), or `,` (second
-/// subquery). Any identifier character or backtick means a function call.
-/// `//` line comments are skipped when scanning backwards.
-fn is_compute_paren(bytes: &[u8], pos: usize) -> bool {
-    let mut j = pos;
-    loop {
-        while j > 0 && bytes[j - 1].is_ascii_whitespace() {
-            j -= 1;
-        }
-        if j == 0 {
-            return true;
-        }
-        // If we landed inside a // line comment, skip back past it.
-        let line_start = bytes[..j]
-            .iter()
-            .rposition(|&b| b == b'\n')
-            .map_or(0, |p| p + 1);
-        match find_line_comment(&bytes[line_start..j]) {
-            Some(offset) => j = line_start + offset,
-            None => break,
-        }
-    }
-    matches!(bytes[j - 1], b';' | b'(' | b',')
-}
-
-/// Finds the byte offset of the first `//` on a line that is not inside a
-/// string or backtick-escaped identifier.
-fn find_line_comment(line: &[u8]) -> Option<usize> {
-    let len = line.len();
-    let mut i = 0;
-    while i + 1 < len {
-        match line[i] {
-            // Interpolation-aware so a `//` inside a nested string (e.g.
-            // `"a ${ "b // c" }"`) is not mistaken for a comment.
-            b'"' => {
-                skip_string_literal(line, len, &mut i);
-                if i < len {
-                    i += 1;
-                }
-            }
-            b'`' => skip_backtick(line, len, &mut i),
-            b'/' if line[i + 1] == b'/' => return Some(i),
-            _ => i += 1,
-        }
-    }
-    None
+/// First direct child token of `node` with kind `kind`.
+fn child_token(node: &SyntaxNode, kind: SyntaxKind) -> Option<SyntaxToken> {
+    node.children_with_tokens()
+        .filter_map(rowan::NodeOrToken::into_token)
+        .find(|t| t.kind() == kind)
 }
 
 /// Determines the query context for the text before the cursor.
 ///
-/// Uses a stack to track brace nesting, producing a scoped text slice that
-/// `suggest_for_context` and `extract_source_info` can operate on correctly
-/// without needing brace-awareness themselves.
+/// Driven by the recovering `rowan` CST rather than a hand-rolled byte stack:
+/// compute-query nesting is read off the `COMPUTE_QUERY` nodes the parser
+/// produces (which already excludes parens/commas inside strings, regex,
+/// comments, backtick idents, function calls and filter grouping — those never
+/// become `COMPUTE_QUERY` delimiters). The cursor is the end of `text`.
 pub fn locate_query_context(text: &str) -> QueryContext<'_> {
-    let bytes = text.as_bytes();
-    let len = bytes.len();
+    let root = cst::parse(text).syntax();
+    let cursor = TextSize::new(u32::try_from(text.len()).unwrap_or(u32::MAX));
 
-    // Stack of subquery start positions; base entry represents top-level.
-    let mut stack: Vec<usize> = vec![0];
-    let mut last_close_brace: Option<usize> = None;
-    // Depth counter for non-compute parentheses (function calls, filter
-    // grouping). While > 0, all nested parens and commas are ignored.
-    let mut ignored_paren_depth: usize = 0;
-    let mut i = 0;
+    let computes: Vec<SyntaxNode> = root
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::COMPUTE_QUERY)
+        .collect();
 
-    while i < len {
-        if !skip_literal(bytes, len, &mut i) {
-            match bytes[i] {
-                b'(' => {
-                    if ignored_paren_depth > 0 {
-                        ignored_paren_depth += 1;
-                    } else if is_compute_paren(bytes, i) {
-                        stack.push(i + 1);
-                    } else {
-                        ignored_paren_depth += 1;
-                    }
-                }
-                b')' => {
-                    if ignored_paren_depth > 0 {
-                        ignored_paren_depth -= 1;
-                    } else if stack.len() > 1 {
-                        stack.pop();
-                        if stack.len() == 1 {
-                            last_close_brace = Some(i);
-                        }
-                    }
-                }
-                b',' => {
-                    if ignored_paren_depth == 0
-                        && stack.len() > 1
-                        && let Some(top) = stack.last_mut()
-                    {
-                        *top = i + 1;
-                    }
-                }
-                _ => {}
+    // Innermost compute query whose paren region still contains the cursor as a
+    // subquery segment (cursor after its `(` and before its `)` / it has none).
+    let mut best: Option<&SyntaxNode> = None;
+    for cq in &computes {
+        let Some(lparen) = child_token(cq, SyntaxKind::L_PAREN) else {
+            continue;
+        };
+        let rparen = child_token(cq, SyntaxKind::R_PAREN);
+        let encloses = lparen.text_range().end() <= cursor
+            && rparen
+                .as_ref()
+                .is_none_or(|r| cursor <= r.text_range().start());
+        if encloses && best.is_none_or(|b| cq.text_range().start() > b.text_range().start()) {
+            best = Some(cq);
+        }
+    }
+
+    if let Some(cq) = best {
+        // The subquery segment starts just after the most recent compute
+        // delimiter at/before the cursor: the opening `(` or a top-level `,`.
+        let lparen = child_token(cq, SyntaxKind::L_PAREN).expect("enclosing cq has `(`");
+        let mut start = lparen.text_range().end();
+        for comma in cq
+            .children_with_tokens()
+            .filter_map(rowan::NodeOrToken::into_token)
+            .filter(|t| t.kind() == SyntaxKind::COMMA)
+        {
+            let ce = comma.text_range().end();
+            if ce <= cursor && ce > start {
+                start = ce;
             }
         }
-        i += 1;
+        return QueryContext::Subquery(&text[usize::from(start)..]);
     }
 
-    // Inside braces — scope to the current subquery
-    if stack.len() > 1 {
-        let start = stack.last().copied().unwrap_or(0);
-        return QueryContext::Subquery(&text[start..]);
+    // Outside every subquery: if the cursor sits after the outermost compute
+    // query's `)`, this is the compute outer tail.
+    for cq in &computes {
+        if cq.parent().map(|p| p.kind()) != Some(SyntaxKind::ROOT) {
+            continue;
+        }
+        if let Some(rparen) = child_token(cq, SyntaxKind::R_PAREN) {
+            let rp_end = rparen.text_range().end();
+            if rp_end <= cursor {
+                let outer = &text[usize::from(rp_end)..];
+                return if count_pipes(outer) <= 1 {
+                    QueryContext::ComputeRulePipe(outer)
+                } else {
+                    QueryContext::ComputeTailPipe(outer)
+                };
+            }
+        }
     }
 
-    // Outside braces — check if this is a compute query (we saw `{ ... }`)
-    if let Some(brace_pos) = last_close_brace {
-        let outer = &text[brace_pos + 1..];
-        // Count escape-aware pipes in the outer text to distinguish the
-        // compute_rule pipe (first) from subsequent pipe_rule pipes.
-        let pipe_count = count_pipes(outer);
-        return if pipe_count <= 1 {
-            QueryContext::ComputeRulePipe(outer)
-        } else {
-            QueryContext::ComputeTailPipe(outer)
-        };
-    }
-
-    // Simple query
+    // Simple query.
     QueryContext::Subquery(text)
 }
 
-/// Counts escape-aware pipe characters in text.
+/// Counts structural pipes in `text` by counting `PIPE` tokens in the CST.
+/// Pipes inside strings, regex, comments and backtick idents are folded into
+/// their respective tokens by the lexer, so they never appear as `PIPE`.
 fn count_pipes(text: &str) -> usize {
-    let bytes = text.as_bytes();
-    let len = bytes.len();
-    let mut count = 0;
-    let mut i = 0;
-    while i < len {
-        if !skip_literal(bytes, len, &mut i) && bytes[i] == b'|' {
-            count += 1;
-        }
-        i += 1;
-    }
-    count
+    cst::parse(text)
+        .syntax()
+        .descendants_with_tokens()
+        .filter_map(rowan::NodeOrToken::into_token)
+        .filter(|t| t.kind() == SyntaxKind::PIPE)
+        .count()
 }
 
 /// Convenience wrapper for the test suite, where no host-supplied system
@@ -650,148 +634,73 @@ pub fn compute_completions_with_params(
 // ── text scanning utilities ─────────────────────────────────────
 
 pub fn extract_partial_word(text: &str, cursor: usize) -> (usize, &str) {
-    let bytes = &text.as_bytes()[..cursor];
-    let mut i = bytes.len();
+    let cursor = cursor.min(text.len());
+    if cursor == 0 {
+        return (0, "");
+    }
+    // Lex the *whole* query with the CST and take the maximal run of word-like
+    // tokens ending at (or, for a mid-token cursor, spanning) the cursor. The
+    // full text is lexed rather than the prefix so that a cursor *inside* a
+    // string interpolation (`"… ${ id| }"`) still sees the embedded `id` as an
+    // IDENT token — truncating at the cursor would leave an unterminated string
+    // that collapses into one opaque `ERROR` token. The lexer already resolves
+    // escapes, backtick idents (incl. unterminated ones, which become a single
+    // `ERROR` token starting with a backtick) and `$param` spans, so the run is
+    // just a token walk; trailing tokens past the cursor are ignored.
+    let root = cst::parse(text).syntax();
+    let tokens: Vec<SyntaxToken> = root
+        .descendants_with_tokens()
+        .filter_map(rowan::NodeOrToken::into_token)
+        .collect();
 
-    while i > 0 {
-        match bytes[i - 1] {
-            b'`' => {
-                // Could be a closing backtick (matched pair) or an opening
-                // backtick (user still typing an escaped ident).
-                let backtick_pos = i - 1;
-                i -= 1;
-                let mut found_open = false;
-                while i > 0 {
-                    // Whitespace cannot appear inside a backtick identifier,
-                    // so crossing it means this backtick is an unclosed opener
-                    // for a new token, not the closer of a previous pair.
-                    if bytes[i - 1].is_ascii_whitespace() {
-                        break;
-                    }
-                    if bytes[i - 1] == b'`' && !is_char_escaped(bytes, i - 1) {
-                        i -= 1;
-                        found_open = true;
-                        break;
-                    }
-                    i -= 1;
-                }
-                if !found_open {
-                    // No matching opening backtick — the backtick we saw is
-                    // the opening delimiter of an unclosed escaped ident.
-                    // Continue scanning so preceding ident chars (e.g. `ds:`)
-                    // are included.
-                    i = backtick_pos;
-                }
-            }
-            c if c.is_ascii_alphanumeric() || c == b'_' || c == b':' || c == b'$' => {
-                i -= 1;
-            }
-            _ => {
-                // Before giving up, check if there is an unclosed backtick
-                // earlier on this line (user is still typing an escaped ident).
-                let mut j = i - 1;
-                let mut found_backtick = false;
-                loop {
-                    if bytes[j] == b'`' && !is_char_escaped(bytes, j) {
-                        found_backtick = true;
-                        i = j;
-                        break;
-                    }
-                    if bytes[j].is_ascii_whitespace() {
-                        break;
-                    }
-                    if j == 0 {
-                        break;
-                    }
-                    j -= 1;
-                }
-                if !found_backtick {
-                    break;
-                }
-            }
+    let mut start = cursor;
+    for tok in tokens.iter().rev() {
+        let range = tok.text_range();
+        let ts = usize::from(range.start());
+        let te = usize::from(range.end());
+        if ts >= cursor {
+            continue; // token lies entirely at/after the cursor
+        }
+        if te < start {
+            break; // gap: not contiguous with the run ending at the cursor
+        }
+        if is_word_token(tok) {
+            start = ts;
+        } else {
+            break;
         }
     }
-
-    (i, &text[i..cursor])
+    (start, &text[start..cursor])
 }
 
-/// Checks whether the byte at `pos` is preceded by an odd number of
-/// backslashes (i.e., the character is escaped).
-pub fn is_char_escaped(bytes: &[u8], pos: usize) -> bool {
-    let mut count = 0u32;
-    let mut j = pos;
-    while j > 0 && bytes[j - 1] == b'\\' {
-        count += 1;
-        j -= 1;
-    }
-    count % 2 == 1
-}
-
-/// Advances `i` past a literal (double-quoted string, backtick identifier,
-/// Skips a backtick-escaped identifier starting at `bytes[*i] == '`'`,
-/// leaving `*i` just past the closing backtick (or at `len` if unterminated).
-/// Handles `\`` escapes inside the identifier.
-fn skip_backtick(bytes: &[u8], len: usize, i: &mut usize) {
-    *i += 1;
-    while *i < len {
-        match bytes[*i] {
-            b'\\' => *i += 2,
-            b'`' => {
-                *i += 1;
-                return;
-            }
-            _ => *i += 1,
+/// Whether `tok` joins the identifier-ish word the user is typing. Mirrors the
+/// old byte char-class (`[A-Za-z0-9_:$]` plus backtick idents): plain idents,
+/// keywords/types/literals, numbers, `:`/`::`, `$param`, backtick idents, and
+/// the `ERROR` token a still-open backtick or lone `$` produces.
+fn is_word_token(tok: &SyntaxToken) -> bool {
+    match tok.kind() {
+        SyntaxKind::IDENT
+        | SyntaxKind::KEYWORD
+        | SyntaxKind::TYPE_NAME
+        | SyntaxKind::BOOL_LIT
+        | SyntaxKind::INF_LIT
+        | SyntaxKind::INT
+        | SyntaxKind::FLOAT
+        | SyntaxKind::RFC3339
+        | SyntaxKind::PARAM_IDENT
+        | SyntaxKind::ESCAPED_IDENT
+        | SyntaxKind::COLON
+        | SyntaxKind::COLON_COLON => true,
+        // An unterminated backtick ident (e.g. `` `my-tag ``) lexes as one
+        // `ERROR` token starting with a backtick; treat it (and a lone `$`) as
+        // part of the word so source/tag extraction can still split on `:`.
+        SyntaxKind::ERROR => {
+            let t = tok.text();
+            t.starts_with('`')
+                || t.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b':' | b'$'))
         }
-    }
-}
-
-/// Skips a double-quoted string starting at `bytes[*i] == '"'`, descending
-/// through any `${ … }` interpolations (which may contain nested strings).
-/// On return `*i` is on the closing quote, or at `len` if the string is
-/// unterminated. Mirrors the `skip_literal` contract so callers `*i += 1` past
-/// the closing quote.
-fn skip_string_literal(bytes: &[u8], len: usize, i: &mut usize) {
-    *i += 1;
-    while *i < len {
-        match bytes[*i] {
-            b'\\' => *i += 2,
-            b'"' => return,
-            b'$' if *i + 1 < len && bytes[*i + 1] == b'{' => {
-                *i += 2;
-                skip_interpolation(bytes, len, i);
-            }
-            _ => *i += 1,
-        }
-    }
-    // Unterminated: clamp so the index stays within bounds.
-    if *i > len {
-        *i = len;
-    }
-}
-
-/// Skips the body of a `${ … }` interpolation; `*i` starts just past the
-/// opening `${` and ends just past the matching `}` (or at `len`). The
-/// interpolation expr is `param_ident | const`, so the only constructs that
-/// can hide a `}` are nested strings and backtick identifiers; bare brace
-/// nesting cannot occur.
-fn skip_interpolation(bytes: &[u8], len: usize, i: &mut usize) {
-    while *i < len {
-        match bytes[*i] {
-            b'}' => {
-                *i += 1;
-                return;
-            }
-            b'"' => {
-                skip_string_literal(bytes, len, i);
-                // Step past the nested closing quote (skip_string_literal
-                // leaves us on it). Guard against the unterminated case.
-                if *i < len {
-                    *i += 1;
-                }
-            }
-            b'`' => skip_backtick(bytes, len, i),
-            _ => *i += 1,
-        }
+        _ => false,
     }
 }
 
@@ -821,211 +730,90 @@ enum StringContext {
     StringText,
 }
 
-/// Classifies the position at byte offset `pos` as ordinary code, the inside
-/// of a `${ … }` interpolation, or plain string-literal text.
+/// Classifies byte offset `pos` as ordinary code, the inside of a `${ … }`
+/// interpolation, or plain string-literal text.
 ///
-/// Uses a context stack where `false` = code and `true` = string text. The
-/// base frame is top-level code; an interpolation pushes a code frame on top
-/// of a string frame, so being "in an interpolation" means the top frame is
-/// code while nested inside at least one string frame.
+/// Driven entirely by the recovering CST. The lexer now descends into string
+/// literals — including *unterminated* ones, the mid-edit case — emitting
+/// `STRING_FRAGMENT` text runs, `${` delimiters and the embedded expression as
+/// real tokens/subtrees (see `cst::parser::expand_string`). So the innermost
+/// `STRING` node whose extent covers `pos` tells us the cursor is in a string,
+/// and whether `pos` lands in one of that node's `STRING_FRAGMENT` children
+/// (literal text) or in the `${ … }` interpolation region between them. Escapes,
+/// line comments, regex literals and backtick idents are already folded into
+/// their own tokens by the lexer, so the last byte scanner this layer relied on
+/// is gone.
 fn classify_string_context(text: &str, pos: usize) -> StringContext {
-    let bytes = text.as_bytes();
-    let end = pos.min(bytes.len());
-    let mut stack = vec![false];
-    let mut i = 0;
-    while i < end {
-        let in_string = stack.last().copied().unwrap_or(false);
-        if in_string {
-            match bytes[i] {
-                b'\\' => i += 2,
-                b'"' => {
-                    stack.pop();
-                    i += 1;
-                }
-                b'$' if i + 1 < end && bytes[i + 1] == b'{' => {
-                    stack.push(false);
-                    i += 2;
-                }
-                _ => i += 1,
-            }
-        } else {
-            match bytes[i] {
-                b'"' => {
-                    stack.push(true);
-                    i += 1;
-                }
-                b'`' => skip_backtick(bytes, end, &mut i),
-                // Close the current interpolation; never pop the base frame.
-                b'}' if stack.len() > 1 => {
-                    stack.pop();
-                    i += 1;
-                }
-                b'/' if i + 1 < end && bytes[i + 1] == b'/' => {
-                    while i < end && bytes[i] != b'\n' {
-                        i += 1;
-                    }
-                }
-                _ => i += 1,
-            }
-        }
-    }
-    if stack.last().copied().unwrap_or(false) {
+    let root = cst::parse(text).syntax();
+    let offset = TextSize::new(u32::try_from(pos).unwrap_or(u32::MAX));
+
+    // Innermost `STRING` node covering `pos`. The bounds are exclusive-start /
+    // inclusive-end so the cursor binds to the token on its left: at the end of
+    // an open / just-typed string it still counts as inside, but right before a
+    // string's opening `"` (e.g. the `"` closing an empty `${ }`) it does not —
+    // that position is the enclosing interpolation, not the new string. Nesting
+    // is resolved by taking the latest-starting cover.
+    let Some(string) = root
+        .descendants()
+        .filter(|n| {
+            n.kind() == SyntaxKind::STRING
+                && n.text_range().start() < offset
+                && offset <= n.text_range().end()
+        })
+        .max_by_key(|n| n.text_range().start())
+    else {
+        return StringContext::Code;
+    };
+
+    // A `STRING_FRAGMENT` child is literal text; everything else inside the
+    // node is the `${ … }` interpolation region (delimiters + embedded `EXPR`).
+    let in_text = string
+        .children_with_tokens()
+        .filter_map(rowan::NodeOrToken::into_token)
+        .filter(|t| t.kind() == SyntaxKind::STRING_FRAGMENT)
+        .any(|t| t.text_range().start() < offset && offset <= t.text_range().end());
+
+    if in_text {
         StringContext::StringText
-    } else if stack.len() > 1 {
-        StringContext::Interpolation
     } else {
-        StringContext::Code
+        StringContext::Interpolation
     }
 }
 
-/// `//` line comment, `/regex/`, or `s/src/dst/` regex replace) if one starts
-/// at `bytes[i]`. After returning `true`, `i` points at the closing delimiter
-/// so the caller's `i += 1` skips past it.
-fn skip_literal(bytes: &[u8], len: usize, i: &mut usize) -> bool {
-    match bytes[*i] {
-        // Strings may contain `${ \u2026 }` interpolations, which can themselves hold
-        // nested strings (and thus nested `${ }`). A naive "scan to the next
-        // quote" would stop at a nested string's opening quote, so use the
-        // interpolation-aware skipper. It leaves `*i` on the closing quote,
-        // matching the contract (the caller's `*i += 1` steps past it).
-        b'"' => {
-            skip_string_literal(bytes, len, i);
-            true
-        }
-        b'`' => {
-            *i += 1;
-            while *i < len && bytes[*i] != b'`' {
-                if bytes[*i] == b'\\' {
-                    *i += 1;
-                }
-                *i += 1;
-            }
-            true
-        }
-        b'/' if *i + 1 < len && bytes[*i + 1] == b'/' => {
-            while *i < len && bytes[*i] != b'\n' {
-                *i += 1;
-            }
-            true
-        }
-        b'/' if preceded_by_eq(bytes, *i) => {
-            skip_regex_body(bytes, len, i);
-            true
-        }
-        b'/' if is_regex_replace_start(bytes, *i) => {
-            skip_regex_body(bytes, len, i);
-            skip_regex_body(bytes, len, i);
-            true
-        }
-        _ => false,
-    }
-}
-
-/// Advances `i` from an opening `/` past the regex body to the closing `/`,
-/// handling `\` escapes. After return, `*i` points at the closing `/`.
-fn skip_regex_body(bytes: &[u8], len: usize, i: &mut usize) {
-    *i += 1;
-    while *i < len && bytes[*i] != b'/' {
-        if bytes[*i] == b'\\' {
-            *i += 1;
-        }
-        *i += 1;
-    }
-}
-
-/// Returns `true` when the non-whitespace character before `pos` is `=`
-/// (covers both `==` and `!=` comparison operators preceding a regex).
-fn preceded_by_eq(bytes: &[u8], pos: usize) -> bool {
-    let mut j = pos;
-    while j > 0 && bytes[j - 1].is_ascii_whitespace() {
-        j -= 1;
-    }
-    j > 0 && bytes[j - 1] == b'='
-}
-
-/// Returns `true` when the `/` at `pos` is the opening of an `s/…/…/`
-/// regex replace (always preceded by `~` in the grammar).
-fn is_regex_replace_start(bytes: &[u8], pos: usize) -> bool {
-    if pos == 0 || bytes[pos - 1] != b's' {
-        return false;
-    }
-    let mut j = pos - 1;
-    while j > 0 && bytes[j - 1].is_ascii_whitespace() {
-        j -= 1;
-    }
-    j > 0 && bytes[j - 1] == b'~'
-}
-
+/// Byte offset of the last structural `PIPE` token in `text` (the start of the
+/// final `| …` rule). Pipes inside strings, regex, comments and backtick idents
+/// are folded into their tokens by the lexer, so they never appear as `PIPE`.
 fn find_last_pipe(text: &str) -> Option<usize> {
-    let bytes = text.as_bytes();
-    let len = bytes.len();
-    let mut last_pipe = None;
-    let mut i = 0;
-    while i < len {
-        if !skip_literal(bytes, len, &mut i) && bytes[i] == b'|' {
-            last_pipe = Some(i);
-        }
-        i += 1;
-    }
-    last_pipe
+    cst::parse(text)
+        .syntax()
+        .descendants_with_tokens()
+        .filter_map(rowan::NodeOrToken::into_token)
+        .filter(|t| t.kind() == SyntaxKind::PIPE)
+        .last()
+        .map(|t| usize::from(t.text_range().start()))
 }
 
 // ── source extraction ───────────────────────────────────────────
 
-/// Extracts the dataset and metric name from the source portion of the query
-/// using pest's `Rule::source` parser for correct backtick/escaping handling.
-/// Expects text already scoped to the current subquery by `locate_query_context`.
+/// Extracts the dataset and metric name for tag/source completions from text
+/// already scoped to the current subquery by `locate_query_context`.
+///
+/// Driven entirely by the recovering CST: the parser handles directives,
+/// leading comments and trailing pipe rules natively, so the first `METRIC_ID`
+/// node in document order is the subquery's source. No byte-level preamble
+/// scanning is needed.
 fn extract_source_info(text: &str) -> Option<(String, String)> {
-    let bytes = text.as_bytes();
-    let len = bytes.len();
-
-    // Find source portion: after directives, before first pipe
-    let mut source_start = 0;
-    let mut first_pipe = len;
-    let mut i = 0;
-    while i < len {
-        if !skip_literal(bytes, len, &mut i) {
-            match bytes[i] {
-                b';' => source_start = i + 1,
-                b'|' => {
-                    first_pipe = i;
-                    break;
-                }
-                _ => {}
-            }
-        }
-        i += 1;
-    }
-
-    // Strip full-line `//` comments from the preamble: pest's `source` rule
-    // does not skip leading trivia, so a commented header — which every example
-    // query has — would otherwise make the parse fail and tag completion
-    // silently vanish.
-    let source: String = text[source_start..first_pipe]
-        .lines()
-        .filter(|line| !line.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    extract_source_via_parser(source.trim())
-}
-
-/// Parses the source string using pest's `Rule::source` and extracts the
-/// dataset and metric names from the resulting `metric_id` pair.
-fn extract_source_via_parser(source: &str) -> Option<(String, String)> {
-    let pairs = MPLParser::parse(Rule::source, source).ok()?;
-    let source_pair = pairs.into_iter().next()?;
-
-    let metric_id = source_pair
-        .into_inner()
-        .find(|p| p.as_rule() == Rule::metric_id)?;
+    let root = cst::parse(text).syntax();
+    let metric_id = root
+        .descendants()
+        .find(|n| n.kind() == SyntaxKind::METRIC_ID)?;
 
     let mut dataset = None;
     let mut metric = None;
-    for pair in metric_id.into_inner() {
-        match pair.as_rule() {
-            Rule::dataset => dataset = Some(extract_ident_name(pair)),
-            Rule::metric_name => metric = Some(extract_ident_name(pair)),
+    for node in metric_id.children() {
+        match node.kind() {
+            SyntaxKind::DATASET => dataset = Some(extract_ident_name(&node)),
+            SyntaxKind::METRIC_NAME => metric = Some(extract_ident_name(&node)),
             _ => {}
         }
     }
@@ -1041,25 +829,46 @@ fn extract_source_via_parser(source: &str) -> Option<(String, String)> {
     Some((dataset, metric))
 }
 
-/// Extracts the unescaped name from a `dataset` or `metric_name` pest pair.
-/// Handles both `plain_ident` (raw text) and `escaped_ident` (backtick-wrapped,
-/// descends into `escaped_ident_inner` to strip the backtick delimiters).
-fn extract_ident_name(pair: pest::iterators::Pair<'_, Rule>) -> String {
-    let Some(inner) = pair.into_inner().next() else {
-        return String::new();
-    };
-    match inner.as_rule() {
-        Rule::plain_ident | Rule::param_ident => inner.as_str().to_string(),
-        Rule::escaped_ident => inner
-            .into_inner()
-            .next()
-            .map(|p| p.as_str().to_string())
-            .unwrap_or_default(),
-        _ => String::new(),
-    }
+/// Extracts the name from a `DATASET` or `METRIC_NAME` CST node. A plain ident
+/// is taken verbatim, a backtick-escaped ident is stripped of its delimiters,
+/// and a `$param` is returned with its `$` so the caller filters it out.
+fn extract_ident_name(node: &cst::SyntaxNode) -> String {
+    node.children_with_tokens()
+        .filter_map(rowan::NodeOrToken::into_token)
+        .find_map(|t| match t.kind() {
+            SyntaxKind::IDENT | SyntaxKind::PARAM_IDENT => Some(t.text().to_string()),
+            SyntaxKind::ESCAPED_IDENT => Some(
+                t.text()
+                    .strip_prefix('`')
+                    .and_then(|s| s.strip_suffix('`'))
+                    .unwrap_or(t.text())
+                    .to_string(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 // ── param extraction ────────────────────────────────────────────
+
+/// Resolves the inline `param` declarations in `query` for editor hover.
+///
+/// Reuses [`extract_declared_params`] so hover, completion, and the language
+/// server agree on what counts as a declaration; the only difference is the
+/// projection into [`ParamDeclaration`] (canonical type spelling + name).
+/// Optional params carry the *unwrapped* inner type with `optional: true`,
+/// matching how the editor renders `Option<T>`.
+#[must_use]
+pub fn declared_params(query: &str) -> Vec<ParamDeclaration> {
+    extract_declared_params(query)
+        .into_iter()
+        .map(|p| ParamDeclaration {
+            name: p.label,
+            typ: p.typ.canonical_name().to_string(),
+            optional: p.optional,
+        })
+        .collect()
+}
 
 /// Extracts declared parameters from the query preamble. Scans for
 /// `param $name: type;` declarations that appear before the query body,
