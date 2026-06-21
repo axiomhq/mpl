@@ -2,7 +2,23 @@ import { ViewPlugin, ViewUpdate, Decoration, DecorationSet, EditorView } from "@
 import { RangeSetBuilder } from "@codemirror/state";
 import * as mpl from "@axiomhq/mpl";
 
-type TokenType = "variable" | "string" | "number" | "bool" | "regexp" | "operator" | "punctuation" | "keyword" | "type";
+// NOTE: All MPL grammar knowledge now lives in Rust (`mpl_lang::wparser`), which
+// is compiled to WASM and exposed as `mpl.tokenize`. The lexer is *total* — it
+// returns sorted, non-overlapping, gap-free tokens (including `comment`) even
+// for incomplete / mid-edit input — so this file no longer duplicates the
+// grammar as regexes. There is no regex fallback to keep in sync anymore.
+
+type TokenType =
+  | "variable"
+  | "string"
+  | "number"
+  | "bool"
+  | "regexp"
+  | "operator"
+  | "punctuation"
+  | "keyword"
+  | "type"
+  | "comment";
 
 interface Token {
   from: number;
@@ -10,15 +26,7 @@ interface Token {
   type: TokenType;
 }
 
-const MPL_KEYWORDS = /\b(filter|where|map|group|by|using|align|to|over|from|bucket|join|compute|set|replace|as|extend|and|or|not|is|param|ifdef|else|rate|increase|histogram|interpolate_delta_histogram|interpolate_cumulative_histogram|count|avg|sum|min|max)\b/g;
-const COMMENT_RE = /\/\/[^\n]*/g;
-const STRING_RE = /"(?:[^"\\]|\\.)*"/g;
-const REGEX_RE = /#s?\/(?:[^/\\]|\\.)*(?:\/(?:[^/\\]|\\.)*)?\//g;
-const NUMBER_RE = /\b\d+(\.\d*)?([eE][+-]?\d+)?[smhdwMy]?\b/g;
-const BOOL_RE = /\b(true|false)\b/g;
-const TYPE_RE = /\b(Option|Dataset|Duration|Regex|Metric|string|int|float|bool|dataset|metric|duration|regex)\b/g;
-
-const decos: Record<string, Decoration> = {
+const decos: Record<TokenType, Decoration> = {
   keyword: Decoration.mark({ class: "mpl-keyword" }),
   variable: Decoration.mark({ class: "mpl-variable" }),
   string: Decoration.mark({ class: "mpl-string" }),
@@ -31,100 +39,28 @@ const decos: Record<string, Decoration> = {
   comment: Decoration.mark({ class: "mpl-comment" }),
 };
 
-interface TokenEntry {
-  from: number;
-  to: number;
-  deco: Decoration;
-  priority: number;
-}
-
-function findMatches(
-  re: RegExp,
-  doc: string,
-  deco: Decoration,
-  priority: number,
-  out: TokenEntry[],
-) {
-  re.lastIndex = 0;
-  let m;
-  while ((m = re.exec(doc)) !== null) {
-    out.push({ from: m.index, to: m.index + m[0].length, deco, priority });
-  }
-}
-
 function buildDecorations(view: EditorView): DecorationSet {
   const doc = view.state.doc.toString();
-  const entries: TokenEntry[] = [];
 
-  // Comments always via regex (pest COMMENT rule is silent)
-  findMatches(COMMENT_RE, doc, decos.comment, 30, entries);
-
-  let wasmTokens: Token[] | null = null;
+  let tokens: Token[] = [];
   try {
-    wasmTokens = mpl.tokenize(doc) as Token[] | null;
+    tokens = (mpl.tokenize(doc) as Token[] | null | undefined) ?? [];
   } catch {
-    // WASM not ready or parse failed
+    // WASM not loaded yet — leave the document undecorated; the next view
+    // update will retry once `mpl` is ready.
+    tokens = [];
   }
 
-  if (wasmTokens && wasmTokens.length > 0) {
-    // Add WASM tokens
-    for (const t of wasmTokens) {
-      const d = decos[t.type];
-      if (d) entries.push({ from: t.from, to: t.to, deco: d, priority: 20 });
-    }
-
-    // Find keywords in gaps between WASM tokens
-    const occupied = wasmTokens.map((t) => [t.from, t.to] as [number, number]);
-    findKeywordsInGaps(doc, occupied, entries);
-  } else {
-    // Regex fallback for when WASM parse fails (incomplete input)
-    findMatches(STRING_RE, doc, decos.string, 10, entries);
-    findMatches(REGEX_RE, doc, decos.regexp, 10, entries);
-    findMatches(BOOL_RE, doc, decos.bool, 10, entries);
-    findMatches(NUMBER_RE, doc, decos.number, 5, entries);
-    findMatches(TYPE_RE, doc, decos.type, 10, entries);
-    findMatches(MPL_KEYWORDS, doc, decos.keyword, 10, entries);
-  }
-
-  return resolveAndBuild(entries);
-}
-
-function findKeywordsInGaps(
-  doc: string,
-  occupied: [number, number][],
-  entries: TokenEntry[],
-) {
-  MPL_KEYWORDS.lastIndex = 0;
-  let m;
-  while ((m = MPL_KEYWORDS.exec(doc)) !== null) {
-    const from = m.index;
-    const to = from + m[0].length;
-    if (!occupied.some(([s, e]) => from < e && to > s)) {
-      entries.push({ from, to, deco: decos.keyword, priority: 10 });
-    }
-  }
-}
-
-function resolveAndBuild(entries: TokenEntry[]): DecorationSet {
-  // Sort by priority descending, then position
-  entries.sort((a, b) => b.priority - a.priority || a.from - b.from);
-
-  // Greedily select non-overlapping tokens (higher priority wins)
-  const selected: TokenEntry[] = [];
-  for (const e of entries) {
-    if (!selected.some((s) => e.from < s.to && e.to > s.from)) {
-      selected.push(e);
-    }
-  }
-
-  // RangeSetBuilder requires ascending order
-  selected.sort((a, b) => a.from - b.from);
-
+  // The Rust lexer already emits ascending, non-overlapping spans, so we can
+  // feed the builder directly. The guard only defends against an unexpected
+  // shape (e.g. a future API change) corrupting the RangeSet.
   const builder = new RangeSetBuilder<Decoration>();
-  for (const e of selected) {
-    if (e.from < e.to) {
-      builder.add(e.from, e.to, e.deco);
-    }
+  let last = 0;
+  for (const t of tokens) {
+    const deco = decos[t.type];
+    if (!deco || t.from < last || t.to <= t.from) continue;
+    builder.add(t.from, t.to, deco);
+    last = t.to;
   }
   return builder.finish();
 }

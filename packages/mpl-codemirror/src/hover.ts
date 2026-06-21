@@ -1,4 +1,5 @@
 import { hoverTooltip, type EditorView, type Tooltip } from "@codemirror/view";
+import * as mpl from "@axiomhq/mpl";
 import {
   type WasmFunctionInfo,
   formatArgType,
@@ -98,33 +99,38 @@ export interface ParamDecl {
   optional: boolean;
 }
 
-// Multi-line: matches each `param $name: type;` declaration in the document.
-// Lazy on the type body to stop at the first `;` (single-line declarations).
-const PARAM_LINE_RE = /^[ \t]*param[ \t]+(\$[A-Za-z_][A-Za-z0-9_]*)[ \t]*:[ \t]*([^;]+);/gm;
-const OPTION_RE = /^Option[ \t]*<[ \t]*(.+?)[ \t]*>$/;
+/**
+ * The shape of each entry returned by the wasm `param_declarations` export.
+ * Mirrors `mpl_language_server::ParamDeclaration` (serde): the `$`-prefixed
+ * name, the canonical type spelling, and the optional flag.
+ */
+interface WasmParamDeclaration {
+  name: string;
+  type: string;
+  optional: boolean;
+}
 
 /**
- * Scans the document for `param $name: type;` declarations and returns a map
- * keyed by the dollar-prefixed name (e.g. `"$container"`).
+ * Returns the `param $name: type;` declarations in `doc`, keyed by the
+ * dollar-prefixed name (e.g. `"$container"`).
  *
- * Intentionally TS-side rather than a wasm round-trip: the grammar for param
- * declarations is dead simple and stable, and a hover hint is non-critical
- * enough that drift risk is acceptable. If the param fails to compile, the
- * hover simply won't resolve — diagnostics handle the error path.
+ * The declaration grammar is parsed entirely in Rust: this delegates to the
+ * wasm `param_declarations` export (which reuses the same param scanner the
+ * completion engine uses), so the editor never re-implements the grammar and
+ * can't drift from it. If wasm is unavailable, or a param fails to parse, the
+ * map simply omits it and the hover won't resolve — diagnostics handle errors.
  */
 export function parseParamDeclarations(doc: string): Map<string, ParamDecl> {
   const result = new Map<string, ParamDecl>();
-  const re = new RegExp(PARAM_LINE_RE.source, PARAM_LINE_RE.flags);
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(doc)) !== null) {
-    const [, name, rawType] = m;
-    const trimmed = rawType.trim();
-    const optMatch = OPTION_RE.exec(trimmed);
-    if (optMatch) {
-      result.set(name, { type: optMatch[1].trim(), optional: true });
-    } else {
-      result.set(name, { type: trimmed, optional: false });
-    }
+  let decls: WasmParamDeclaration[];
+  try {
+    decls =
+      (mpl.param_declarations(doc) as WasmParamDeclaration[] | undefined) ?? [];
+  } catch {
+    return result; // WASM not ready
+  }
+  for (const decl of decls) {
+    result.set(decl.name, { type: decl.type, optional: decl.optional });
   }
   return result;
 }

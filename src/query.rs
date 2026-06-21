@@ -9,22 +9,39 @@ use std::{
 use chrono::Utc;
 use chrono::{DateTime, Duration, FixedOffset};
 use miette::SourceSpan;
-use pest::Parser as _;
 use strumbra::SharedString;
 
 use crate::{
-    ParseError,
     enc_regex::EncodableRegex,
+    errors::ParseParamError,
     linker::{AlignFunction, ComputeFunction, GroupFunction, MapFunction},
-    parser::{self, MPLParser, ParseParamError, Rule},
     tags::TagValue,
     time::{Resolution, ResolutionError},
     types::{BucketSpec, BucketType, Dataset, Metric, Parameterized},
+    wparser,
 };
 
 mod fmt;
 #[cfg(test)]
 mod tests;
+
+/// Returns `true` when `name` is a bare identifier the grammar lexes as an
+/// `IDENT` (`[A-Za-z_][A-Za-z0-9_]*`) and can therefore be written without
+/// backtick escaping.
+///
+/// This is the single Rust source of truth for the `plain_ident` rule: the
+/// [`Display`] impls (via `escape_ident`) and editor tooling both route
+/// through it instead of re-spelling the character classes.
+#[must_use]
+pub fn is_plain_ident(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }
+        _ => false,
+    }
+}
 
 /// Metric identifier
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -732,17 +749,8 @@ impl ProvidedParams {
                 continue;
             };
 
-            // parse mpl
-            let parsed = MPLParser::parse(Rule::param_value, value).map_err(|err| {
-                ParseProvidedParamsError::ParseParam {
-                    param_name: name.to_string(),
-                    expected_type: mpl_param.typ,
-                    err: ParseParamError::Parse(ParseError::from(err)),
-                }
-            })?;
-
-            // parse as correct type
-            let value = parser::parse_param_value(mpl_param, parsed).map_err(|err| {
+            // parse as the declared type (pest-free; the `winnow` grammar)
+            let value = wparser::parse_param_value(mpl_param, value).map_err(|err| {
                 ParseProvidedParamsError::ParseParam {
                     param_name: name.to_string(),
                     expected_type: mpl_param.typ,

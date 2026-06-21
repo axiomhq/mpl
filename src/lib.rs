@@ -9,8 +9,7 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(unused_assignments)] // We need this for the type error
 
-mod parser;
-pub use parser::{MPLParser, Rule};
+pub mod wparser;
 
 pub mod enc_regex;
 pub mod errors;
@@ -32,8 +31,7 @@ use std::{
 
 pub use errors::ParseError;
 use miette::{Diagnostic, SourceOffset, SourceSpan};
-use pest::Parser as _;
-pub use query::Query;
+pub use query::{Query, is_plain_ident};
 
 pub use stdlib::STDLIB;
 
@@ -66,26 +64,59 @@ pub enum CompileError {
 }
 
 /// Parses and typechecks an MPL query into a Query object.
+///
+/// Parsing is done by the hand-written `winnow` grammar in [`wparser`]
+/// (recovering, multi-error); the post-parse type-check / group-check /
+/// option-check stages resolve the `== $param` vs `== #/regex/` ambiguity
+/// (in [`ParamTypecheckVisitor`]).
 #[allow(clippy::result_large_err)]
 pub fn compile<S: BuildHasher>(
     query: &str,
     system_params: HashMap<String, ParamType, S>,
 ) -> Result<(Query, Warnings), CompileError> {
-    // stage 1: parse
-    let mut parse = MPLParser::parse(Rule::file, query).map_err(ParseError::from)?;
-    let (mut query, warnings) = parser::Parser::default().parse_query(&mut parse, system_params)?;
-    // stage 2: typecheck
-    let mut visitor = ParamTypecheckVisitor {};
-    visitor.walk(&mut query)?;
-    // stage 3: group check
-    let mut visitor = GroupCheckVisitor::default();
-    visitor.walk(&mut query)?;
+    let mut sys = Vec::new();
+    for (name, typ) in system_params {
+        if !name.starts_with("__") {
+            return Err(ParseError::SystemParamMissingPrefix { param: name }.into());
+        }
+        sys.push(ParamDeclaration {
+            span: SourceSpan::new(0.into(), 0),
+            name,
+            typ,
+        });
+    }
 
-    let mut visitor = OptionCheckVisitor::default();
-    visitor.walk(&mut query)?;
+    // stage 1: parse (with recovery — collects every error)
+    let wparser::ParseOutput {
+        query: parsed,
+        errors,
+        warnings,
+    } = wparser::parse_file(query, sys);
+    if let Some(err) = errors.into_iter().next() {
+        return Err(err.into());
+    }
+    let mut query = parsed.ok_or(ParseError::EOF {
+        span: SourceSpan::new(0.into(), 0),
+    })?;
+
+    // stages 2-4: typecheck / group-check / option-check
+    ParamTypecheckVisitor {}.walk(&mut query)?;
+    GroupCheckVisitor::default().walk(&mut query)?;
+    OptionCheckVisitor::default().walk(&mut query)?;
 
     Ok((query, warnings))
 }
+
+/// Backwards-compatible alias for [`compile`]. The `winnow` parser is now the
+/// only parser, so this simply delegates.
+#[allow(clippy::result_large_err)]
+pub fn compile_winnow<S: BuildHasher>(
+    query: &str,
+    system_params: HashMap<String, ParamType, S>,
+) -> Result<(Query, Warnings), CompileError> {
+    compile(query, system_params)
+}
+
 /// Type error
 #[derive(Debug, thiserror::Error, Diagnostic)]
 pub enum GroupError {

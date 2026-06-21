@@ -51,14 +51,16 @@ strumbra = { version = "0.6", features = ["serde"] }
 ordered-float = "5"
 ron = { version = "0.12", optional = true }
 arborium = { version = "2", optional = true, default-features = false, features = ["lang-ron", "lang-json"] }
-pest = "2.8.6"
-pest_derive = "2.8.6"
 serde_regex = "1"
 strsim = "0.11.1"
 miette = { version = "7.6.0", features = ["serde"] }
+winnow = "1"
 
 [dev-dependencies]
 test-case = "3"
+# PHASE B CST feasibility spike only (tests/cst_spike.rs). Kept a dev-dependency
+# so the production library build and its dependency tree are untouched.
+rowan = "0.16"
 
 [features]
 default = ["bincode", "clock"]

@@ -5,8 +5,8 @@ use mpl_lang::STDLIB;
 
 use super::{
     CompletionResult, ParamItem, ParamType, QueryContext, compute_completions,
-    cursor_in_interpolation, extract_declared_params, extract_partial_word, is_char_escaped,
-    locate_query_context, lookup_function, skip_string_literal,
+    cursor_in_interpolation, declared_params, extract_declared_params, extract_partial_word,
+    is_char_escaped, locate_query_context, lookup_function, skip_string_literal,
 };
 
 fn tag_info(r: &CompletionResult) -> Option<(&str, &str)> {
@@ -1278,6 +1278,38 @@ fn extract_params_with_comments() {
     let params = extract_declared_params(text);
     assert_eq!(params.len(), 1);
     assert_eq!(params[0].label, "$x");
+}
+
+#[test]
+fn declared_params_projects_canonical_type_and_optional_flag() {
+    let text = "\
+param $ds: Dataset;\n\
+param $w: Duration;\n\
+param $f: Option<int>;\n\
+param $r: Option<Regex>;\n\
+ds:metric";
+    let decls = declared_params(text);
+    assert_eq!(decls.len(), 4);
+
+    // Names keep the `$` prefix so the editor can key off the reference token.
+    assert_eq!(decls[0].name, "$ds");
+    // PascalCase types render canonically; lowercase scalars stay lowercase.
+    assert_eq!(decls[0].typ, "Dataset");
+    assert!(!decls[0].optional);
+    assert_eq!(decls[1].typ, "Duration");
+
+    // Option<T> is unwrapped to the inner type with `optional: true`, matching
+    // how hover re-wraps it as `Option<int>` for display.
+    assert_eq!(decls[2].name, "$f");
+    assert_eq!(decls[2].typ, "int");
+    assert!(decls[2].optional);
+    assert_eq!(decls[3].typ, "Regex");
+    assert!(decls[3].optional);
+}
+
+#[test]
+fn declared_params_empty_when_no_params() {
+    assert!(declared_params("ds:metric | where x == 1").is_empty());
 }
 
 // ── extract_partial_word includes $ ─────────────────────────────

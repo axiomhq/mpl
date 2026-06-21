@@ -1,12 +1,13 @@
 //! Autocompletion and function info for `MPL` queries.
 use std::sync::LazyLock;
 
-use pest::Parser as _;
 use serde::Serialize;
 
 use mpl_lang::STDLIB;
 use mpl_lang::linker::{ArgType, FunctionTrait, Module};
-use mpl_lang::{MPLParser, Rule};
+use mpl_lang::query::{MetricId, Query, Source};
+use mpl_lang::types::Parameterized;
+use mpl_lang::wparser::parse_file;
 
 use crate::Span;
 
@@ -28,6 +29,38 @@ pub enum ParamType {
     Float,
     Bool,
     Regex,
+}
+
+impl ParamType {
+    /// The canonical MPL spelling of this type, matching how the AST renders
+    /// it (`Dataset`, `Duration`, `string`, …). Used for hover, where the
+    /// editor shows the type as it would be written in source.
+    #[must_use]
+    pub fn canonical_name(self) -> &'static str {
+        match self {
+            ParamType::Dataset => "Dataset",
+            ParamType::Metric => "Metric",
+            ParamType::Duration => "Duration",
+            ParamType::String => "string",
+            ParamType::Int => "int",
+            ParamType::Float => "float",
+            ParamType::Bool => "bool",
+            ParamType::Regex => "Regex",
+        }
+    }
+}
+
+/// A `param` declaration resolved from a query, shaped for editor hover: the
+/// `$`-prefixed name, the canonical type spelling, and whether it is optional.
+///
+/// Distinct from the AST's [`mpl_lang::query::ParamDeclaration`] — this is the
+/// editor-facing projection produced by [`declared_params`].
+#[derive(Clone, Debug, Serialize)]
+pub struct ParamDeclaration {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub typ: std::string::String,
+    pub optional: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -973,7 +1006,7 @@ fn find_last_pipe(text: &str) -> Option<usize> {
 // ── source extraction ───────────────────────────────────────────
 
 /// Extracts the dataset and metric name from the source portion of the query
-/// using pest's `Rule::source` parser for correct backtick/escaping handling.
+/// using the `winnow` grammar for correct backtick/escaping handling.
 /// Expects text already scoped to the current subquery by `locate_query_context`.
 fn extract_source_info(text: &str) -> Option<(String, String)> {
     let bytes = text.as_bytes();
@@ -1010,56 +1043,52 @@ fn extract_source_info(text: &str) -> Option<(String, String)> {
     extract_source_via_parser(source.trim())
 }
 
-/// Parses the source string using pest's `Rule::source` and extracts the
-/// dataset and metric names from the resulting `metric_id` pair.
+/// Parses the source string with the `winnow` grammar and extracts the
+/// (concrete, unescaped) dataset and metric names. Returns `None` for
+/// parameterized sources or anything that does not parse to a simple query
+/// source, matching the old pest-`Rule::source` behaviour.
 fn extract_source_via_parser(source: &str) -> Option<(String, String)> {
-    let pairs = MPLParser::parse(Rule::source, source).ok()?;
-    let source_pair = pairs.into_iter().next()?;
-
-    let metric_id = source_pair
-        .into_inner()
-        .find(|p| p.as_rule() == Rule::metric_id)?;
-
-    let mut dataset = None;
-    let mut metric = None;
-    for pair in metric_id.into_inner() {
-        match pair.as_rule() {
-            Rule::dataset => dataset = Some(extract_ident_name(pair)),
-            Rule::metric_name => metric = Some(extract_ident_name(pair)),
-            _ => {}
-        }
-    }
-
-    let (dataset, metric) = (dataset?, metric?);
-    if dataset.is_empty()
-        || metric.is_empty()
-        || dataset.starts_with('$')
-        || metric.starts_with('$')
-    {
+    let Query::Simple {
+        source:
+            Source {
+                metric_id: MetricId { dataset, metric },
+                ..
+            },
+        ..
+    } = parse_file(source, Vec::new()).query?
+    else {
+        return None;
+    };
+    let Parameterized::Concrete(dataset) = dataset else {
+        return None;
+    };
+    let (dataset, metric) = (dataset.to_string(), metric.to_string());
+    if dataset.is_empty() || metric.is_empty() {
         return None;
     }
     Some((dataset, metric))
 }
 
-/// Extracts the unescaped name from a `dataset` or `metric_name` pest pair.
-/// Handles both `plain_ident` (raw text) and `escaped_ident` (backtick-wrapped,
-/// descends into `escaped_ident_inner` to strip the backtick delimiters).
-fn extract_ident_name(pair: pest::iterators::Pair<'_, Rule>) -> String {
-    let Some(inner) = pair.into_inner().next() else {
-        return String::new();
-    };
-    match inner.as_rule() {
-        Rule::plain_ident | Rule::param_ident => inner.as_str().to_string(),
-        Rule::escaped_ident => inner
-            .into_inner()
-            .next()
-            .map(|p| p.as_str().to_string())
-            .unwrap_or_default(),
-        _ => String::new(),
-    }
-}
-
 // ── param extraction ────────────────────────────────────────────
+
+/// Resolves the inline `param` declarations in `query` for editor hover.
+///
+/// Reuses [`extract_declared_params`] so hover, completion, and the language
+/// server agree on what counts as a declaration; the only difference is the
+/// projection into [`ParamDeclaration`] (canonical type spelling + name).
+/// Optional params carry the *unwrapped* inner type with `optional: true`,
+/// matching how the editor renders `Option<T>`.
+#[must_use]
+pub fn declared_params(query: &str) -> Vec<ParamDeclaration> {
+    extract_declared_params(query)
+        .into_iter()
+        .map(|p| ParamDeclaration {
+            name: p.label,
+            typ: p.typ.canonical_name().to_string(),
+            optional: p.optional,
+        })
+        .collect()
+}
 
 /// Extracts declared parameters from the query preamble. Scans for
 /// `param $name: type;` declarations that appear before the query body,
