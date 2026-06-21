@@ -967,186 +967,153 @@ impl Parser<'_> {
     }
 }
 
-// ── string-aware tokenizer (token-driven boundary detection) ─────
+// ── modal lexer: declarative string/interpolation lexing via `morph` ─────
 //
-// `logos` lexes a `"…"` literal as one raw `STRING` token, but its regex stops
-// at the first inner `"`, so it mis-spans any string carrying a `"` inside a
-// `${ … }` interpolation (a nested string, a backtick ident, a regex). So [`lex`]
-// intercepts every token that *starts* with `"` (a closed `STRING`, or — when no
-// closing quote follows — an `ERROR`) and hands it to [`expand_string`], which
-// finds the literal's true boundaries **token-by-token** rather than by
-// byte-scanning:
+// MPL strings interpolate `${ expr }`, and an interpolation interior is just an
+// MPL expression — which may itself contain a `}` (a backtick ident `` `a}b` ``,
+// a `#/re/` regex, a `// comment`) or a `"` (a nested string). A naive
+// full-string regex mis-spans those. Instead the lexer is *modal* and the mode
+// switching is done with `logos`' own [`logos::Lexer::morph`]:
 //
-//   * literal fragment text is scanned only for the three sequences meaningful
-//     in string context — a `\`escape, the closing `"`, and the `${` opener;
-//   * each `${ … }` interior is lexed with the **normal** `logos` lexer by
-//     [`lex_interp`], which finds the matching `}` by **counting brace tokens**
-//     (`{` ⇒ depth+1, `}` at depth 0 ⇒ close). Because the interior is lexed by
-//     `logos`, a backtick ident (`` `a}b` ``), a `#/regex/` or a `// comment`
-//     each come out as a *single* token, so a `}` or `"` inside one of them is
-//     part of that token and can never be miscounted as a delimiter — the
-//     boundary bug the old byte scanner (`string_end`/`find_interp_close`) had,
-//     which only knew `\` and `"`.
+//   * normal mode lexes [`SyntaxKind`] (MPL code);
+//   * a `"` (the `SyntaxKind::STRING` token) morphs into string mode, the
+//     [`StrToken`] lexer, which matches literal text/escapes, `${`, a lone `$`
+//     and the closing `"` — all declaratively, no byte scanning;
+//   * a `${` ([`StrToken::Open`]) morphs back to the normal lexer for the
+//     embedded expression and pushes an interpolation frame ([`LexState::interp`]);
+//   * the `}` that closes that frame (depth 0, tracked by the `{`/`}` callbacks
+//     [`super::brace_open`]/[`super::brace_close`]) morphs back into string mode.
 //
-// `expand_string` re-emits the interior tokens (so the embedded expression is
-// re-parsed by the same `expr()` parser) and returns the literal's true end,
-// which [`lex`] uses to reposition the outer `logos` lexer. Nested strings are
-// descended into recursively (the Rust call stack *is* the string/interpolation
-// mode stack — Option B's hand-rolled variant), so `"${ "x ${ y }" }"` structures
-// fully.
+// The shared [`super::LexState`] (`logos` `Extras`) carries the interpolation
+// brace-depth stack across every morph, so the driver below only has to react
+// to four string-mode tokens and one signal (`closed_interp`). Because the
+// interior is lexed by the *normal* `SyntaxKind` lexer, a backtick ident /
+// regex / comment is a single token and the `}`/`"` inside it is never a
+// delimiter — the boundary bug the old byte scanner had cannot occur.
 //
-// An *unterminated* string / interpolation (no closing quote/brace — the
-// mid-edit case) is detected when `expand_string` / `lex_interp` reach EOF still
-// in string/interpolation mode: the string's start offset is recorded in the
-// `unterminated` set so [`Parser::string`] emits an `unterminated string`
-// diagnostic over its full extent (`start..EOF`). The interior is still
-// structured (`STRING_FRAGMENT`/`${`/embedded `EXPR`), so highlighting and the
-// completion classifier keep working mid-edit.
+// The driver coalesces a string's literal text into [`SyntaxKind::STRING_FRAGMENT`]
+// runs *by byte range* (the boundary fragments keep their `"` quotes), so the
+// CST shape is identical to a classic tokenizer's while the scanning stays in
+// `logos`. An *unterminated* string (no closing `"` before EOF — the mid-edit
+// case) is still split into the same `STRING_FRAGMENT`/`${`/embedded-`EXPR`
+// shape; its opening-quote offset is recorded in `unterminated` so
+// [`Parser::string`] diagnoses it over its full extent (`start..EOF`).
 
-/// Lex `input` into the flat token stream the parser walks, expanding string
-/// literals into their interpolation pieces. Returns the tokens plus the start
-/// offsets of any *unterminated* strings (used to diagnose mid-edit input).
-fn lex(input: &str) -> (Vec<(SyntaxKind, Range<usize>)>, Vec<usize>) {
-    let mut tokens = Vec::new();
-    let mut unterminated = Vec::new();
-    let mut lexer = SyntaxKind::lexer(input);
-    while let Some(res) = lexer.next() {
-        let kind = res.unwrap_or(SyntaxKind::ERROR);
-        let span = lexer.span();
-        // A `"` begins either a closed `STRING` (matched by `logos`) or, when no
-        // closing quote follows, an `ERROR` token. Both descend into the same
-        // interpolation expansion so the interior is structured even mid-edit.
-        if input.as_bytes().get(span.start) == Some(&b'"')
-            && matches!(kind, SyntaxKind::STRING | SyntaxKind::ERROR)
-        {
-            let end = expand_string(input, span.start, &mut tokens, &mut unterminated);
-            // `logos` may have stopped at a `"` inside the interpolation;
-            // consume to the real, token-counted end.
-            if end > span.end {
-                lexer.bump(end - span.end);
+/// String-mode token enum: the declarative half of the modal lexer. Produced
+/// only between a `"` and its matching close (or a `${ … }` boundary); never
+/// reaches the tree directly — the [`lex`] driver maps it to byte ranges.
+#[derive(Logos, Debug, Clone, Copy, PartialEq)]
+#[logos(extras = super::LexState)]
+enum StrToken {
+    /// A run of literal text and escape sequences (`\"`, `\$`, `\\`, …). Stops
+    /// before an unescaped `"`, `$` or EOF. Mirrors the old `([^"\\]|\\.)` class
+    /// minus `$` (which is split off so `${` can be distinguished from a lone `$`).
+    #[regex(r#"([^"\\$]|\\.)+"#)]
+    Text,
+    /// `${` — opens an interpolation (preferred over `Dollar` by longest match).
+    #[token("${")]
+    Open,
+    /// A `$` that does not open an interpolation: literal text.
+    #[token("$")]
+    Dollar,
+    /// The closing `"`.
+    #[token("\"")]
+    Quote,
+}
+
+/// The current lexer, owned by the [`lex`] driver and reassigned each step. The
+/// variant *is* the mode; [`logos::Lexer::morph`] converts between them while
+/// preserving position and the shared [`super::LexState`].
+enum Mode<'s> {
+    Normal(logos::Lexer<'s, SyntaxKind>),
+    Str(logos::Lexer<'s, StrToken>),
+}
+
+/// Lex `input` into the flat token stream the parser walks. Returns the tokens
+/// (including trivia, with strings already split into their interpolation
+/// pieces) plus the opening-quote offsets of any *unterminated* strings (used to
+/// diagnose mid-edit input).
+pub(super) fn lex(input: &str) -> (Vec<(SyntaxKind, Range<usize>)>, Vec<usize>) {
+    let mut tokens: Vec<(SyntaxKind, Range<usize>)> = Vec::new();
+    let mut unterminated: Vec<usize> = Vec::new();
+    // Opening-quote offset of every string still open (innermost last), so one
+    // left dangling at EOF is diagnosed at its true start.
+    let mut open_strings: Vec<usize> = Vec::new();
+    // Start of the literal fragment currently being accumulated (string mode).
+    let mut frag_start: usize = 0;
+
+    let mut lexer = Mode::Normal(SyntaxKind::lexer(input));
+    'lex: loop {
+        lexer = match lexer {
+            Mode::Normal(mut lx) => {
+                let Some(res) = lx.next() else {
+                    // EOF in code: any strings still open are unterminated
+                    // (we are inside an unclosed `${ … }`); empty otherwise.
+                    unterminated.append(&mut open_strings);
+                    break 'lex;
+                };
+                let span = lx.span();
+                match res.unwrap_or(SyntaxKind::ERROR) {
+                    // Opening `"`: the quote starts the upcoming STRING_FRAGMENT
+                    // (it is not its own token); switch into string mode.
+                    SyntaxKind::STRING => {
+                        frag_start = span.start;
+                        open_strings.push(span.start);
+                        Mode::Str(lx.morph())
+                    }
+                    // A `}` that closed the innermost interpolation: emit it and
+                    // resume the enclosing string (a new fragment starts after it).
+                    SyntaxKind::R_BRACE if lx.extras.closed_interp => {
+                        tokens.push((SyntaxKind::R_BRACE, span.clone()));
+                        frag_start = span.end;
+                        Mode::Str(lx.morph())
+                    }
+                    kind => {
+                        tokens.push((kind, span));
+                        Mode::Normal(lx)
+                    }
+                }
             }
-        } else {
-            tokens.push((kind, span));
-        }
+            Mode::Str(mut lx) => {
+                let Some(res) = lx.next() else {
+                    // EOF inside a string: flush the trailing fragment and mark
+                    // every still-open string unterminated.
+                    if frag_start < input.len() {
+                        tokens.push((SyntaxKind::STRING_FRAGMENT, frag_start..input.len()));
+                    }
+                    unterminated.append(&mut open_strings);
+                    break 'lex;
+                };
+                let span = lx.span();
+                match res {
+                    // `${`: flush the literal run (skip an empty one between
+                    // adjacent interpolations), emit the delimiter, push an
+                    // interpolation frame and morph back to the normal lexer.
+                    Ok(StrToken::Open) => {
+                        if frag_start < span.start {
+                            tokens.push((SyntaxKind::STRING_FRAGMENT, frag_start..span.start));
+                        }
+                        tokens.push((SyntaxKind::DOLLAR_BRACE, span.clone()));
+                        lx.extras.interp.push(0);
+                        Mode::Normal(lx.morph())
+                    }
+                    // Closing `"`: the trailing fragment includes it; the string
+                    // is complete, so resume the enclosing (normal) context.
+                    Ok(StrToken::Quote) => {
+                        tokens.push((SyntaxKind::STRING_FRAGMENT, frag_start..span.end));
+                        open_strings.pop();
+                        Mode::Normal(lx.morph())
+                    }
+                    // Literal text, a lone `$`, or a stray trailing `\` (the only
+                    // byte `Text` cannot match): all part of the current fragment,
+                    // which extends to the next `${` / `"` / EOF.
+                    Ok(StrToken::Text | StrToken::Dollar) | Err(()) => Mode::Str(lx),
+                }
+            }
+        };
     }
+
     (tokens, unterminated)
-}
-
-/// Split the string literal beginning at `start` (its opening `"`) into the flat
-/// `STRING_FRAGMENT` / `DOLLAR_BRACE` / interior / `R_BRACE` token sequence the
-/// parser shapes into a `STRING` node, returning the byte offset one past the
-/// closing `"` (or `slice.len()` if the string is unterminated, in which case
-/// `start` is pushed to `unterminated`).
-///
-/// Boundary fragments keep their `"` quotes; an escaped `\$` never starts an
-/// interpolation. Each `${ … }` interior is delegated to [`lex_interp`], so the
-/// closing `}` is found by token counting, not byte scanning.
-fn expand_string(
-    slice: &str,
-    start: usize,
-    tokens: &mut Vec<(SyntaxKind, Range<usize>)>,
-    unterminated: &mut Vec<usize>,
-) -> usize {
-    let bytes = slice.as_bytes();
-    let len = slice.len();
-    let mut frag_start = start; // first fragment includes the opening quote
-    let mut i = start + 1;
-    while i < len {
-        match bytes[i] {
-            b'\\' => {
-                // Escaped char (incl. `\$`) is literal text.
-                i += 1;
-                if i < len {
-                    i += char_len(slice, i);
-                }
-            }
-            b'$' if bytes.get(i + 1) == Some(&b'{') => {
-                if i > frag_start {
-                    tokens.push((SyntaxKind::STRING_FRAGMENT, frag_start..i));
-                }
-                tokens.push((SyntaxKind::DOLLAR_BRACE, i..i + 2));
-                let expr_start = i + 2;
-                if let Some(close) = lex_interp(slice, expr_start, tokens, unterminated) {
-                    tokens.push((SyntaxKind::R_BRACE, close..close + 1));
-                    i = close + 1;
-                    frag_start = i;
-                } else {
-                    // Reached EOF still inside the interpolation: its tokens
-                    // are already emitted; the whole string is unterminated.
-                    unterminated.push(start);
-                    return len;
-                }
-            }
-            b'"' => {
-                // Closing quote: it belongs to the trailing fragment.
-                tokens.push((SyntaxKind::STRING_FRAGMENT, frag_start..i + 1));
-                return i + 1;
-            }
-            _ => i += char_len(slice, i),
-        }
-    }
-    // Reached EOF without a closing quote: emit the trailing fragment and flag
-    // the string as unterminated (the node still extends to EOF).
-    if len > frag_start {
-        tokens.push((SyntaxKind::STRING_FRAGMENT, frag_start..len));
-    }
-    unterminated.push(start);
-    len
-}
-
-/// Lex a `${ … }` interpolation interior beginning at `expr_start` with the
-/// normal `logos` lexer, emitting its tokens and returning the byte offset of
-/// the `}` that closes it at brace depth 0 (`None` if EOF is reached first — an
-/// unterminated interpolation). The closing `}` is *not* emitted here; the
-/// caller emits it as an `R_BRACE`.
-///
-/// Token counting is what fixes the boundary bug: a backtick ident, a
-/// `#/regex/` or a `// comment` is a single `logos` token, so a `}`/`"` inside
-/// it is never a delimiter. A nested string literal (which `logos` mis-spans on
-/// its inner `"`) is descended into via [`expand_string`], and lexing resumes
-/// past its true end.
-fn lex_interp(
-    slice: &str,
-    expr_start: usize,
-    tokens: &mut Vec<(SyntaxKind, Range<usize>)>,
-    unterminated: &mut Vec<usize>,
-) -> Option<usize> {
-    let mut lexer = SyntaxKind::lexer(&slice[expr_start..]);
-    let mut depth: u32 = 0;
-    while let Some(res) = lexer.next() {
-        let kind = res.unwrap_or(SyntaxKind::ERROR);
-        let span = lexer.span();
-        let range = expr_start + span.start..expr_start + span.end;
-        match kind {
-            SyntaxKind::R_BRACE if depth == 0 => return Some(range.start),
-            SyntaxKind::R_BRACE => {
-                depth -= 1;
-                tokens.push((kind, range));
-            }
-            SyntaxKind::L_BRACE => {
-                depth += 1;
-                tokens.push((kind, range));
-            }
-            SyntaxKind::STRING | SyntaxKind::ERROR
-                if slice.as_bytes().get(range.start) == Some(&b'"') =>
-            {
-                // Nested string: descend so its `"`/`}` (and any further
-                // `${ … }`) are handled by the string machinery, then resume
-                // past its token-counted end.
-                let end = expand_string(slice, range.start, tokens, unterminated);
-                if end > range.end {
-                    lexer.bump(end - range.end);
-                }
-            }
-            _ => tokens.push((kind, range)),
-        }
-    }
-    None
-}
-
-/// Byte length of the UTF-8 char starting at `slice[i]` (1 past the end).
-fn char_len(slice: &str, i: usize) -> usize {
-    slice[i..].chars().next().map_or(1, char::len_utf8)
 }
 
 fn u32_len(text: &str) -> u32 {

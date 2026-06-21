@@ -11,6 +11,22 @@
 //!   keeps working on incomplete / mid-edit queries;
 //! * is lowered to the existing [`crate::query`] AST by a thin [`lower`] pass
 //!   (which also hosts the `param_value` external entry point).
+//!
+//! ## Modal lexer
+//!
+//! String/interpolation lexing is **fully declarative** in `logos`. The lexer
+//! runs in two modes that share one [`LexState`] (`logos` `Extras`):
+//!
+//! * normal mode — the [`SyntaxKind`] `logos` lexer (MPL code);
+//! * string mode — a second `#[derive(Logos)]` enum ([`parser::StrToken`]) for
+//!   literal text/escapes, `${`, a lone `$` and the closing `"`.
+//!
+//! A `"` switches normal → string via [`logos::Lexer::morph`]; a `${` switches
+//! string → normal (the embedded expression is lexed by the *same* `SyntaxKind`
+//! lexer) and pushes an interpolation frame onto [`LexState::interp`]; the `}`
+//! that closes it (at brace-depth 0, tracked by the [`brace_open`]/[`brace_close`]
+//! callbacks) switches back to string mode. There is **no** hand-written byte
+//! scanning of string bodies — see [`parser::lex`].
 
 use logos::Logos;
 
@@ -22,6 +38,47 @@ mod tests;
 
 pub use parser::{Parse, SyntaxError, parse};
 
+/// Lexer state threaded across [`logos::Lexer::morph`] (the `logos` `Extras`).
+///
+/// MPL strings interpolate `${ expr }`, and the embedded expression is lexed by
+/// the normal [`SyntaxKind`] lexer — so a `}` is ambiguous: it can close an
+/// interpolation, an `ifdef` body, or a brace nested inside the expression.
+/// `interp` records, for each open `${ … }` (innermost last), the `{ }` nesting
+/// depth seen so far. The [`brace_open`]/[`brace_close`] token callbacks keep it
+/// current; `closed_interp` is set by [`brace_close`] when a `}` brought the
+/// innermost frame's depth below 0, i.e. it closed an interpolation — the one
+/// signal the [`parser::lex`] driver needs to morph back into string mode.
+#[derive(Debug, Default, Clone)]
+pub struct LexState {
+    interp: Vec<u32>,
+    closed_interp: bool,
+}
+
+/// `{` callback: a brace inside an open interpolation deepens its nesting.
+fn brace_open(lex: &mut logos::Lexer<SyntaxKind>) {
+    if let Some(depth) = lex.extras.interp.last_mut() {
+        *depth += 1;
+    }
+}
+
+/// `}` callback: pop the innermost interpolation frame when its depth is 0
+/// (this `}` closes it) and flag it; otherwise unwind one level of nesting.
+fn brace_close(lex: &mut logos::Lexer<SyntaxKind>) {
+    match lex.extras.interp.last().copied() {
+        Some(0) => {
+            lex.extras.interp.pop();
+            lex.extras.closed_interp = true;
+        }
+        Some(_) => {
+            if let Some(depth) = lex.extras.interp.last_mut() {
+                *depth -= 1;
+            }
+            lex.extras.closed_interp = false;
+        }
+        None => lex.extras.closed_interp = false,
+    }
+}
+
 /// The kinds of tokens and nodes in the `MPL` syntax tree.
 ///
 /// Variants carrying a `#[token]` / `#[regex]` attribute are produced by the
@@ -31,6 +88,7 @@ pub use parser::{Parse, SyntaxError, parse};
 /// emitted as `KEYWORD`). The `*_NODE` / composite variants are interior
 /// nodes. Screaming-case mirrors the rust-analyzer convention.
 #[derive(Logos, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[logos(extras = LexState)]
 #[repr(u16)]
 #[allow(non_camel_case_types)]
 pub enum SyntaxKind {
@@ -55,21 +113,21 @@ pub enum SyntaxKind {
     /// Integer literal, e.g. `42`.
     #[regex(r"[0-9]+")]
     INT,
-    // A double-quoted string literal is lexed by `logos` as one raw token, but
-    // the parser immediately *descends* into it (see `parser::expand_string`):
-    // the raw token never reaches the tree. Instead the literal text becomes
-    // [`SyntaxKind::STRING_FRAGMENT`] tokens, the `${`/`}` interpolation
-    // delimiters become [`SyntaxKind::DOLLAR_BRACE`]/[`SyntaxKind::R_BRACE`]
-    // tokens, and the embedded expression is a real [`SyntaxKind::EXPR`] subtree
-    // parsed by the same expr parser. `STRING` is then reused as the *node*
-    // kind wrapping all of that, so the CST is lossless down into interpolations.
-    /// Raw double-quoted string match (lexer-only; reused as the string node kind).
-    #[regex(r#""([^"\\]|\\.)*""#)]
+    // A `"` opens a string. Unlike a classic full-string regex, the lexer only
+    // matches the opening quote here and then *morphs* into string mode (see
+    // [`parser::StrToken`] / [`parser::lex`]): the body is lexed declaratively,
+    // and `${ … }` interpolations morph back to this lexer for the embedded
+    // expression. The raw quote token never reaches the tree — the driver folds
+    // it into the leading [`SyntaxKind::STRING_FRAGMENT`]. `STRING` is reused as
+    // the *node* kind wrapping the fragments / delimiters / embedded `EXPR`, so
+    // the CST stays lossless down into interpolations.
+    /// Opening `"` of a string (morph trigger); reused as the string node kind.
+    #[token("\"")]
     STRING,
     /// A run of literal string text inside a [`SyntaxKind::STRING`] node. The
-    /// boundary fragments carry the surrounding `"` quotes. Parser-emitted.
+    /// boundary fragments carry the surrounding `"` quotes. Driver-emitted.
     STRING_FRAGMENT,
-    /// The `${` opening an interpolation inside a string. Parser-emitted.
+    /// The `${` opening an interpolation inside a string. Driver-emitted.
     DOLLAR_BRACE,
     /// Regex literal `#/…/`.
     #[regex(r"#/([^/\\]|\\.)*/")]
@@ -109,11 +167,11 @@ pub enum SyntaxKind {
     /// `]` right bracket.
     #[token("]")]
     R_BRACK,
-    /// `{` left brace (ifdef bodies).
-    #[token("{")]
+    /// `{` left brace (ifdef bodies / interpolation nesting).
+    #[token("{", brace_open)]
     L_BRACE,
-    /// `}` right brace (ifdef bodies).
-    #[token("}")]
+    /// `}` right brace (ifdef bodies / interpolation close).
+    #[token("}", brace_close)]
     R_BRACE,
     /// `(` left parenthesis.
     #[token("(")]

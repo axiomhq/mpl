@@ -1052,25 +1052,21 @@ pub enum ParseParamError {
 /// Parse a caller-supplied runtime `value` for the given declared `param`.
 ///
 /// Replaces the old pest `param_value` external entry point: the value is lexed
-/// with the CST lexer and matched against the param's declared type.
+/// with the same modal CST lexer ([`super::parser::lex`]) and matched against
+/// the param's declared type. A `String`-typed value lexes to a leading
+/// [`SyntaxKind::STRING_FRAGMENT`] (the lexer descends into string literals),
+/// so its quotes/escapes are handled by the canonical `unescape_and_trim`.
 pub fn parse_param_value(
     param: &ParamDeclaration,
     value: &str,
 ) -> std::result::Result<ParamValue, ParseParamError> {
-    use logos::Logos as _;
-
-    // The leading (non-trivia) tokens of the value.
-    let toks: Vec<(SyntaxKind, &str)> = {
-        let mut lexer = SyntaxKind::lexer(value);
-        let mut out = Vec::new();
-        while let Some(res) = lexer.next() {
-            let kind = res.unwrap_or(SyntaxKind::ERROR);
-            if !kind.is_trivia() {
-                out.push((kind, &value[lexer.span()]));
-            }
-        }
-        out
-    };
+    // The leading (non-trivia) tokens of the value, from the one canonical lexer.
+    let (lexed, _unterminated) = super::parser::lex(value);
+    let toks: Vec<(SyntaxKind, &str)> = lexed
+        .into_iter()
+        .filter(|(kind, _)| !kind.is_trivia())
+        .map(|(kind, range)| (kind, &value[range]))
+        .collect();
     let mismatch = || ParseParamError::TypeMismatch {
         declared_typ: param.typ,
     };
@@ -1097,7 +1093,9 @@ pub fn parse_param_value(
             _ => Err(mismatch()),
         },
         TerminalParamType::Tag(TagType::String) => match first {
-            Some((SyntaxKind::STRING, t)) => Ok(ParamValue::String(unescape_and_trim(t, '"'))),
+            Some((SyntaxKind::STRING_FRAGMENT, t)) => {
+                Ok(ParamValue::String(unescape_and_trim(t, '"')))
+            }
             _ => Err(mismatch()),
         },
         TerminalParamType::Tag(TagType::Int) => match first {

@@ -641,12 +641,12 @@ pub fn extract_partial_word(text: &str, cursor: usize) -> (usize, &str) {
     // Lex the *whole* query with the CST and take the maximal run of word-like
     // tokens ending at (or, for a mid-token cursor, spanning) the cursor. The
     // full text is lexed rather than the prefix so that a cursor *inside* a
-    // string interpolation (`"… ${ id| }"`) still sees the embedded `id` as an
-    // IDENT token — truncating at the cursor would leave an unterminated string
-    // that collapses into one opaque `ERROR` token. The lexer already resolves
-    // escapes, backtick idents (incl. unterminated ones, which become a single
-    // `ERROR` token starting with a backtick) and `$param` spans, so the run is
-    // just a token walk; trailing tokens past the cursor are ignored.
+    // string interpolation (`"… ${ id| }"`) sits in a well-formed tree; the
+    // modal lexer descends into strings (even unterminated ones), so the
+    // embedded `id` is an IDENT either way. Escapes, backtick idents (incl.
+    // unterminated ones, which become a single `ERROR` token starting with a
+    // backtick) and `$param` spans are already resolved by the lexer, so the run
+    // is just a token walk; trailing tokens past the cursor are ignored.
     let root = cst::parse(text).syntax();
     let tokens: Vec<SyntaxToken> = root
         .descendants_with_tokens()
@@ -736,7 +736,7 @@ enum StringContext {
 /// Driven entirely by the recovering CST. The lexer now descends into string
 /// literals — including *unterminated* ones, the mid-edit case — emitting
 /// `STRING_FRAGMENT` text runs, `${` delimiters and the embedded expression as
-/// real tokens/subtrees (see `cst::parser::expand_string`). So the innermost
+/// real tokens/subtrees (see the modal lexer `cst::parser::lex`). So the innermost
 /// `STRING` node whose extent covers `pos` tells us the cursor is in a string,
 /// and whether `pos` lands in one of that node's `STRING_FRAGMENT` children
 /// (literal text) or in the `${ … }` interpolation region between them. Escapes,

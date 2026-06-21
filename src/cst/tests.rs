@@ -68,16 +68,14 @@ fn interpolated_string_roundtrips_losslessly() {
     }
 }
 
-// Regression lock for the string-boundary bug, now FIXED by token-driven
-// boundary detection (Option B). An escaped ident whose name contains `}` is
-// valid MPL, but the old two-phase byte scanner (`string_end`/`find_interp_close`)
-// only skipped `\` and `"` — it was blind to backtick idents, `#/regex/`
-// literals and `//` comments, all of which can carry a `}` or `"`. So it
-// stopped at the `}` inside the ident name and mis-detected the `${ … }`
-// boundary (empty interpolation + an ERROR_NODE + 3 spurious errors). The new
-// lexer lexes each `${ … }` interior with `logos` and counts brace *tokens*, so
-// `` `a}b` `` is a single ESCAPED_IDENT and the `}` inside it is never a
-// delimiter; the interior parses as one ESCAPED_IDENT with no errors.
+// Regression lock for the string-boundary bug. An escaped ident whose name
+// contains `}` is valid MPL. The modal lexer lexes each `${ … }` interior with
+// the *normal* `SyntaxKind` lexer (entered via `Lexer::morph`), so `` `a}b` ``
+// is a single ESCAPED_IDENT token and the `}` inside it is part of that token —
+// never an `R_BRACE` that could be miscounted as the interpolation boundary.
+// (A naive full-string regex, by contrast, would stop at the inner `}`/`"` and
+// mis-detect the boundary: empty interpolation + an ERROR_NODE + spurious
+// errors.) Here the interior parses as one ESCAPED_IDENT with no errors.
 #[test]
 fn interpolation_with_braced_escaped_ident_parses_cleanly() {
     let input = r#"ds:cpu | where t == "x ${ `a}b` }""#;
@@ -105,11 +103,11 @@ fn interpolation_with_braced_escaped_ident_parses_cleanly() {
 }
 
 // (a) The same class of bug, but the escaped ident carries a `"` instead of a
-// `}`. The old byte scanner's `string_end`/`find_interp_close` toggled on every
-// `"`, so the quote inside `` `a"b` `` was read as the string's closing quote
-// and the boundary collapsed. Lexing the interior with `logos` makes `` `a"b` ``
-// a single ESCAPED_IDENT, so the embedded `"` is part of that token, never a
-// delimiter. The interior must be exactly that one escaped ident, no errors.
+// `}`. A regex that toggled string state on every `"` would read the quote
+// inside `` `a"b` `` as the string's closing quote and collapse the boundary.
+// Because the modal lexer lexes the `${ … }` interior in normal mode, `` `a"b` ``
+// is a single ESCAPED_IDENT, so the embedded `"` is part of that token, never a
+// closing quote. The interior must be exactly that one escaped ident, no errors.
 #[test]
 fn interpolation_with_quoted_escaped_ident_parses_cleanly() {
     let input = r#"ds:cpu | where t == "x ${ `a"b` }""#;
@@ -137,11 +135,11 @@ fn interpolation_with_quoted_escaped_ident_parses_cleanly() {
 }
 
 // (b) A multi-line interpolation whose interior has a `//` line comment
-// containing a `}` before the *real* closing `}` on the next line. The old
-// `find_interp_close` byte scanner had no notion of comments, so it would stop
-// at the `}` inside the comment and mis-detect the boundary. Lexing the
-// interior with `logos` makes the `// …}` a single COMMENT token, so its `}` is
-// not a delimiter and the boundary is the real `}`. The interior may error on
+// containing a `}` before the *real* closing `}` on the next line. A boundary
+// finder with no notion of comments would stop at the `}` inside the comment
+// and mis-detect the boundary. Because the modal lexer lexes the interior in
+// normal mode, the `// …}` is a single COMMENT token, so its `}` is not a
+// delimiter and the boundary is the real `}`. The interior may error on
 // *semantics* (a bare `x` is not a complete expr value here), but the BOUNDARY
 // must be right: the outer STRING must span to the final `"`, and the whole
 // input must round-trip byte-for-byte.
@@ -188,6 +186,66 @@ fn interpolation_with_commented_brace_finds_real_boundary() {
         .filter(|t| t.kind() == SyntaxKind::R_BRACE)
         .count();
     assert_eq!((dollar_braces, r_braces), (1, 1));
+}
+
+// The modal string lexer distinguishes `${` (interpolation opener) from a lone
+// `$` (literal text) *declaratively*: `StrToken::Open` matches `${` and
+// `StrToken::Dollar` matches a bare `$`, with `logos` longest-match preferring
+// `${`. So `$5` stays literal and only the real `${ … }` opens an interpolation.
+#[test]
+fn lone_dollar_in_string_is_literal_not_interpolation() {
+    let input = r#"ds:cpu | extend u = "cost is $5 or ${ x }""#;
+    let parsed = parse(input);
+    assert_eq!(parsed.syntax().text(), input, "must stay lossless");
+
+    let string = parsed
+        .syntax()
+        .descendants()
+        .find(|n| n.kind() == SyntaxKind::STRING)
+        .expect("a STRING node");
+
+    // Exactly one interpolation (the `$5` did not open one).
+    let dollar_braces = string
+        .descendants_with_tokens()
+        .filter_map(rowan::NodeOrToken::into_token)
+        .filter(|t| t.kind() == SyntaxKind::DOLLAR_BRACE)
+        .count();
+    assert_eq!(dollar_braces, 1);
+
+    // The lone `$5` lives inside a literal STRING_FRAGMENT.
+    assert!(
+        string
+            .descendants_with_tokens()
+            .filter_map(rowan::NodeOrToken::into_token)
+            .any(|t| t.kind() == SyntaxKind::STRING_FRAGMENT && t.text().contains("$5")),
+        "the lone `$5` must be part of literal fragment text"
+    );
+}
+
+// `{`/`}` *inside* an interpolation (malformed MPL) must not prematurely close
+// it: the `brace_open`/`brace_close` `logos` callbacks track nesting depth in
+// the shared `LexState` (`Extras`) across every `morph`, so the inner `{ }` pair
+// is balanced and only the final, depth-0 `}` closes the interpolation. This is
+// the one piece of state the modal lexer carries between modes.
+#[test]
+fn interpolation_brace_depth_tracked_in_extras() {
+    let input = "ds:cpu | where t == \"x ${ {} }\"";
+    let parsed = parse(input);
+    assert_eq!(parsed.syntax().text(), input, "must stay lossless");
+
+    // Across the whole (lossless) tree: one opener, one nested `{`, two `}` (the
+    // nested close + the interpolation close). Depth counting kept them straight.
+    let count = |kind| {
+        parsed
+            .syntax()
+            .descendants_with_tokens()
+            .filter_map(rowan::NodeOrToken::into_token)
+            .filter(|t| t.kind() == kind)
+            .count()
+    };
+    assert_eq!(count(SyntaxKind::DOLLAR_BRACE), 1);
+    assert_eq!(count(SyntaxKind::L_BRACE), 1);
+    assert_eq!(count(SyntaxKind::R_BRACE), 2);
 }
 
 #[test]
@@ -238,8 +296,8 @@ fn unterminated_interpolated_string_recovers_interior_structure() {
         "the interpolation expr keeps the in-progress `b` ident"
     );
 
-    // Still flagged as unterminated, with the extent running to EOF (unchanged
-    // from the opaque-ERROR-token behaviour it replaces).
+    // Still flagged as unterminated, with the extent running to EOF: the lexer
+    // hit EOF in string mode and recorded the opening quote's offset.
     assert!(
         parsed.errors().iter().any(
             |e| e.message == "unterminated string" && usize::from(e.range.end()) == input.len()
