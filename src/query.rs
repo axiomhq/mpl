@@ -2,29 +2,73 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
-    num::TryFromIntError,
+    num::{ParseFloatError, TryFromIntError},
+    str::FromStr,
 };
 
 #[cfg(feature = "clock")]
 use chrono::Utc;
 use chrono::{DateTime, Duration, FixedOffset};
 use miette::SourceSpan;
-use pest::Parser as _;
 use strumbra::SharedString;
 
 use crate::{
     ParseError,
     enc_regex::EncodableRegex,
     linker::{AlignFunction, ComputeFunction, GroupFunction, MapFunction},
-    parser::{self, MPLParser, ParseParamError, Rule},
+    slice,
     tags::TagValue,
     time::{Resolution, ResolutionError},
     types::{BucketSpec, BucketType, Dataset, Metric, Parameterized},
 };
 
+/// Error returned while parsing a host-supplied param value string.
+#[derive(Debug, thiserror::Error)]
+pub enum ParseParamError {
+    /// Underlying parse error
+    #[error("Failed to parse: {0}")]
+    Parse(#[from] ParseError),
+    /// Failed to parse as bool
+    #[error("Failed to param as bool: {0}")]
+    ParseBool(<bool as FromStr>::Err),
+    /// Failed to parse as float
+    #[error("Failed to parse as float: {0}")]
+    ParseFloat(#[from] ParseFloatError),
+    /// Failed to construct a shared string
+    #[error("Failed to parse identifier: {0}")]
+    SharedStringError(#[from] strumbra::Error),
+    /// Declared type does not match the value form
+    #[error("Param is declared as type {declared_typ}, but the provided value was `{found}`")]
+    TypeMismatch {
+        /// The declared param type
+        declared_typ: ParamType,
+        /// The provided value
+        found: String,
+    },
+    /// None-typed params are not supported
+    #[error("None Type Params are not supported")]
+    NoneParam,
+}
+
 mod fmt;
 #[cfg(test)]
 mod tests;
+
+/// Returns `true` when `name` is a bare identifier the chumsky grammar lexes as
+/// an `IDENT` and can therefore be written without backtick escaping.
+///
+/// This is the single Rust source of truth for the `plain_ident` rule: it
+/// reuses the lexer's own [`slice::is_ident_start`] / [`slice::is_ident_continue`]
+/// character classes, so the [`Display`] impls (via `escape_ident`) and editor
+/// tooling route through the grammar instead of re-spelling the classes.
+#[must_use]
+pub fn is_plain_ident(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if slice::is_ident_start(c) => chars.all(slice::is_ident_continue),
+        _ => false,
+    }
+}
 
 /// Metric identifier
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -732,17 +776,8 @@ impl ProvidedParams {
                 continue;
             };
 
-            // parse mpl
-            let parsed = MPLParser::parse(Rule::param_value, value).map_err(|err| {
-                ParseProvidedParamsError::ParseParam {
-                    param_name: name.to_string(),
-                    expected_type: mpl_param.typ,
-                    err: ParseParamError::Parse(ParseError::from(err)),
-                }
-            })?;
-
             // parse as correct type
-            let value = parser::parse_param_value(mpl_param, parsed).map_err(|err| {
+            let value = slice::parse_param_value(mpl_param, value).map_err(|err| {
                 ParseProvidedParamsError::ParseParam {
                     param_name: name.to_string(),
                     expected_type: mpl_param.typ,

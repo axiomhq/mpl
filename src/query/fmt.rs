@@ -11,12 +11,7 @@ use crate::{
 };
 
 fn escape_ident(f: &mut std::fmt::Formatter<'_>, ident: &str) -> std::fmt::Result {
-    let mut chars = ident.chars();
-
-    if let Some(c) = chars.next()
-        && (c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
+    if super::is_plain_ident(ident) {
         write!(f, "{ident}")
     } else {
         write!(f, "`{}`", ident.replace('\\', "\\\\").replace('`', "\\`"))

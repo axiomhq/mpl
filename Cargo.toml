@@ -51,14 +51,20 @@ strumbra = { version = "0.6", features = ["serde"] }
 ordered-float = "5"
 ron = { version = "0.12", optional = true }
 arborium = { version = "2", optional = true, default-features = false, features = ["lang-ron", "lang-json"] }
-pest = "2.8.6"
-pest_derive = "2.8.6"
+# chumsky drives the MPL parser (`src/slice.rs`). `default-features = false`
+# drops the `stacker` feature so the crate still compiles to
+# `wasm32-unknown-unknown` for the editor bundle.
+chumsky = { version = "0.13", default-features = false, features = ["std"] }
 serde_regex = "1"
 strsim = "0.11.1"
 miette = { version = "7.6.0", features = ["serde"] }
 
 [dev-dependencies]
 test-case = "3"
+# PHASE B spike only: chumsky->rowan CST feasibility experiment lives in
+# `tests/cst_spike.rs`. Kept a dev-dependency on purpose so it does NOT enter
+# the library / wasm dependency tree (the spike must not affect the build).
+rowan = "0.16"
 
 [features]
 default = ["bincode", "clock"]

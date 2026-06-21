@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import * as mpl from "@axiomhq/mpl";
 import {
   extractParamAt,
   mergeSystemParamsInto,
@@ -7,53 +8,39 @@ import {
 } from "./hover";
 import type { MplSystemParam } from "./system-params";
 
+// The `param` declaration grammar is parsed in Rust (wasm
+// `param_declarations`, reusing the completion engine's scanner). Parsing
+// edge cases — Option<T> unwrapping, whitespace tolerance, missing `;`,
+// commented-out lines — are covered by the Rust `declared_params` /
+// `extract_declared_params` suites. These tests only exercise the thin TS
+// adapter that reshapes the wasm array into the Map the hover source uses,
+// with the wasm boundary mocked.
 describe("parseParamDeclarations", () => {
-  it("returns an empty map for a doc with no params", () => {
-    const decls = parseParamDeclarations("ds:metric | where x == 1");
-    expect(decls.size).toBe(0);
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it("parses a simple non-optional declaration", () => {
+  it("maps wasm declarations into a Map keyed by the $-prefixed name", () => {
+    vi.spyOn(mpl, "param_declarations").mockReturnValue([
+      { name: "$env", type: "string", optional: false },
+      { name: "$container", type: "string", optional: true },
+    ]);
     const decls = parseParamDeclarations("param $env: string;\nds:metric");
+    expect(decls.size).toBe(2);
     expect(decls.get("$env")).toEqual({ type: "string", optional: false });
-  });
-
-  it("parses an Option<T> declaration and unwraps the inner type", () => {
-    const decls = parseParamDeclarations(
-      "param $container: Option<string>;\nds:metric",
-    );
     expect(decls.get("$container")).toEqual({ type: "string", optional: true });
   });
 
-  it("collects multiple declarations into a single map", () => {
-    const decls = parseParamDeclarations(
-      "param $ds: Dataset;\nparam $w: Duration;\nparam $f: Option<int>;\nds:m",
-    );
-    expect(decls.size).toBe(3);
-    expect(decls.get("$ds")?.optional).toBe(false);
-    expect(decls.get("$w")?.type).toBe("Duration");
-    expect(decls.get("$f")).toEqual({ type: "int", optional: true });
+  it("returns an empty map when wasm reports no declarations", () => {
+    vi.spyOn(mpl, "param_declarations").mockReturnValue([]);
+    expect(parseParamDeclarations("ds:metric | where x == 1").size).toBe(0);
   });
 
-  it("tolerates extra whitespace around colon and Option brackets", () => {
-    const decls = parseParamDeclarations(
-      "param $a :  Option<  Regex  >  ;\nds:m",
-    );
-    expect(decls.get("$a")).toEqual({ type: "Regex", optional: true });
-  });
-
-  it("ignores incomplete declarations missing a semicolon", () => {
-    // Mid-typing: no `;` yet — parser must not match a partial line
-    const decls = parseParamDeclarations("param $env: string\nds:metric");
-    expect(decls.size).toBe(0);
-  });
-
-  it("ignores commented-out declarations", () => {
-    const decls = parseParamDeclarations(
-      "// param $shadowed: string;\nparam $real: int;\nds:m",
-    );
-    expect(decls.has("$shadowed")).toBe(false);
-    expect(decls.get("$real")?.type).toBe("int");
+  it("returns an empty map when the wasm module is unavailable", () => {
+    vi.spyOn(mpl, "param_declarations").mockImplementation(() => {
+      throw new Error("wasm not ready");
+    });
+    expect(parseParamDeclarations("param $env: string;\nds:m").size).toBe(0);
   });
 });
 
@@ -137,11 +124,13 @@ describe("mergeSystemParamsInto", () => {
   it("does not overwrite an inline declaration of the same name", () => {
     // Inline `param` declarations win on name collision — same precedence
     // the completion source enforces, so hover, completion, and the
-    // language server agree on which type wins.
-    const decls = parseParamDeclarations("param $__interval: int;\nds:m");
-    mergeSystemParamsInto(decls, [
-      { name: "__interval", type: "Duration" },
+    // language server agree on which type wins. The inline decl is built
+    // directly (parsing is covered separately) to keep this a focused test
+    // of the merge precedence rather than the wasm parser.
+    const decls = new Map<string, ParamDecl>([
+      ["$__interval", { type: "int", optional: false }],
     ]);
+    mergeSystemParamsInto(decls, [{ name: "__interval", type: "Duration" }]);
     expect(decls.get("$__interval")?.type).toBe("int");
   });
 

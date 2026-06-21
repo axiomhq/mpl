@@ -75,6 +75,30 @@ pub fn function_info(label: &str) -> JsValue {
     to_js_value(&mpl_language_server::function_info(label))
 }
 
+/// Returns the inline `param` declarations in `query` as an array of
+/// `{ name, type, optional }` objects, where `name` carries the leading `$`
+/// and `type` is the canonical spelling (`Dataset`, `string`, …). Optional
+/// params report the unwrapped inner type with `optional: true`.
+///
+/// Backs the editor's param hover so the `param` grammar is parsed only in
+/// Rust (no JS-side declaration regex).
+#[must_use]
+#[wasm_bindgen]
+pub fn param_declarations(query: &str) -> JsValue {
+    to_js_value(&mpl_language_server::declared_params(query))
+}
+
+/// Returns `true` when `name` is a bare identifier the grammar accepts
+/// without backtick escaping (`[A-Za-z_][A-Za-z0-9_]*`).
+///
+/// Single source of truth for the editor's `needsEscape` decision, replacing
+/// the JS `plain_ident` regex that could silently drift from the grammar.
+#[must_use]
+#[wasm_bindgen]
+pub fn is_plain_ident(name: &str) -> bool {
+    mpl_lang::is_plain_ident(name)
+}
+
 /// Returns diagnostics (errors / warnings / lints) for `query`.
 #[must_use]
 #[wasm_bindgen]

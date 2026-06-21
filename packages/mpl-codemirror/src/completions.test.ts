@@ -55,6 +55,14 @@ describe("needsEscape", () => {
     expect(needsEscape("foo_bar")).toBe(false);
   });
 
+  it("treats a leading underscore as plain (matches the Rust IDENT grammar)", () => {
+    // The grammar's `IDENT` rule is `[A-Za-z_][A-Za-z0-9_]*`, so `_foo` needs
+    // no escaping. The old JS regex (`^[A-Za-z]…`) wrongly escaped it; routing
+    // `needsEscape` through the shared Rust `is_plain_ident` removes that drift.
+    expect(needsEscape("_foo")).toBe(false);
+    expect(needsEscape("_")).toBe(false);
+  });
+
   it("returns true for names with hyphens", () => {
     expect(needsEscape("metrixs-dev")).toBe(true);
   });

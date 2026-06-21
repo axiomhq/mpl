@@ -16,7 +16,6 @@ mpl-lang = { path = "../..", default-features = false }
 derive_more = { version = "2", features = ["deref"] }
 eyre = "0.6"
 miette = "7.6.0"
-pest = "2.8.6"
 rand = "0.10"
 getrandom = { version = "0.4", features = ["wasm_js"] }
 serde = "1"

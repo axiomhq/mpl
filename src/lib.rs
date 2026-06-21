@@ -9,13 +9,11 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(unused_assignments)] // We need this for the type error
 
-mod parser;
-pub use parser::{MPLParser, Rule};
-
 pub mod enc_regex;
 pub mod errors;
 pub mod linker;
 pub mod query;
+pub mod slice;
 mod stdlib;
 pub mod tags;
 pub mod time;
@@ -32,8 +30,7 @@ use std::{
 
 pub use errors::ParseError;
 use miette::{Diagnostic, SourceOffset, SourceSpan};
-use pest::Parser as _;
-pub use query::Query;
+pub use query::{Query, is_plain_ident};
 
 pub use stdlib::STDLIB;
 
@@ -72,8 +69,7 @@ pub fn compile<S: BuildHasher>(
     system_params: HashMap<String, ParamType, S>,
 ) -> Result<(Query, Warnings), CompileError> {
     // stage 1: parse
-    let mut parse = MPLParser::parse(Rule::file, query).map_err(ParseError::from)?;
-    let (mut query, warnings) = parser::Parser::default().parse_query(&mut parse, system_params)?;
+    let (mut query, warnings) = slice::parse_query(query, system_params)?;
     // stage 2: typecheck
     let mut visitor = ParamTypecheckVisitor {};
     visitor.walk(&mut query)?;

@@ -1,46 +1,28 @@
 //! Lint rules for successfully-parsed MPL queries.
+//!
+//! Driven off the `chumsky` lexer ([`mpl_lang::slice::highlight`]) plus a
+//! parse-success gate ([`mpl_lang::slice::parse`]): lints only fire when the
+//! query parses, and operate on the (total) token stream rather than a parse
+//! tree. This replaces the former pest `PairVisitor` walk.
 
-use pest::Parser as _;
+use mpl_lang::slice::{self, HlKind};
 
-use mpl_lang::{MPLParser, Rule};
-
+use crate::Span;
 use crate::diagnostics::{DiagnosticAction, DiagnosticItem, Severity};
-use crate::visit::{Node, PairVisitor, VisitAction};
 
-/// A lint rule: when the walker encounters `rule`, `check` is called with
-/// the node and source text. Return `Some` to emit a diagnostic.
-struct LintRule {
-    rule: Rule,
-    check: fn(Node, &str) -> Option<DiagnosticItem>,
-}
-
-const LINT_RULES: &[LintRule] = &[
-    LintRule {
-        rule: Rule::kw_filter,
-        check: lint_filter_keyword,
-    },
-    LintRule {
-        rule: Rule::escaped_ident,
-        check: lint_unnecessary_escape,
-    },
-];
-// Note: lowercase `duration` is now reported by the parser itself as a
-// `WarningReason::OldDuration` and surfaced via `Warning::to_diagnostic_item`.
-// See `diagnostics.rs`.
-
-#[allow(clippy::unnecessary_wraps)] // signature dictated by LintRule::check
-fn lint_filter_keyword(node: Node, _source: &str) -> Option<DiagnosticItem> {
-    Some(DiagnosticItem {
-        span: node.span,
+/// `filter` is the deprecated spelling of `where`.
+fn lint_filter_keyword(span: Span) -> DiagnosticItem {
+    DiagnosticItem {
+        span,
         severity: Severity::Hint,
         message: "Consider using `where` instead of `filter`".to_string(),
         help: Some("`filter` is deprecated; `where` is preferred".to_string()),
         actions: vec![DiagnosticAction {
             name: "Replace with `where`".to_string(),
-            span: node.span,
+            span,
             insert: "where".to_string(),
         }],
-    })
+    }
 }
 
 /// Returns `true` when `s` is a valid unescaped identifier per the
@@ -55,58 +37,52 @@ fn is_plain_ident(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-fn lint_unnecessary_escape(node: Node, source: &str) -> Option<DiagnosticItem> {
-    let text = &source[node.span.from..node.span.to];
+fn lint_unnecessary_escape(span: Span, source: &str) -> Option<DiagnosticItem> {
+    let text = source.get(span.from..span.to)?;
     let inner = text.strip_prefix('`')?.strip_suffix('`')?;
     if inner.is_empty() || !is_plain_ident(inner) {
         return None;
     }
     Some(DiagnosticItem {
-        span: node.span,
+        span,
         severity: Severity::Hint,
         message: "Unnecessary backtick escaping".to_string(),
         help: Some(format!("`{inner}` is a valid unescaped identifier")),
         actions: vec![DiagnosticAction {
             name: "Remove backticks".to_string(),
-            span: node.span,
+            span,
             insert: inner.to_string(),
         }],
     })
 }
 
-struct LintVisitor<'a> {
-    lints: &'a [LintRule],
-    source: &'a str,
-    items: Vec<DiagnosticItem>,
-}
-
-impl PairVisitor for LintVisitor<'_> {
-    fn enter(&mut self, node: Node) -> VisitAction {
-        for lint in self.lints {
-            if node.rule == lint.rule {
-                if let Some(item) = (lint.check)(node, self.source) {
-                    self.items.push(item);
-                }
-                return VisitAction::Skip;
-            }
-        }
-        VisitAction::Walk
-    }
-}
-
 /// Runs lint rules against a successfully-parsed query and returns
 /// any hint diagnostics.
+///
+/// The parse-success gate matters: a query that does not parse (e.g. a
+/// dataset with no metric) produces no hints, matching the old behavior.
 pub(crate) fn detect_hints(query: &str) -> Vec<DiagnosticItem> {
-    let Ok(pairs) = MPLParser::parse(Rule::file, query) else {
+    let parsed = slice::parse(query);
+    if parsed.query.is_none() || !parsed.errors.is_empty() {
         return vec![];
-    };
-    let mut visitor = LintVisitor {
-        lints: LINT_RULES,
-        source: query,
-        items: Vec::new(),
-    };
-    visitor.walk_pairs(pairs);
-    visitor.items
+    }
+
+    let mut items = Vec::new();
+    for token in slice::highlight(query) {
+        let span = Span::new(token.from, token.to);
+        match token.kind {
+            HlKind::Keyword if query.get(token.from..token.to) == Some("filter") => {
+                items.push(lint_filter_keyword(span));
+            }
+            HlKind::Variable => {
+                if let Some(item) = lint_unnecessary_escape(span, query) {
+                    items.push(item);
+                }
+            }
+            _ => {}
+        }
+    }
+    items
 }
 
 #[cfg(test)]
