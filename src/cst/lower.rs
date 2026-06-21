@@ -1052,25 +1052,15 @@ pub enum ParseParamError {
 /// Parse a caller-supplied runtime `value` for the given declared `param`.
 ///
 /// Replaces the old pest `param_value` external entry point: the value is lexed
-/// with the CST lexer and matched against the param's declared type.
+/// with the hand-written CST lexer ([`super::lexer::tokenize_raw`], which keeps
+/// a string literal as one `STRING` token) and matched against the param's
+/// declared type.
 pub fn parse_param_value(
     param: &ParamDeclaration,
     value: &str,
 ) -> std::result::Result<ParamValue, ParseParamError> {
-    use logos::Logos as _;
-
     // The leading (non-trivia) tokens of the value.
-    let toks: Vec<(SyntaxKind, &str)> = {
-        let mut lexer = SyntaxKind::lexer(value);
-        let mut out = Vec::new();
-        while let Some(res) = lexer.next() {
-            let kind = res.unwrap_or(SyntaxKind::ERROR);
-            if !kind.is_trivia() {
-                out.push((kind, &value[lexer.span()]));
-            }
-        }
-        out
-    };
+    let toks = super::lexer::tokenize_raw(value);
     let mismatch = || ParseParamError::TypeMismatch {
         declared_typ: param.typ,
     };

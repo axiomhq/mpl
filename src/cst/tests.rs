@@ -74,10 +74,11 @@ fn interpolated_string_roundtrips_losslessly() {
 // only skipped `\` and `"` — it was blind to backtick idents, `#/regex/`
 // literals and `//` comments, all of which can carry a `}` or `"`. So it
 // stopped at the `}` inside the ident name and mis-detected the `${ … }`
-// boundary (empty interpolation + an ERROR_NODE + 3 spurious errors). The new
-// lexer lexes each `${ … }` interior with `logos` and counts brace *tokens*, so
-// `` `a}b` `` is a single ESCAPED_IDENT and the `}` inside it is never a
-// delimiter; the interior parses as one ESCAPED_IDENT with no errors.
+// boundary (empty interpolation + an ERROR_NODE + 3 spurious errors). The
+// hand-written lexer lexes each `${ … }` interior with the same `scan_token`
+// and counts brace *tokens*, so `` `a}b` `` is a single ESCAPED_IDENT and the
+// `}` inside it is never a delimiter; the interior parses as one ESCAPED_IDENT
+// with no errors.
 #[test]
 fn interpolation_with_braced_escaped_ident_parses_cleanly() {
     let input = r#"ds:cpu | where t == "x ${ `a}b` }""#;
@@ -107,9 +108,9 @@ fn interpolation_with_braced_escaped_ident_parses_cleanly() {
 // (a) The same class of bug, but the escaped ident carries a `"` instead of a
 // `}`. The old byte scanner's `string_end`/`find_interp_close` toggled on every
 // `"`, so the quote inside `` `a"b` `` was read as the string's closing quote
-// and the boundary collapsed. Lexing the interior with `logos` makes `` `a"b` ``
-// a single ESCAPED_IDENT, so the embedded `"` is part of that token, never a
-// delimiter. The interior must be exactly that one escaped ident, no errors.
+// and the boundary collapsed. Lexing the interior token-by-token makes
+// `` `a"b` `` a single ESCAPED_IDENT, so the embedded `"` is part of that token,
+// never a delimiter. The interior must be exactly that one escaped ident, no errors.
 #[test]
 fn interpolation_with_quoted_escaped_ident_parses_cleanly() {
     let input = r#"ds:cpu | where t == "x ${ `a"b` }""#;
@@ -140,8 +141,8 @@ fn interpolation_with_quoted_escaped_ident_parses_cleanly() {
 // containing a `}` before the *real* closing `}` on the next line. The old
 // `find_interp_close` byte scanner had no notion of comments, so it would stop
 // at the `}` inside the comment and mis-detect the boundary. Lexing the
-// interior with `logos` makes the `// …}` a single COMMENT token, so its `}` is
-// not a delimiter and the boundary is the real `}`. The interior may error on
+// interior token-by-token makes the `// …}` a single COMMENT token, so its `}`
+// is not a delimiter and the boundary is the real `}`. The interior may error on
 // *semantics* (a bare `x` is not a complete expr value here), but the BOUNDARY
 // must be right: the outer STRING must span to the final `"`, and the whole
 // input must round-trip byte-for-byte.
