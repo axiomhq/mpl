@@ -1,6 +1,6 @@
 [package]
 name = "mpl-language-server-wasm"
-version = "0.5.7"
+version = "0.5.8"
 edition = "2024"
 authors = ["Seoyoung Lee <seoyoung@axiom.co>", "Arne Bahlo <arne@axiom.co>", "Heinz Gies <heinz@axiom.co>", "Samuel Cristobal <samu@messy.page>"]
 description = "WebAssembly bindings around mpl-language-server"
