@@ -30,7 +30,7 @@ if (typeof mpl.diagnostics !== "function") {
   process.exit(1);
 }
 
-for (const fn of ["parse_wasm", "parse_json", "parse_ron", "extract_dataset"]) {
+for (const fn of ["parse_wasm", "parse_json", "parse_ron", "extract_dataset", "declared_params"]) {
   if (typeof mpl[fn] !== "function") {
     console.error(`ERROR: ${fn}() not exported — wrong build artifact?`);
     process.exit(1);
@@ -110,6 +110,43 @@ if (datasetWithParams === "my_dataset") {
 } else {
   console.error(
     `  FAIL  extract_dataset accepts registered system param: expected my_dataset, got ${String(datasetWithParams)}`
+  );
+  failed++;
+}
+
+// --- declared_params -------------------------------------------------------
+
+console.log("\nDeclared params");
+
+const declaredParamsQuery =
+  "param $dataset: Dataset;\nparam $name: Option<string>;\n$dataset:metric";
+const declared = mpl.declared_params(declaredParamsQuery);
+const declaredOk =
+  Array.isArray(declared) &&
+  declared.length === 2 &&
+  declared[0].name === "dataset" &&
+  declared[0].type === "Dataset" &&
+  declared[0].optional === false &&
+  declared[1].name === "name" &&
+  declared[1].type === "string" &&
+  declared[1].optional === true;
+if (declaredOk) {
+  console.log("  PASS  declared_params returns names, types and optional flags");
+  passed++;
+} else {
+  console.error(
+    `  FAIL  declared_params: unexpected result ${JSON.stringify(declared)}`
+  );
+  failed++;
+}
+
+const noParams = mpl.declared_params("my_dataset:my_metric");
+if (Array.isArray(noParams) && noParams.length === 0) {
+  console.log("  PASS  declared_params returns [] when none declared");
+  passed++;
+} else {
+  console.error(
+    `  FAIL  declared_params: expected [] but got ${JSON.stringify(noParams)}`
   );
   failed++;
 }

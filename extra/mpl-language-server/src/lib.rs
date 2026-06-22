@@ -6,6 +6,7 @@
 //! `#[wasm_bindgen]` shims.
 
 mod completions;
+mod declared_params;
 mod diagnostics;
 mod lints;
 mod parser;
@@ -18,6 +19,7 @@ pub use completions::{
     FunctionInfo, FunctionItem, GROUP_FN_NAMES, KeywordItem, MAP_FN_NAMES, ParamItem, ParamType,
     compute_completions_with_params, function_info,
 };
+pub use declared_params::{DeclaredParam, declared_params};
 pub use diagnostics::{
     DiagnosticAction, DiagnosticItem, Severity, compute_diagnostics, compute_diagnostics_raw,
 };

@@ -105,6 +105,19 @@ pub fn extract_dataset(query: &str, system_params: JsValue) -> Option<String> {
     extract_dataset_from_query(query, &specs)
 }
 
+/// Returns the parameters a query declares inline (`param $x: int;`) as an
+/// array of `{ name, type, optional }` objects.
+///
+/// Scans the query preamble, tolerating an incomplete query body, so params
+/// are reported even while the query is still being written. Unlike the
+/// `parse_*` shims this takes no `system_params`: host-injected params are not
+/// *declared* by the query.
+#[must_use]
+#[wasm_bindgen]
+pub fn declared_params(query: &str) -> JsValue {
+    to_js_value(&mpl_language_server::declared_params(query))
+}
+
 /// Parses a query string into a `Query` AST encoded as a JS object.
 #[wasm_bindgen]
 pub fn parse_wasm(query: &str, system_params: JsValue) -> Result<JsValue, String> {
