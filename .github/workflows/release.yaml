@@ -30,7 +30,7 @@ jobs:
             echo "Version mismatch! Release is at $RELEASE_VERSION, crate is at $CRATE_VERSION"
             exit 1
           elif [ "$CODEMIRROR_VERSION" != "$RELEASE_VERSION" ]; then
-            echo "Version mismatch! Release is at $RELEASE_VERSION, mpl-codemirror is at $CRATE_VERSION"
+            echo "Version mismatch! Release is at $RELEASE_VERSION, mpl-codemirror is at $CODEMIRROR_VERSION"
             exit 1
           fi
   publish-npm:
@@ -84,4 +84,3 @@ jobs:
       - run: cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
