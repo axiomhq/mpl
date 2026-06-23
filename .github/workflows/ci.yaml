@@ -8,6 +8,20 @@ on:
       - main
 
 jobs:
+  check-versions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check versions
+        run: |
+          set -euo pipefail
+
+          export CRATE_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r .packages[0].version)"
+          export CODEMIRROR_VERSION="$(jq -r .version packages/mpl-codemirror/package.json)"
+          if [ "$CRATE_VERSION" != "$CODEMIRROR_VERSION" ]; then
+            echo "Version mismatch! Crate is at $CRATE_VERSION, mpl-codemirror is at $CODEMIRROR_VERSION"
+            exit 1
+          fi
   format-rust:
     name: cargo fmt
     runs-on: ubuntu-latest
