@@ -137,7 +137,7 @@ fn unescape(data: &str, delim: char) -> String {
 fn parse_ident(source: &Pair<'_, Rule>) -> Result<String> {
     match source.as_rule() {
         Rule::plain_ident => Ok(source.as_str().to_string()),
-        Rule::escaped_ident => Ok(unescape_and_trim(source.as_str(), '`').clone()),
+        Rule::escaped_ident => Ok(unescape_and_trim(source.as_str(), '`')),
         rule => Err(ParseError::Unexpected {
             span: pair_to_source_span(source),
             rule,
@@ -147,8 +147,9 @@ fn parse_ident(source: &Pair<'_, Rule>) -> Result<String> {
 }
 
 fn resolve_param<'p>(source: &Pair<'_, Rule>, state: &'p State) -> Result<&'p ParamDeclaration> {
-    let name = match source.as_rule() {
-        Rule::plain_ident => source.as_str(),
+    let param = match source.as_rule() {
+        Rule::plain_ident => source.as_str().to_string(),
+        Rule::escaped_ident => unescape_and_trim(source.as_str(), '`'),
         rule => {
             return Err(ParseError::Unexpected {
                 span: pair_to_source_span(source),
@@ -158,16 +159,14 @@ fn resolve_param<'p>(source: &Pair<'_, Rule>, state: &'p State) -> Result<&'p Pa
         }
     };
 
-    let param = state
+    state
         .params
         .iter()
-        .find(|p| p.name == name)
+        .find(|p| p.name == param)
         .ok_or(ParseError::UndefinedParam {
             span: pair_to_source_span(source),
-            param: name.to_string(),
-        })?;
-
-    Ok(param)
+            param,
+        })
 }
 
 fn parse_source_ident(source: &Pair<'_, Rule>) -> Result<String> {
