@@ -486,7 +486,7 @@ impl std::fmt::Display for TimeType {
             TimeType::Avg => write!(f, "avg"),
             TimeType::Min => write!(f, "min"),
             TimeType::Max => write!(f, "max"),
-            TimeType::Rate => write!(f, "rate"),
+            TimeType::Rate => write!(f, "prom::rate"),
             TimeType::Last => write!(f, "last"),
         }
     }
