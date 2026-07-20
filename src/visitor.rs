@@ -539,13 +539,14 @@ pub trait QueryWalker: QueryVisitor {
             return Ok(());
         }
         match rhs {
-            Cmp::Eq(parameterized)
-            | Cmp::Ne(parameterized)
-            | Cmp::Gt(parameterized)
-            | Cmp::Ge(parameterized)
-            | Cmp::Lt(parameterized)
-            | Cmp::Le(parameterized) => {
-                QueryWalker::walk_expr(self, parameterized)?;
+            Cmp::Eq(expr)
+            | Cmp::Ne(expr)
+            | Cmp::Gt(expr)
+            | Cmp::Ge(expr)
+            | Cmp::Lt(expr)
+            | Cmp::Le(expr)
+            | Cmp::In(expr) => {
+                QueryWalker::walk_expr(self, expr)?;
             }
             Cmp::RegEx(parameterized) | Cmp::RegExNot(parameterized) => {
                 QueryWalker::walk_parameterized_regex(self, parameterized)?;

@@ -31,6 +31,7 @@ number =  { inf | float | int }
 float  = @{ int ~ ("." ~ ASCII_DIGIT*) ~ (^"e" ~ int)? }
 int    =  { ("+" | "-")? ~ ASCII_DIGIT+ }
 bool   = @{ ("true" | "false") ~ word_boundary }
+array  =  { "[" ~ (const ~ ("," ~ const)*)? ~ "]" }
 
 regex_replace_src =  { regex_inner }
 regex_replace_dst =  { regex_inner }
@@ -80,7 +81,7 @@ tags = { tag ~ ("," ~ tag)* }
 
 source = { metric_id ~ time_range? ~ as? }
 
-cmp    = @{ "==" | "!=" | "<=" | "<" | ">=" | ">" }
+cmp    = @{ "==" | "!=" | "<=" | "<" | ">=" | ">" | "in" }
 cmp_re = @{ "==" | "!=" }
 
 kw_is = { "is" }
@@ -128,17 +129,17 @@ optional_type     =  { "Option" ~ "<" ~ (tag_type | param_native_type) ~ ">" }
 param_type        =  { param_native_type | tag_type | optional_type }
 param_ident       = ${ "$" ~ ident }
 param             =  { "param" ~ param_ident ~ ":" ~ param_type ~ ";" }
-// used for parsing provided params
 
+// used for parsing provided params
 expr = { const | param_ident | ident }
 
-const = { string | float | int | bool | inf }
+const = { string | float | int | bool | inf | array }
 
-kw_to = { "to" }
-kw_over = { "over" }
+kw_to    = { "to" }
+kw_over  = { "over" }
 kw_using = { "using" }
 kw_align = { "align" }
-kw_by = { "by" }
+kw_by    = { "by" }
 kw_group = { "group" }
 
 align = { kw_align ~ (kw_to ~ time_relative_parameterized)? ~ (kw_over ~ time_relative_parameterized)? ~ kw_using ~ func }

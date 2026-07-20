@@ -358,12 +358,14 @@ impl QueryVisitor for ParamTypecheckVisitor {
 
         match cmp {
             Cmp::Is(_)
-            | Cmp::Eq(Expr::Const(_) | Expr::String(_) | Expr::Tag(_))
-            | Cmp::Ne(Expr::Const(_) | Expr::String(_) | Expr::Tag(_))
-            | Cmp::Gt(Expr::Const(_) | Expr::String(_) | Expr::Tag(_))
-            | Cmp::Ge(Expr::Const(_) | Expr::String(_) | Expr::Tag(_))
-            | Cmp::Lt(Expr::Const(_) | Expr::String(_) | Expr::Tag(_))
-            | Cmp::Le(Expr::Const(_) | Expr::String(_) | Expr::Tag(_)) => Ok(VisitRes::Walk),
+            | Cmp::In(_) // TODO: we exclude arrays for now in parameters
+            | Cmp::Eq(Expr::Const(_) | Expr::String(_) | Expr::Tag(_) | Expr::Array(_))
+            | Cmp::Ne(Expr::Const(_) | Expr::String(_) | Expr::Tag(_) | Expr::Array(_))
+            | Cmp::Gt(Expr::Const(_) | Expr::String(_) | Expr::Tag(_) | Expr::Array(_))
+            | Cmp::Ge(Expr::Const(_) | Expr::String(_) | Expr::Tag(_) | Expr::Array(_))
+            | Cmp::Lt(Expr::Const(_) | Expr::String(_) | Expr::Tag(_) | Expr::Array(_))
+            | Cmp::Le(Expr::Const(_) | Expr::String(_) | Expr::Tag(_) | Expr::Array(_)) => Ok(VisitRes::Walk),
+
             Cmp::Eq(Expr::Param { span, param }) => {
                 if param.typ() == TerminalParamType::Regex {
                     // we have a regex param in an eq

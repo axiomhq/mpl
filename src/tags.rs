@@ -25,6 +25,8 @@ pub enum TagValue {
     Float(f64),
     /// String value
     String(#[cfg_attr(feature = "bincode", bincode(with_serde))] SharedString),
+    /// Array value
+    Array(Vec<TagValue>),
 }
 impl TagValue {
     /// Returns the type of the tag value.
@@ -36,6 +38,7 @@ impl TagValue {
             Self::Int(_) => TagType::Int,
             Self::Float(_) => TagType::Float,
             Self::String(_) => TagType::String,
+            Self::Array(_) => TagType::Array,
         }
     }
 }
@@ -55,6 +58,7 @@ impl fmt::Debug for TagValue {
                     .field(&hasher.finish())
                     .finish()
             }
+            Self::Array(arg0) => f.debug_tuple("Array").field(arg0).finish(),
         }
     }
 }
@@ -69,6 +73,7 @@ impl Ord for TagValue {
             (TagValue::Float(a), TagValue::Float(b)) => OrderedFloat(*a).cmp(&OrderedFloat(*b)),
             (TagValue::String(a), TagValue::String(b)) => a.cmp(b),
             (TagValue::Bool(a), TagValue::Bool(b)) => a.cmp(b),
+            (TagValue::Array(a), TagValue::Array(b)) => a.cmp(b),
 
             // If we have two numeric values of different types,
             // cast them to f64 for and compare
@@ -102,6 +107,9 @@ impl Ord for TagValue {
             // now everything else is larger than float
             (TagValue::Float(_), _) => std::cmp::Ordering::Less,
             (_, TagValue::Float(_)) => std::cmp::Ordering::Greater,
+            // now everything else is larger than string
+            (TagValue::String(_), _) => std::cmp::Ordering::Less,
+            (_, TagValue::String(_)) => std::cmp::Ordering::Greater,
             // string is the largest type - this is a unreachable case
             // as the prior matches already handle this.
             // (TagValue::String(_), _) => std::cmp::Ordering::Less,
@@ -131,6 +139,7 @@ impl TagValue {
         match self {
             TagValue::Null => 0,
             TagValue::String(s) => s.len(),
+            TagValue::Array(a) => a.len(),
             TagValue::Int(_) | TagValue::Float(_) => 8, // size of i64 or f64
             TagValue::Bool(_) => 1,                     // size of bool
         }
@@ -141,6 +150,7 @@ impl TagValue {
         match self {
             TagValue::Null => true,
             TagValue::String(s) => s.is_empty(),
+            TagValue::Array(a) => a.is_empty(),
             TagValue::Bool(_) | TagValue::Int(_) | TagValue::Float(_) => false, // bool, i64 and f64 are never empty
         }
     }
@@ -155,6 +165,7 @@ impl Hash for TagValue {
             TagValue::Int(i) => i.hash(state),
             TagValue::Float(fl) => OrderedFloat(*fl).hash(state),
             TagValue::Bool(b) => b.hash(state),
+            TagValue::Array(a) => a.hash(state),
         }
     }
 }
@@ -175,6 +186,16 @@ impl std::fmt::Display for TagValue {
             TagValue::Int(i) => write!(f, "{i}"),
             TagValue::Float(fl) => write!(f, "{fl}"),
             TagValue::Bool(b) => write!(f, "{b}"),
+            TagValue::Array(a) => {
+                write!(f, "[")?;
+                for (i, item) in a.iter().enumerate() {
+                    item.fmt(f)?;
+                    if i < a.len() - 1 {
+                        write!(f, ", ")?;
+                    }
+                }
+                write!(f, "]")
+            }
         }
     }
 }

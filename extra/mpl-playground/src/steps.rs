@@ -406,6 +406,7 @@ fn eval_expr(e: &Expr, tags: &HashMap<String, String>) -> Result<Option<String>>
             }
             Ok(Some(out))
         }
+        Expr::Array(_) => todo!(),
     }
 }
 
@@ -427,6 +428,7 @@ fn raw_tag(v: &TagValue) -> String {
         TagValue::Int(i) => i.to_string(),
         TagValue::Float(f) => f.to_string(),
         TagValue::String(s) => s.to_string(),
+        TagValue::Array(a) => a.iter().map(raw_tag).collect::<Vec<_>>().join(", "),
     }
 }
 
@@ -482,6 +484,7 @@ fn evaluate_cmp(tag_val: &str, rhs: &Cmp, tags: &HashMap<String, String>) -> Res
         Cmp::Ge(p) => numeric_cmp(p, |a, b| a >= b),
         Cmp::Lt(p) => numeric_cmp(p, |a, b| a < b),
         Cmp::Le(p) => numeric_cmp(p, |a, b| a <= b),
+        Cmp::In(_) => unimplemented!("in is not implemented"),
         Cmp::RegEx(p) => {
             let re = get_param(p)?;
             Ok(re.is_match(tag_val))
@@ -496,6 +499,7 @@ fn evaluate_cmp(tag_val: &str, rhs: &Cmp, tags: &HashMap<String, String>) -> Res
             TagType::Int => tag_val.parse::<i64>().is_ok(),
             TagType::Float => tag_val.parse::<f64>().is_ok(),
             TagType::String => true,
+            TagType::Array => false,
         }),
     }
 }
@@ -538,6 +542,8 @@ fn expr_tag_refs(e: &Expr) -> Vec<&str> {
                 StringFragment::Text(_) => vec![],
             })
             .collect(),
+        Expr::Array(parts) => parts.iter().flat_map(expr_tag_refs).collect(),
+
         Expr::Const(_) | Expr::Param { .. } => vec![],
     }
 }
@@ -547,7 +553,7 @@ fn expr_tag_refs(e: &Expr) -> Vec<&str> {
 fn cmp_expr(rhs: &Cmp) -> Option<&Expr> {
     match rhs {
         Cmp::Eq(e) | Cmp::Ne(e) | Cmp::Gt(e) | Cmp::Ge(e) | Cmp::Lt(e) | Cmp::Le(e) => Some(e),
-        Cmp::RegEx(_) | Cmp::RegExNot(_) | Cmp::Is(_) => None,
+        Cmp::RegEx(_) | Cmp::RegExNot(_) | Cmp::Is(_) | Cmp::In(_) => None,
     }
 }
 
