@@ -678,6 +678,7 @@ fn parse_value_filter(field: String, source: Pair<Rule>, state: &State) -> Resul
     let operator_pair = inner.n()?;
     let operator = parse_cmp(&operator_pair)?;
     let next = inner.n()?;
+    let value_span = pair_to_source_span(&next);
 
     let value = parse_expr(next, state)?;
 
@@ -690,16 +691,13 @@ fn parse_value_filter(field: String, source: Pair<Rule>, state: &State) -> Resul
         "<=" => Cmp::Le(value),
         "in" => match value {
             Expr::Const(TagValue::Array(_)) | Expr::Array(_) => Cmp::In(value),
-            Expr::Param { span: _, ref param }
+            Expr::Param { ref param, .. }
                 if param.typ() == TerminalParamType::Tag(TagType::Array) =>
             {
                 Cmp::In(value)
             }
             _ => {
-                return Err(ParseError::UnsupportedTagComparison {
-                    span: pair_to_source_span(&operator_pair),
-                    op: operator.to_string(),
-                });
+                return Err(ParseError::InRequiresArray { span: value_span });
             }
         },
         other => {

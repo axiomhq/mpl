@@ -210,7 +210,7 @@ pub enum ParseError {
     #[error("Unsupported tag comparison: {op}")]
     #[diagnostic(
         code(mpl_lang::unsupported_tag_comparison),
-        help("Supported operators: ==, !=, >, >=, <, <=")
+        help("Supported operators: ==, !=, >, >=, <, <=, in")
     )]
     UnsupportedTagComparison {
         /// The source location of the unsupported operator
@@ -218,6 +218,18 @@ pub enum ParseError {
         span: SourceSpan,
         /// The unsupported operator
         op: String,
+    },
+
+    /// `in` used with a non-array right-hand side
+    #[error("`in` requires an array on the right-hand side")]
+    #[diagnostic(
+        code(mpl_lang::in_requires_array),
+        help("Use an array literal (e.g. `in [200, 201]`) or an array-typed param")
+    )]
+    InRequiresArray {
+        /// The source location of the offending right-hand side
+        #[label("expected an array here")]
+        span: SourceSpan,
     },
 
     /// The feature is not implemented yet
