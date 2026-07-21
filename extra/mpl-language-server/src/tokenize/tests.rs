@@ -227,6 +227,47 @@ fn operator_compute() {
     assert_eq!(op.kind, TokenType::Operator);
 }
 
+// `in` shares `Rule::cmp` with the symbolic operators but is word-shaped, so
+// it is styled as a keyword (matching `is`), not an operator.
+#[test]
+fn keyword_in_cmp() {
+    let query = r#"ds:metric | where tag in ["a", 2, true]"#;
+    let tokens = collect_tokens(query).expect("should tokenize");
+    let kw = tokens
+        .iter()
+        .find(|t| &query[t.span.from..t.span.to] == "in")
+        .expect("should have in token");
+    assert_eq!(kw.kind, TokenType::Keyword);
+}
+
+// Array literals carry no token themselves (brackets and commas stay gaps);
+// each element is tokenized on its own.
+#[test]
+fn array_elements_tokenized_individually() {
+    let query = r#"ds:metric | where tag in ["a", 2, true]"#;
+    let tokens = collect_tokens(query).expect("should tokenize");
+    let text = |t: &super::Token| query[t.span.from..t.span.to].to_string();
+    assert!(
+        tokens
+            .iter()
+            .any(|t| t.kind == TokenType::String && text(t) == "\"a\""),
+        "string element should have a String token"
+    );
+    assert!(
+        tokens
+            .iter()
+            .any(|t| t.kind == TokenType::Number && text(t) == "2"),
+        "int element should have a Number token"
+    );
+    assert!(
+        tokens
+            .iter()
+            .any(|t| t.kind == TokenType::Bool && text(t) == "true"),
+        "bool element should have a Bool token"
+    );
+    assert_sorted_non_overlapping(&tokens);
+}
+
 // ── Punctuation tokens ───────────────────────────────────────────
 
 #[test]

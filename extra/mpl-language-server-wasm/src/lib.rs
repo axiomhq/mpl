@@ -224,4 +224,20 @@ mod tests {
     fn parse_json_reports_error_for_invalid_query() {
         assert!(parse_json_from_query("@@@ not a query @@@", &[]).is_err());
     }
+
+    #[test]
+    fn parse_print_roundtrips_in_filter() {
+        // `in` with an array literal crosses the wasm serialization boundary:
+        // the AST encodes to JSON/RON and prints back to the same surface form.
+        // Numeric/bool elements only — string literals print PII-redacted.
+        let query = "my_dataset:my_metric | where code in [200, 2.5, false]";
+
+        let json = parse_json_from_query(query, &[]).expect("parse_json");
+        let back = print_json(&json).expect("print_json");
+        assert!(back.contains("in [200, 2.5, false]"), "got: {back}");
+
+        let ron = parse_ron_from_query(query, &[]).expect("parse_ron");
+        let back = print_ron(&ron).expect("print_ron");
+        assert!(back.contains("in [200, 2.5, false]"), "got: {back}");
+    }
 }

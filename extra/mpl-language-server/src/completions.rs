@@ -1959,6 +1959,24 @@ fn suggest_filter_context(
                 ],
             }];
         }
+        if last == "in" {
+            // The RHS of `in` must be an array literal; offer the opener.
+            return vec![CompletionResult::Keywords {
+                span,
+                options: vec![KeywordItem {
+                    label: "[",
+                    apply: Some("["),
+                    info: "Array of values",
+                }],
+            }];
+        }
+        // Inside an unclosed array literal (`in ["a", …`) only const values
+        // are grammatical, and consts cannot be completed.
+        if words.iter().map(|w| w.matches('[').count()).sum::<usize>()
+            > words.iter().map(|w| w.matches(']').count()).sum::<usize>()
+        {
+            return vec![];
+        }
         if matches!(last, "==" | "!=" | "<" | ">" | "<=" | ">=") {
             // The comparison RHS is an `expr`: a tag, a param, or a const. The
             // operator decides whether a regex param is also acceptable.
@@ -2030,6 +2048,11 @@ fn suggest_filter_context(
                     label: ">=",
                     apply: Some(">= "),
                     info: "Greater than or equal",
+                },
+                KeywordItem {
+                    label: "in",
+                    apply: Some("in ["),
+                    info: "Membership in an array of values",
                 },
                 KeywordItem {
                     label: "is",

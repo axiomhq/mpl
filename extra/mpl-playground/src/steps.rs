@@ -406,7 +406,20 @@ fn eval_expr(e: &Expr, tags: &HashMap<String, String>) -> Result<Option<String>>
             }
             Ok(Some(out))
         }
-        Expr::Array(_) => todo!(),
+        Expr::Array(parts) => {
+            // Render an array literal to the same comma-joined form `raw_tag`
+            // produces for `TagValue::Array`, so a literal array and a tag
+            // holding that array compare identically. A missing tag reference
+            // in any element makes the whole array unevaluable (a non-match).
+            let mut items = Vec::with_capacity(parts.len());
+            for part in parts {
+                match eval_expr(part, tags)? {
+                    Some(v) => items.push(v),
+                    None => return Ok(None),
+                }
+            }
+            Ok(Some(items.join(", ")))
+        }
     }
 }
 
@@ -484,7 +497,25 @@ fn evaluate_cmp(tag_val: &str, rhs: &Cmp, tags: &HashMap<String, String>) -> Res
         Cmp::Ge(p) => numeric_cmp(p, |a, b| a >= b),
         Cmp::Lt(p) => numeric_cmp(p, |a, b| a < b),
         Cmp::Le(p) => numeric_cmp(p, |a, b| a <= b),
-        Cmp::In(_) => unimplemented!("in is not implemented"),
+        // Membership: the tag matches when it equals any element's value.
+        // Elements are compared individually, never against the array's
+        // joined string form.
+        Cmp::In(Expr::Array(parts)) => {
+            for part in parts {
+                if eval_expr(part, tags)?.as_deref() == Some(tag_val) {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        // A pre-resolved constant array (e.g. produced by param inlining)
+        // carries `TagValue`s directly rather than `Expr`s.
+        Cmp::In(Expr::Const(TagValue::Array(values))) => {
+            Ok(values.iter().any(|v| raw_tag(v) == tag_val))
+        }
+        // `in` requires an array; the parser rejects scalar right-hand sides
+        // before evaluation, so a stray scalar degrades to a direct equality.
+        Cmp::In(other) => Ok(eval_expr(other, tags)?.as_deref() == Some(tag_val)),
         Cmp::RegEx(p) => {
             let re = get_param(p)?;
             Ok(re.is_match(tag_val))
@@ -552,8 +583,14 @@ fn expr_tag_refs(e: &Expr) -> Vec<&str> {
 /// `is` comparisons do not hold an `Expr`.
 fn cmp_expr(rhs: &Cmp) -> Option<&Expr> {
     match rhs {
-        Cmp::Eq(e) | Cmp::Ne(e) | Cmp::Gt(e) | Cmp::Ge(e) | Cmp::Lt(e) | Cmp::Le(e) => Some(e),
-        Cmp::RegEx(_) | Cmp::RegExNot(_) | Cmp::Is(_) | Cmp::In(_) => None,
+        Cmp::Eq(e)
+        | Cmp::Ne(e)
+        | Cmp::Gt(e)
+        | Cmp::Ge(e)
+        | Cmp::Lt(e)
+        | Cmp::Le(e)
+        | Cmp::In(e) => Some(e),
+        Cmp::RegEx(_) | Cmp::RegExNot(_) | Cmp::Is(_) => None,
     }
 }
 

@@ -1479,6 +1479,11 @@ fn completions_at(input: &str) -> Option<CompletionResult> {
 #[test_case("ds:metric | where tag is string #"           => Some("keywords")         ; "after is string suggests boolean ops")]
 #[test_case("ds:metric | filter tag is bool #"            => Some("keywords")         ; "after is bool suggests boolean ops")]
 #[test_case("ds:metric | sample #"                        => None                     ; "sample takes number no completions")]
+// ── in ──────────────────────────────────────────────────────────
+#[test_case("ds:metric | where tag in #"                  => Some("keywords")         ; "where tag in suggests array opener")]
+#[test_case("ds:metric | where tag in [#"                 => None                     ; "inside empty array literal no completions")]
+#[test_case("ds:metric | where tag in [\"a\", #"          => None                     ; "inside array literal after comma no completions")]
+#[test_case("ds:metric | where tag in [\"a\"] #"          => Some("keywords")         ; "after closed array suggests boolean ops")]
 // ── ifdef ───────────────────────────────────────────────────────
 #[test_case("param $f: Option<string>;\nds:metric | ifdef(#"                          => Some("params")   ; "ifdef arg suggests params")]
 #[test_case("param $f: Option<string>;\nds:metric | ifdef($#"                         => Some("params")   ; "ifdef arg partial dollar")]
@@ -1582,6 +1587,10 @@ fn test_completion_kind(input: &str) -> Option<&'static str> {
 #[test_case("ds:metric | bucket to 1m using interpolate_cumulative_histogram(ra#te, count)", &["rate"] ; "mid bucket arg contains rate")]
 #[test_case("ds:metric | filter tag #",                    &["is"]                    ; "filter tag includes is operator")]
 #[test_case("ds:metric | where tag #",                     &["is"]                    ; "where tag includes is operator")]
+#[test_case("ds:metric | filter tag #",                    &["in"]                    ; "filter tag includes in operator")]
+#[test_case("ds:metric | where tag #",                     &["in"]                    ; "where tag includes in operator")]
+#[test_case("ds:metric | where tag in #",                  &["["]                     ; "in suggests array opener")]
+#[test_case("ds:metric | where tag in [\"a\"] #",          &["and", "or", "not"]      ; "after closed array suggests boolean ops")]
 #[test_case("ds:metric | where tag is #",                  &["string", "int", "float", "bool"] ; "is suggests all tag types")]
 #[test_case("ds:metric | where tag is string #",           &["and", "or", "not"]      ; "after is string suggests boolean ops")]
 #[test_case("ds:metric | filter tag is bool #",            &["and", "or"]             ; "after is bool suggests boolean ops")]
@@ -1608,6 +1617,7 @@ fn test_completion_labels_contain(input: &str, expected: &[&str]) {
 // ── mid-query cursor ────────────────────────────────────────────
 #[test_case("ds:metric | bucket to 1m using interpolate_cumulative_histogram(ra#te, count)", &["count"] ; "mid bucket first arg excludes specs")]
 #[test_case("ds:metric | where tag is #",                  &["Dataset", "metric", "Duration", "regex"] ; "is excludes non-tag types")]
+#[test_case("ds:metric | where tag in #",                  &["and", "or", "not"]      ; "in rhs excludes boolean ops")]
 // ── ifdef gating ────────────────────────────────────────────────
 #[test_case("ds:metric | #",                           &["ifdef"] ; "ifdef hidden without optional params")]
 #[test_case("param $s: string;\nds:metric | #",        &["ifdef"] ; "ifdef hidden when no params are optional")]
