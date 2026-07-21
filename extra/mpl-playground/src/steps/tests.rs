@@ -783,6 +783,75 @@ fn run_path_in_filter() {
 }
 
 #[test]
+fn filter_in_empty_array_matches_nothing() {
+    // `in []` is legal and matches nothing — the step succeeds with an empty
+    // result rather than erroring. The empty-string tag guards against the
+    // empty array accidentally matching an "empty" value.
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(&[("host", "a")], vec![0.0], vec![1.0]),
+            s(&[("host", "")], vec![0.0], vec![2.0]),
+        ],
+    );
+    let filter = Filter::Cmp {
+        field: "host".into(),
+        rhs: Cmp::In(Expr::Array(vec![])),
+    };
+    let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
+    let result = interpret(&steps, &datasets);
+    let kept = result[1].as_ref().unwrap();
+    assert!(kept.is_empty(), "in [] must match nothing, kept {kept:?}");
+}
+
+// Property: a single-element array is equivalent to `==` — for every element
+// type (matching or not), `t in [v]` keeps exactly the series `t == v` keeps.
+#[test]
+fn filter_in_single_element_equals_eq() {
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(&[("t", "a")], vec![0.0], vec![1.0]),
+            s(&[("t", "200")], vec![0.0], vec![2.0]),
+            s(&[("t", "true")], vec![0.0], vec![3.0]),
+            s(&[("t", "b")], vec![0.0], vec![4.0]),
+        ],
+    );
+    let elements = [
+        Expr::Const(TagValue::String(
+            strumbra::SharedString::try_from("a").unwrap(),
+        )),
+        Expr::Const(TagValue::Int(200)),
+        Expr::Const(TagValue::Bool(true)),
+        // Matches no series: the equivalence must hold for empty results too.
+        Expr::Const(TagValue::Float(2.5)),
+    ];
+    for element in elements {
+        let kept_values = |rhs: Cmp| -> Vec<Vec<f64>> {
+            let filter = Filter::Cmp {
+                field: "t".into(),
+                rhs,
+            };
+            let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
+            interpret(&steps, &datasets)[1]
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|s| s.values.clone())
+                .collect()
+        };
+        let eq_kept = kept_values(Cmp::Eq(element.clone()));
+        let in_kept = kept_values(Cmp::In(Expr::Array(vec![element.clone()])));
+        assert_eq!(
+            eq_kept, in_kept,
+            "single-element `in` must match `==` for {element:?}"
+        );
+    }
+}
+
+#[test]
 fn map_abs() {
     let datasets = ds("ds", "m", vec![s(&[], vec![0.0], vec![-5.0])]);
     let steps = vec![
