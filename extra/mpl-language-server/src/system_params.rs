@@ -67,6 +67,7 @@ fn parse_terminal(s: &str) -> Option<TerminalParamType> {
         "int" => Some(TerminalParamType::Tag(TagType::Int)),
         "float" => Some(TerminalParamType::Tag(TagType::Float)),
         "bool" => Some(TerminalParamType::Tag(TagType::Bool)),
+        "array" => Some(TerminalParamType::Tag(TagType::Array)),
         _ => None,
     }
 }
@@ -80,6 +81,7 @@ fn parse_completion_type(s: &str) -> Option<CompletionParamType> {
         "int" => Some(CompletionParamType::Int),
         "float" => Some(CompletionParamType::Float),
         "bool" => Some(CompletionParamType::Bool),
+        "array" => Some(CompletionParamType::Array),
         _ => None,
     }
 }

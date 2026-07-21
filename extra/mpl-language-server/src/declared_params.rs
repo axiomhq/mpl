@@ -50,6 +50,7 @@ fn type_spelling(typ: ParamType) -> &'static str {
         ParamType::Int => "int",
         ParamType::Float => "float",
         ParamType::Bool => "bool",
+        ParamType::Array => "array",
     }
 }
 
@@ -76,6 +77,8 @@ mod tests {
 param $dataset: Dataset;
 param $age: int;
 param $name: Option<string>;
+param $hosts: array;
+param $codes: Option<array>;
 $dataset:metric";
         assert_eq!(
             declared_params(query),
@@ -93,6 +96,16 @@ $dataset:metric";
                 DeclaredParam {
                     name: "name".to_string(),
                     type_name: "string".to_string(),
+                    optional: true,
+                },
+                DeclaredParam {
+                    name: "hosts".to_string(),
+                    type_name: "array".to_string(),
+                    optional: false,
+                },
+                DeclaredParam {
+                    name: "codes".to_string(),
+                    type_name: "array".to_string(),
                     optional: true,
                 },
             ]

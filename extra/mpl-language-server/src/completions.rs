@@ -27,6 +27,7 @@ pub enum ParamType {
     Int,
     Float,
     Bool,
+    Array,
     Regex,
 }
 
@@ -1115,6 +1116,7 @@ fn parse_param_decl(rest: &str) -> Option<ParamItem> {
         "int" => ParamType::Int,
         "float" => ParamType::Float,
         "bool" => ParamType::Bool,
+        "array" => ParamType::Array,
         "Regex" => ParamType::Regex,
         _ => return None,
     };
@@ -1126,6 +1128,7 @@ fn parse_param_decl(rest: &str) -> Option<ParamItem> {
                 | ParamType::Int
                 | ParamType::Float
                 | ParamType::Bool
+                | ParamType::Array
                 | ParamType::Regex
         )
     {
@@ -1956,12 +1959,17 @@ fn suggest_filter_context(
                         apply: Some("bool "),
                         info: "Boolean type",
                     },
+                    KeywordItem {
+                        label: "array",
+                        apply: Some("array "),
+                        info: "Array type",
+                    },
                 ],
             }];
         }
         if last == "in" {
-            // The RHS of `in` must be an array literal; offer the opener.
-            return vec![CompletionResult::Keywords {
+            // The RHS of `in` is an array literal or an array-typed param.
+            let mut results = vec![CompletionResult::Keywords {
                 span,
                 options: vec![KeywordItem {
                     label: "[",
@@ -1969,6 +1977,10 @@ fn suggest_filter_context(
                     info: "Array of values",
                 }],
             }];
+            results.extend(suggest_params(span, params, active_gate, |typ| {
+                typ == ParamType::Array
+            }));
+            return results;
         }
         // Inside an unclosed array literal (`in ["a", …`) only const values
         // are grammatical, and consts cannot be completed.
@@ -2170,7 +2182,7 @@ fn is_preamble_position(text: &str) -> bool {
     true
 }
 
-const PARAM_TYPE_KEYWORDS: [KeywordItem; 13] = [
+const PARAM_TYPE_KEYWORDS: [KeywordItem; 15] = [
     KeywordItem {
         label: "Dataset",
         apply: Some("Dataset;\n"),
@@ -2207,6 +2219,11 @@ const PARAM_TYPE_KEYWORDS: [KeywordItem; 13] = [
         info: "Parameter type",
     },
     KeywordItem {
+        label: "array",
+        apply: Some("array;\n"),
+        info: "Parameter type",
+    },
+    KeywordItem {
         label: "Regex",
         apply: Some("Regex;\n"),
         info: "Parameter type",
@@ -2229,6 +2246,11 @@ const PARAM_TYPE_KEYWORDS: [KeywordItem; 13] = [
     KeywordItem {
         label: "Option<bool>",
         apply: Some("Option<bool>;\n"),
+        info: "Optional parameter type for ifdef filters",
+    },
+    KeywordItem {
+        label: "Option<array>",
+        apply: Some("Option<array>;\n"),
         info: "Optional parameter type for ifdef filters",
     },
     KeywordItem {

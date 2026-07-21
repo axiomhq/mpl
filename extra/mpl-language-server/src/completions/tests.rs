@@ -1570,7 +1570,7 @@ fn test_completion_kind(input: &str) -> Option<&'static str> {
 #[test_case("`dev.metrics`:http_requests_total\n| align #", &["to", "using"]           ; "align initially suggests to and using")]
 #[test_case("ds:metric | bucket #", &["by", "to", "using"]                               ; "bucket initially suggests by to using")]
 #[test_case("`dev.metrics`:http_requests_total\n| align to 42s #", &["using"]          ; "align after to suggests using")]
-#[test_case("param $name: #", &["Dataset", "Metric", "Duration", "string", "int", "float", "bool", "Regex", "Option<string>", "Option<int>", "Option<float>", "Option<bool>", "Option<Regex>"] ; "all param types")]
+#[test_case("param $name: #", &["Dataset", "Metric", "Duration", "string", "int", "float", "bool", "array", "Regex", "Option<string>", "Option<int>", "Option<float>", "Option<bool>", "Option<array>", "Option<Regex>"] ; "all param types")]
 #[test_case("`my-dataset`:`my-metric` | #", &["sample", "where", "map"]                           ; "backtick pipe keywords")]
 // ── extend keyword in pipe-keywords list ──────────────────────
 #[test_case("ds:metric | #", &["extend"]                                                          ; "extend offered as pipe keyword")]
@@ -1591,7 +1591,7 @@ fn test_completion_kind(input: &str) -> Option<&'static str> {
 #[test_case("ds:metric | where tag #",                     &["in"]                    ; "where tag includes in operator")]
 #[test_case("ds:metric | where tag in #",                  &["["]                     ; "in suggests array opener")]
 #[test_case("ds:metric | where tag in [\"a\"] #",          &["and", "or", "not"]      ; "after closed array suggests boolean ops")]
-#[test_case("ds:metric | where tag is #",                  &["string", "int", "float", "bool"] ; "is suggests all tag types")]
+#[test_case("ds:metric | where tag is #",                  &["string", "int", "float", "bool", "array"] ; "is suggests all tag types")]
 #[test_case("ds:metric | where tag is string #",           &["and", "or", "not"]      ; "after is string suggests boolean ops")]
 #[test_case("ds:metric | filter tag is bool #",            &["and", "or"]             ; "after is bool suggests boolean ops")]
 // ── string interpolation ────────────────────────────────────────
@@ -1618,6 +1618,7 @@ fn test_completion_labels_contain(input: &str, expected: &[&str]) {
 #[test_case("ds:metric | bucket to 1m using interpolate_cumulative_histogram(ra#te, count)", &["count"] ; "mid bucket first arg excludes specs")]
 #[test_case("ds:metric | where tag is #",                  &["Dataset", "metric", "Duration", "regex"] ; "is excludes non-tag types")]
 #[test_case("ds:metric | where tag in #",                  &["and", "or", "not"]      ; "in rhs excludes boolean ops")]
+#[test_case("param $s: string;\nds:metric | where tag in #", &["$s"]                  ; "in rhs excludes non-array params")]
 // ── ifdef gating ────────────────────────────────────────────────
 #[test_case("ds:metric | #",                           &["ifdef"] ; "ifdef hidden without optional params")]
 #[test_case("param $s: string;\nds:metric | #",        &["ifdef"] ; "ifdef hidden when no params are optional")]
@@ -1814,6 +1815,53 @@ fn all_completions_at_with_params(input: &str, extra: &[ParamItem]) -> Vec<Compl
         .expect("input must contain a # cursor marker");
     let query = format!("{}{}", &input[..cursor], &input[cursor + 1..]);
     compute_completions_with_params(&query, cursor, extra)
+}
+
+/// Flattens the labels of every result at the cursor (no system params).
+/// The `in` position emits two results — the `[` opener keyword and an
+/// array-param list — so single-result helpers can't see both.
+fn all_labels_at(input: &str) -> Vec<String> {
+    all_completions_at_with_params(input, &[])
+        .iter()
+        .flat_map(|r| {
+            r.option_labels()
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[test]
+fn in_offers_array_opener_and_array_params() {
+    let labels = all_labels_at("param $hosts: array;\nds:metric | where tag in #");
+    assert!(labels.iter().any(|l| l == "["), "expected [ in {labels:?}");
+    assert!(
+        labels.iter().any(|l| l == "$hosts"),
+        "expected $hosts in {labels:?}"
+    );
+}
+
+#[test]
+fn in_partial_dollar_filters_to_array_params() {
+    let labels = all_labels_at("param $hosts: array;\nds:metric | where tag in $ho#");
+    assert!(
+        labels.iter().any(|l| l == "$hosts"),
+        "expected $hosts in {labels:?}"
+    );
+    assert!(
+        !labels.iter().any(|l| l == "["),
+        "the [ opener must be prefix-filtered out, got {labels:?}"
+    );
+}
+
+#[test]
+fn in_excludes_non_array_params() {
+    let labels = all_labels_at("param $s: string;\nds:metric | where tag in #");
+    assert!(
+        !labels.iter().any(|l| l == "$s"),
+        "non-array params must not be offered after `in`, got {labels:?}"
+    );
 }
 
 /// Returns the ordered list of completion result kinds at the cursor (no
