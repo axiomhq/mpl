@@ -1,3 +1,4 @@
+use core::result;
 use std::{collections::HashMap, hash::BuildHasher, num::ParseFloatError, str::FromStr};
 
 use chrono::DateTime;
@@ -689,6 +690,11 @@ fn parse_value_filter(field: String, source: Pair<Rule>, state: &State) -> Resul
         "<=" => Cmp::Le(value),
         "in" => match value {
             Expr::Const(TagValue::Array(_)) | Expr::Array(_) => Cmp::In(value),
+            Expr::Param { span: _, ref param }
+                if param.typ() == TerminalParamType::Tag(TagType::Array) =>
+            {
+                Cmp::In(value)
+            }
             _ => {
                 return Err(ParseError::UnsupportedTagComparison {
                     span: pair_to_source_span(&operator_pair),
@@ -722,12 +728,28 @@ pub enum ParseParamError {
     TypeMismatch { declared_typ: ParamType, rule: Rule },
     #[error("None Type Params are not supported")]
     NoneParam,
+    #[error("Unsupported Array element")]
+    UnsupportedArrayElement,
+}
+
+fn expr_to_array(e: Expr) -> result::Result<TagValue, ParseParamError> {
+    match e {
+        Expr::Const(tag_value) => Ok(tag_value),
+        Expr::Param { .. } | Expr::String(_) | Expr::Tag(_) => {
+            Err(ParseParamError::UnsupportedArrayElement)
+        }
+        Expr::Array(exprs) => exprs
+            .into_iter()
+            .map(expr_to_array)
+            .collect::<result::Result<_, ParseParamError>>()
+            .map(TagValue::Array),
+    }
 }
 
 pub(crate) fn parse_param_value(
     param: &ParamDeclaration,
     mut source: Pairs<'_, Rule>,
-) -> core::result::Result<ParamValue, ParseParamError> {
+) -> result::Result<ParamValue, ParseParamError> {
     let next = source.n()?;
     next.assert_type(Rule::param_value)?;
     let mut inner = next.into_inner();
@@ -767,6 +789,19 @@ pub(crate) fn parse_param_value(
             Rule::int,
             param.typ,
         )?)?)),
+        TerminalParamType::Tag(TagType::Array) => {
+            let state = State {
+                params: Vec::new(),
+                directives: HashMap::new(),
+                warnings: Warnings::new(),
+            };
+            let a = parse_array(const_type(next, Rule::array, param.typ)?, &state)?;
+            let a = a
+                .into_iter()
+                .map(expr_to_array)
+                .collect::<result::Result<_, ParseParamError>>()?;
+            Ok(ParamValue::Array(a))
+        }
         TerminalParamType::Tag(TagType::Float) => {
             let declared_typ = param.typ;
             if next.as_rule() != Rule::r#const {
@@ -796,7 +831,7 @@ pub(crate) fn parse_param_value(
                 .map_err(ParseParamError::ParseBool)?,
         )),
         // TODO: no array params in this step
-        TerminalParamType::Tag(TagType::Null | TagType::Array) => Err(ParseParamError::NoneParam),
+        TerminalParamType::Tag(TagType::Null) => Err(ParseParamError::NoneParam),
     }
 }
 
@@ -804,7 +839,7 @@ fn const_type(
     src: Pair<Rule>,
     rule_type: Rule,
     declared_typ: ParamType,
-) -> core::result::Result<Pair<Rule>, ParseParamError> {
+) -> result::Result<Pair<Rule>, ParseParamError> {
     if src.as_rule() != Rule::r#const {
         return Err(ParseParamError::TypeMismatch {
             declared_typ,
@@ -846,6 +881,7 @@ fn parse_tag_type(source: &Pair<Rule>) -> Result<TagType> {
     source.assert_type(Rule::tag_type)?;
     let tpe = source.as_str();
     match tpe {
+        "array" => Ok(TagType::Array),
         "string" => Ok(TagType::String),
         "int" => Ok(TagType::Int),
         "float" => Ok(TagType::Float),

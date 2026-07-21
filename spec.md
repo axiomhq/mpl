@@ -91,11 +91,13 @@ The elements of a single filter expression are as follows:
   - `<` for less than
   - `>=` for greater than or equal to
   - `<=` for less than or equal to
+  - `in` checks of array inclusion
 - `value` one of
   - `"this string"` - a [string](#string)
   - `42` - an [integer](#integer)
   - `42.0` - a [float](#float)
   - `true` - a [bool](#bool)
+  - `[1,2]` - an [array](#array)
   - `#/.* regexp $/` - [regular expression](#regex)
 
 ```mpl
@@ -352,6 +354,9 @@ dataset:metric
 | extend url = "http://${host}:${port}"
 ```
 
+## Array
+
+Arrays are lists of values, they do not need to be of the same type: `[1, "hello", true]`
 ## Integer
 
 Integers are a sequence of digits. They can be positive or negative.
@@ -418,17 +423,18 @@ MPL supports distinct types for tag values: string, integer, float, and bool. Th
 | align to 5m using avg
 ```
 
-# Draft / Future
+## Array Values in Filters
 
-This appendix describes features that are specified but not yet available.
-
-## Set Values in Filters
-
-The `in` operator accepts a set of values. Sets are defined using the `[` and `]` characters and can contain any value type.
+The `in` operator accepts an array of values. Arrays are defined using the `[` and `]` characters and can contain any value type.
 
 ```mpl
 | where code in [200, 201, 202, 203, 204, 205]
 ```
+
+# Draft / Future
+
+This appendix describes features that are specified but not yet available.
+
 
 ## Sliding Windows
 
@@ -585,7 +591,7 @@ The prior example a valid query string would be:
 
 A parameter type can be wrapped in `Option<…>` to mark it optional. An optional parameter
 may be omitted from the request; required parameters (the unwrapped form) must always be
-supplied. The inner type may be any of the regular parameter types: `Regex`, `string`, `int`, `float`, or `bool`.
+supplied. The inner type may be any of the regular parameter types: `Regex`, `string`, `array`, `int`, `float`, or `bool`.
 
 ```mpl
 param $env: Option<string>;

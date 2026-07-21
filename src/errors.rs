@@ -529,7 +529,7 @@ fn friendly_rule(rule: Rule) -> String {
         Rule::regex_filter => "regex filter".to_string(),
         Rule::kw_is => "`is` keyword".to_string(),
         Rule::is_filter => "type filter (e.g., is string)".to_string(),
-        Rule::tag_type => "tag type (string, int, float, or bool)".to_string(),
+        Rule::tag_type => "tag type (array, string, int, float, or bool)".to_string(),
 
         // Tags
         Rule::tags => "tags (comma-separated field names)".to_string(),
@@ -670,6 +670,7 @@ fn rules_keywords(rules: &[Rule]) -> Vec<&'static str> {
             Rule::join => keywords.push("join"),
             Rule::kw_is => keywords.push("is"),
             Rule::tag_type => {
+                keywords.push("array");
                 keywords.push("string");
                 keywords.push("int");
                 keywords.push("float");

@@ -124,7 +124,7 @@ module = { ident }
 func = { (module ~ "::")* ~ ident }
 
 param_native_type =  { "Dataset" | "Duration" | "duration" | "Regex" }
-tag_type          =  { "string" | "int" | "float" | "bool" }
+tag_type          =  { "string" | "int" | "float" | "bool" | "array" }
 optional_type     =  { "Option" ~ "<" ~ (tag_type | param_native_type) ~ ">" }
 param_type        =  { param_native_type | tag_type | optional_type }
 param_ident       = ${ "$" ~ ident }

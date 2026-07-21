@@ -363,6 +363,13 @@ impl ParamType {
     fn is_optional(self) -> bool {
         matches!(self, ParamType::Optional(_))
     }
+    fn typ(self) -> TerminalParamType {
+        match self {
+            ParamType::Terminal(terminal_param_type) | ParamType::Optional(terminal_param_type) => {
+                terminal_param_type
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for ParamType {
@@ -454,11 +461,7 @@ pub struct ParamDeclaration {
 
 impl ParamDeclaration {
     pub(crate) fn typ(&self) -> TerminalParamType {
-        match self.typ {
-            ParamType::Terminal(terminal_param_type) | ParamType::Optional(terminal_param_type) => {
-                terminal_param_type
-            }
-        }
+        self.typ.typ()
     }
 
     pub(crate) fn is_optional(&self) -> bool {
@@ -483,6 +486,8 @@ pub enum ParamValue {
     Bool(bool),
     /// Regex
     Regex(EncodableRegex),
+    /// Array
+    Array(Vec<TagValue>),
 }
 
 impl ParamValue {
@@ -497,6 +502,7 @@ impl ParamValue {
             ParamValue::Int(_) => TerminalParamType::Tag(TagType::Int),
             ParamValue::Float(_) => TerminalParamType::Tag(TagType::Float),
             ParamValue::Bool(_) => TerminalParamType::Tag(TagType::Bool),
+            ParamValue::Array(_) => TerminalParamType::Tag(TagType::Array),
         }
     }
 }
@@ -888,6 +894,7 @@ impl ProvidedParams {
             ParamValue::Int(val) => Ok(Expr::Const(TagValue::Int(*val))),
             ParamValue::Float(val) => Ok(Expr::Const(TagValue::Float(*val))),
             ParamValue::Bool(val) => Ok(Expr::Const(TagValue::Bool(*val))),
+            ParamValue::Array(val) => Ok(Expr::Const(TagValue::Array(val.clone()))),
             val => Err(ResolveError::InvalidType {
                 name: param.name,
                 defined: val.typ(),
