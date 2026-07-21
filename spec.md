@@ -91,7 +91,7 @@ The elements of a single filter expression are as follows:
   - `<` for less than
   - `>=` for greater than or equal to
   - `<=` for less than or equal to
-  - `in` checks of array inclusion
+  - `in` for membership in an [array](#array-values-in-filters) of values
 - `value` one of
   - `"this string"` - a [string](#string)
   - `42` - an [integer](#integer)
@@ -119,6 +119,7 @@ Types that are currently supported include:
 - `int` - an integer value
 - `float` - a float value
 - `bool` - a boolean value
+- `array` - an array value
 
 the syntax is as follows `| where the_tag is string`
 
@@ -251,7 +252,7 @@ The `extend` operator adds constant-valued tags to every series produced by the 
 
 A tag added by `extend` must be **net-new** for the query: if any input series already carries a tag with the same name the query fails. This avoids any need to specify a merge rule for conflicting values; if you want to overwrite an existing tag, drop it first via `group by` and re-add it with `extend`.
 
-Only constant values are supported in this iteration — string, integer, float, and boolean literals, or scalar parameters of those types. Expressions over series values are intentionally out of scope; see ADR-0006 for the rationale.
+Only constant values are supported in this iteration — string, integer, float, boolean, and [array](#array) literals, or parameters of those types. Expressions over series values are intentionally out of scope; see ADR-0006 for the rationale.
 
 ## Computation
 
@@ -356,7 +357,10 @@ dataset:metric
 
 ## Array
 
-Arrays are lists of values, they do not need to be of the same type: `[1, "hello", true]`
+Arrays are lists of values enclosed in `[` and `]`. Elements do not need to be of the same type, and arrays may be nested: `[1, "hello", true, [2, 3]]`.
+
+String elements may use [interpolation](#string-interpolation); such elements are compared by their rendered string value.
+
 ## Integer
 
 Integers are a sequence of digits. They can be positive or negative.
@@ -407,7 +411,7 @@ measurement entity. For example, `http_requests_total{method="PUT", path="/v1/me
 
 ## Data Types
 
-MPL supports distinct types for tag values: string, integer, float, and bool. This enables typed comparisons in filter expressions.
+MPL supports distinct types for tag values: string, integer, float, bool, and array. This enables typed comparisons in filter expressions.
 
 ```mpl
 // error rate over the past 5 minutes
@@ -425,11 +429,14 @@ MPL supports distinct types for tag values: string, integer, float, and bool. Th
 
 ## Array Values in Filters
 
-The `in` operator accepts an array of values. Arrays are defined using the `[` and `]` characters and can contain any value type.
+The `in` operator tests whether a tag's value is contained in an array. The expression is true if and only if the tag's value equals at least one element. Each element is compared with the same semantics as `==`; a type-mismatched element evaluates to false, never an error.
 
 ```mpl
 | where code in [200, 201, 202, 203, 204, 205]
 ```
+
+- Arrays are heterogeneous: `in ["a", 5, true]` is legal, matching tags that equal any of the elements. Rationale: OTel attribute values include arrays of `AnyValue`, so mixed-type lists are valid comparison targets.
+- The right-hand side must be an [array](#array) literal or an array-typed [parameter](#query-parameters): `| where host in $hosts`. Any other right-hand side is a parse error.
 
 # Draft / Future
 
@@ -577,6 +584,7 @@ param $__interval: Duration;
 param $ds: Dataset;
 param $re: Regex;
 param $str: string;
+param $hosts: array;
 ```
 
 The passed query parameters need to be valid MPL atomics and are prefixed with `param__`.
@@ -584,8 +592,10 @@ The passed query parameters need to be valid MPL atomics and are prefixed with `
 The prior example a valid query string would be:
 
 ```
-?param____interval=42s&param__ds=%60my-dataset%60&param__re=%23%2F.*%2F&param__str=%22string+goes+here%22
+?param____interval=42s&param__ds=%60my-dataset%60&param__re=%23%2F.*%2F&param__str=%22string+goes+here%22&param__hosts=%5B%22a%22%2C+1%5D
 ```
+
+Array parameter values are written as array literals (`["a", 1]` above, URL-encoded). Their elements must themselves be literals — string interpolation inside a provided array value is rejected.
 
 #### Optional Parameters
 
