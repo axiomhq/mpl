@@ -181,7 +181,7 @@ impl std::fmt::Display for TagValue {
                 let mut hasher = DefaultHasher::new();
                 s.hash(&mut hasher);
 
-                write!(f, "\"<PII Safe String: {}>\"", &hasher.finish())
+                write!(f, "\"<PII Safe String: {}>\"", hasher.finish())
             }
             TagValue::Int(i) => write!(f, "{i}"),
             TagValue::Float(fl) => write!(f, "{fl}"),
