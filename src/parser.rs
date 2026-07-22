@@ -828,7 +828,6 @@ pub(crate) fn parse_param_value(
                 .parse()
                 .map_err(ParseParamError::ParseBool)?,
         )),
-        // TODO: no array params in this step
         TerminalParamType::Tag(TagType::Null) => Err(ParseParamError::NoneParam),
     }
 }
