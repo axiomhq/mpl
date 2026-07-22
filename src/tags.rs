@@ -133,13 +133,13 @@ impl TagValue {
         }
     }
 
-    /// Returns the length of the tag value
+    /// Returns the length of the tag value in estimated bytes
     #[must_use]
     pub fn len(&self) -> usize {
         match self {
             TagValue::Null => 0,
             TagValue::String(s) => s.len(),
-            TagValue::Array(a) => a.len(),
+            TagValue::Array(a) => a.iter().map(TagValue::len).sum(),
             TagValue::Int(_) | TagValue::Float(_) => 8, // size of i64 or f64
             TagValue::Bool(_) => 1,                     // size of bool
         }
