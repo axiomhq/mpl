@@ -476,6 +476,37 @@ fn bucket_group_by() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn in_scalar_rhs_diagnostic_asks_for_an_array() {
+    let s = "ds:m | where t in 200";
+    let err = super::compile(s, HashMap::new()).expect_err("scalar RHS for `in` must not compile");
+    let rendered = render_diagnostic(err, s);
+    assert!(
+        rendered.contains("array"),
+        "expected the diagnostic to say `in` needs an array, got:\n{rendered}"
+    );
+}
+
+#[test]
+fn in_non_array_param_requires_array_error() {
+    let s = "param $s: string;\nds:m | where t in $s";
+    let err =
+        super::compile(s, HashMap::new()).expect_err("non-array param for `in` must not compile");
+    assert!(
+        matches!(
+            &err,
+            CompileError::Parse(ParseError::InRequiresArray { .. })
+        ),
+        "expected an in-requires-array error, got: {err:?}"
+    );
+}
+
+#[test]
+fn in_array_param_compiles() {
+    let s = "param $a: array;\nds:m | where t in $a";
+    super::compile(s, HashMap::new()).expect("array param on `in` should compile");
+}
+
+#[test]
 fn bucket_group_by_error() {
     let s = r"
 `dev.metrics`:http_requests_total[1747077736092..]

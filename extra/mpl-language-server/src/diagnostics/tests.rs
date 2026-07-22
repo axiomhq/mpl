@@ -287,6 +287,25 @@ fn uppercase_duration_emits_no_warning() {
 }
 
 #[test]
+fn in_filter_with_array_literal_is_clean() {
+    // `in` with an array literal is valid MPL end-to-end: no parse errors and
+    // no warnings surface as diagnostics.
+    let query = "ds:metric | where code in [200, 201, \"a\"]";
+    assert!(diagnostic_items(query).is_empty(), "should not error");
+    assert!(warning_items(query).is_empty(), "should not warn");
+}
+
+#[test]
+fn in_filter_with_scalar_rhs_errors() {
+    // The parser only accepts an array literal on the RHS of `in`; a scalar
+    // must surface as an error diagnostic rather than compiling.
+    let query = "ds:metric | where code in 200";
+    let items = diagnostic_items(query);
+    assert!(!items.is_empty(), "scalar RHS for `in` should diagnose");
+    assert!(matches!(items[0].severity, Severity::Error));
+}
+
+#[test]
 fn param_not_declared_warning_is_plain_warning_without_actions() {
     // `ParamNotDeclared` is emitted from the runtime-param parsing path, not
     // from `compile`. We still translate it through the same conversion to

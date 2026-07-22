@@ -145,6 +145,17 @@ impl Display for Expr {
                 }
                 write!(f, "\"")
             }
+            Expr::Array(parts) => {
+                let Some((first, rest)) = parts.split_first() else {
+                    return write!(f, "[]");
+                };
+                write!(f, "[{first}")?;
+
+                for e in rest {
+                    write!(f, ", {e}")?;
+                }
+                write!(f, "]")
+            }
         }
     }
 }
@@ -265,6 +276,7 @@ impl Display for Cmp {
             Cmp::Lt(v) => write!(f, "< {v}"),
             Cmp::Le(v) => write!(f, "<= {v}"),
             Cmp::Is(v) => write!(f, "is {v}"),
+            Cmp::In(v) => write!(f, "in {v}"),
             Cmp::RegEx(r) => match r {
                 Parameterized::Concrete(r) => write!(f, "== {}", r.as_ref()),
                 Parameterized::Param { span: _, param } => write!(f, "== ${}", param.name),

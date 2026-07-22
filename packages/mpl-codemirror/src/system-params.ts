@@ -17,7 +17,8 @@ export type MplParamType =
   | "string"
   | "int"
   | "float"
-  | "bool";
+  | "bool"
+  | "array";
 
 /**
  * A host-supplied parameter the language server should treat as already

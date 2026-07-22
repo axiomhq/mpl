@@ -130,6 +130,8 @@ pub enum Expr {
     },
     /// A possibly interpolated string value
     String(Vec<StringFragment>),
+    /// An array
+    Array(Vec<Expr>),
     /// A reference to a tag value
     Tag(String),
 }
@@ -149,6 +151,8 @@ pub enum Cmp {
     Lt(Expr),
     /// Less than or equal to the given value
     Le(Expr),
+    /// Is the given tag value in the given list
+    In(Expr),
     /// Matches the given regular expression
     RegEx(Parameterized<EncodableRegex>),
     /// Does not match the given regular expression
@@ -359,6 +363,13 @@ impl ParamType {
     fn is_optional(self) -> bool {
         matches!(self, ParamType::Optional(_))
     }
+    fn typ(self) -> TerminalParamType {
+        match self {
+            ParamType::Terminal(terminal_param_type) | ParamType::Optional(terminal_param_type) => {
+                terminal_param_type
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for ParamType {
@@ -407,6 +418,8 @@ pub enum TagType {
     Bool,
     /// Null value
     Null,
+    /// An array of values
+    Array,
 }
 
 #[cfg(feature = "bincode")]
@@ -421,17 +434,14 @@ fn test_renaming_none_to_null_has_no_bincode_side_effects() {
 
 impl std::fmt::Display for TagType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                TagType::String => "string",
-                TagType::Int => "int",
-                TagType::Float => "float",
-                TagType::Bool => "bool",
-                TagType::Null => "null",
-            }
-        )
+        match self {
+            TagType::String => write!(f, "string"),
+            TagType::Int => write!(f, "int"),
+            TagType::Float => write!(f, "float"),
+            TagType::Bool => write!(f, "bool"),
+            TagType::Null => write!(f, "null"),
+            TagType::Array => write!(f, "array"),
+        }
     }
 }
 
@@ -451,11 +461,7 @@ pub struct ParamDeclaration {
 
 impl ParamDeclaration {
     pub(crate) fn typ(&self) -> TerminalParamType {
-        match self.typ {
-            ParamType::Terminal(terminal_param_type) | ParamType::Optional(terminal_param_type) => {
-                terminal_param_type
-            }
-        }
+        self.typ.typ()
     }
 
     pub(crate) fn is_optional(&self) -> bool {
@@ -480,6 +486,8 @@ pub enum ParamValue {
     Bool(bool),
     /// Regex
     Regex(EncodableRegex),
+    /// Array
+    Array(Vec<TagValue>),
 }
 
 impl ParamValue {
@@ -494,6 +502,7 @@ impl ParamValue {
             ParamValue::Int(_) => TerminalParamType::Tag(TagType::Int),
             ParamValue::Float(_) => TerminalParamType::Tag(TagType::Float),
             ParamValue::Bool(_) => TerminalParamType::Tag(TagType::Bool),
+            ParamValue::Array(_) => TerminalParamType::Tag(TagType::Array),
         }
     }
 }
@@ -828,6 +837,13 @@ impl ProvidedParams {
             Expr::Const(val) => return Ok(Expr::Const(val)), // no need to resolve
             Expr::Tag(tag) => return Ok(Expr::Tag(tag)),     // no need to resolve
             Expr::Param { span: _, param } => param,
+            Expr::Array(parts) => {
+                let parts = parts
+                    .into_iter()
+                    .map(|expr| self.inline_params(expr))
+                    .collect::<Result<_, ResolveError>>()?;
+                return Ok(Expr::Array(parts));
+            }
             Expr::String(parts) => {
                 // Inline all param expressions in the string concatination
                 let parts = parts
@@ -838,7 +854,7 @@ impl ProvidedParams {
                             Ok(StringFragment::Expr(self.inline_params(expr)?))
                         }
                     })
-                    .collect::<Result<Vec<StringFragment>, ResolveError>>()?;
+                    .collect::<Result<Vec<_>, ResolveError>>()?;
                 // If all parts are text, collapse the string
                 return if parts.iter().all(|part| {
                     matches!(part, StringFragment::Text(_))
@@ -878,6 +894,7 @@ impl ProvidedParams {
             ParamValue::Int(val) => Ok(Expr::Const(TagValue::Int(*val))),
             ParamValue::Float(val) => Ok(Expr::Const(TagValue::Float(*val))),
             ParamValue::Bool(val) => Ok(Expr::Const(TagValue::Bool(*val))),
+            ParamValue::Array(val) => Ok(Expr::Const(TagValue::Array(val.clone()))),
             val => Err(ResolveError::InvalidType {
                 name: param.name,
                 defined: val.typ(),

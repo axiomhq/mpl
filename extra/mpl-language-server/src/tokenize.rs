@@ -157,6 +157,16 @@ impl PairVisitor for TokenCollector<'_> {
             return VisitAction::Walk;
         }
 
+        // `in` is a word-shaped comparison operator; style it as a keyword to
+        // match `is` rather than the symbolic operators sharing `Rule::cmp`.
+        if node.rule == Rule::cmp && &self.source[node.span.from..node.span.to] == "in" {
+            self.tokens.push(Token {
+                span: node.span,
+                kind: TokenType::Keyword,
+            });
+            return VisitAction::Skip;
+        }
+
         if let Some(kind) = token_type(node.rule) {
             self.tokens.push(Token {
                 span: node.span,

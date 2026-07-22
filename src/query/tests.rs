@@ -4,7 +4,7 @@ use crate::{
     enc_regex::EncodableRegex,
     query::{
         Cmp, Expr, Filter, FilterOrIfDef, ParamDeclaration, ParamType, ParamValue,
-        ParseProvidedParamsError, ProvidedParam, ProvidedParams, RelativeTime, ResolveError,
+        ParseProvidedParamsError, ProvidedParam, ProvidedParams, Query, RelativeTime, ResolveError,
         StringFragment, TagType, TerminalParamType, TimeUnit,
     },
     tags::TagValue,
@@ -100,6 +100,152 @@ fn provided_params_parse() {
         value: ParamValue::Regex(EncodableRegex::new("[a-z]+").expect("invalid regex"))
     }));
     assert_eq!(7, provided_params.as_slice().len());
+}
+
+#[test]
+fn provided_params_parse_array() {
+    let mpl_params = vec![ParamDeclaration {
+        span: SourceSpan::from(0..0),
+        name: "hosts".to_string(),
+        typ: ParamType::Terminal(TerminalParamType::Tag(TagType::Array)),
+    }];
+
+    // Heterogeneous elements and nesting are legal; each element is coerced
+    // to a plain `TagValue`.
+    let query_params = vec![(
+        "param__hosts".to_string(),
+        "[\"a\", 1, 2.5, true, [2]]".to_string(),
+    )];
+
+    let (provided_params, _) = ProvidedParams::parse_and_validate(&mpl_params, &query_params)
+        .expect("failed to parse provided array param");
+
+    assert!(provided_params.as_slice().contains(&ProvidedParam {
+        name: "hosts".to_string(),
+        value: ParamValue::Array(vec![
+            TagValue::String("a".try_into().expect("valid shared string")),
+            TagValue::Int(1),
+            TagValue::Float(2.5),
+            TagValue::Bool(true),
+            TagValue::Array(vec![TagValue::Int(2)]),
+        ])
+    }));
+}
+
+#[test]
+fn provided_params_array_rejects_scalar_value() {
+    let mpl_params = vec![ParamDeclaration {
+        span: SourceSpan::from(0..0),
+        name: "hosts".to_string(),
+        typ: ParamType::Terminal(TerminalParamType::Tag(TagType::Array)),
+    }];
+
+    let query_params = vec![("param__hosts".to_string(), "42".to_string())];
+
+    match ProvidedParams::parse_and_validate(&mpl_params, &query_params) {
+        Err(ParseProvidedParamsError::ParseParam {
+            param_name,
+            expected_type,
+            err,
+        }) => {
+            assert_eq!("hosts", param_name);
+            assert_eq!(
+                ParamType::Terminal(TerminalParamType::Tag(TagType::Array)),
+                expected_type
+            );
+            assert!(
+                err.to_string().contains("declared as type array"),
+                "expected an array type mismatch, got: {err}"
+            );
+        }
+        res => panic!("expected parse param error, got {res:?}"),
+    }
+}
+
+#[test]
+fn provided_params_array_rejects_interpolated_element() {
+    // Provided values are literals; an interpolated string element has no
+    // meaning here and must be rejected rather than silently stringified.
+    let mpl_params = vec![ParamDeclaration {
+        span: SourceSpan::from(0..0),
+        name: "hosts".to_string(),
+        typ: ParamType::Terminal(TerminalParamType::Tag(TagType::Array)),
+    }];
+
+    let query_params = vec![("param__hosts".to_string(), "[\"${ x }\"]".to_string())];
+
+    match ProvidedParams::parse_and_validate(&mpl_params, &query_params) {
+        Err(ParseProvidedParamsError::ParseParam { err, .. }) => {
+            assert!(
+                err.to_string().contains("Unsupported Array element"),
+                "expected an unsupported-element error, got: {err}"
+            );
+        }
+        res => panic!("expected parse param error, got {res:?}"),
+    }
+}
+
+#[test]
+fn resolve_array_param_to_const_array() {
+    let provided_params = ProvidedParams::new(vec![ProvidedParam::new(
+        "hosts",
+        ParamValue::Array(vec![TagValue::Int(1), TagValue::Int(2)]),
+    )]);
+
+    let value = provided_params
+        .inline_params(Expr::Param {
+            span: SourceSpan::from(0..0),
+            param: ParamDeclaration {
+                span: SourceSpan::from(0..0),
+                name: "hosts".to_string(),
+                typ: ParamType::Terminal(TerminalParamType::Tag(TagType::Array)),
+            },
+        })
+        .expect("expected array param to resolve");
+
+    assert_eq!(
+        value,
+        Expr::Const(TagValue::Array(vec![TagValue::Int(1), TagValue::Int(2)]))
+    );
+}
+
+/// The full pipeline: declare `$hosts: array`, use it as the RHS of `in`,
+/// provide a value over query params, and inline it into a constant array.
+#[test]
+fn provided_array_param_end_to_end_in_filter() {
+    let (query, _warnings) = crate::compile(
+        "param $hosts: array;\nds:m | where t in $hosts",
+        std::collections::HashMap::new(),
+    )
+    .expect("`in $hosts` should compile");
+
+    let Query::Simple {
+        params, filters, ..
+    } = query
+    else {
+        panic!("expected a simple query");
+    };
+
+    let (provided, _) = ProvidedParams::parse_and_validate(
+        &params,
+        &[("param__hosts".to_string(), "[1, 2]".to_string())],
+    )
+    .expect("provided array value should validate");
+
+    let FilterOrIfDef::Filter(Filter::Cmp {
+        rhs: Cmp::In(expr), ..
+    }) = &filters[0]
+    else {
+        panic!("expected an in-filter");
+    };
+
+    let inlined = provided
+        .inline_params(expr.clone())
+        .expect("array param should inline");
+    assert_eq!(
+        inlined,
+        Expr::Const(TagValue::Array(vec![TagValue::Int(1), TagValue::Int(2)]))
+    );
 }
 
 #[test]

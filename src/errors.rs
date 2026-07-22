@@ -210,7 +210,7 @@ pub enum ParseError {
     #[error("Unsupported tag comparison: {op}")]
     #[diagnostic(
         code(mpl_lang::unsupported_tag_comparison),
-        help("Supported operators: ==, !=, >, >=, <, <=")
+        help("Supported operators: ==, !=, >, >=, <, <=, in")
     )]
     UnsupportedTagComparison {
         /// The source location of the unsupported operator
@@ -218,6 +218,18 @@ pub enum ParseError {
         span: SourceSpan,
         /// The unsupported operator
         op: String,
+    },
+
+    /// `in` used with a non-array right-hand side
+    #[error("`in` requires an array on the right-hand side")]
+    #[diagnostic(
+        code(mpl_lang::in_requires_array),
+        help("Use an array literal (e.g. `in [200, 201]`) or an array-typed param")
+    )]
+    InRequiresArray {
+        /// The source location of the offending right-hand side
+        #[label("expected an array here")]
+        span: SourceSpan,
     },
 
     /// The feature is not implemented yet
@@ -468,7 +480,7 @@ fn friendly_rule(rule: Rule) -> String {
         Rule::regex => "a regex pattern (e.g., #/pattern/)".to_string(),
 
         // Values
-        Rule::r#const => "value (string, number, or bool)".to_string(),
+        Rule::r#const => "value (string, number, bool or array)".to_string(),
         Rule::string => "string value".to_string(),
         Rule::number => "number".to_string(),
         Rule::bool => "bool (true or false)".to_string(),
@@ -529,7 +541,7 @@ fn friendly_rule(rule: Rule) -> String {
         Rule::regex_filter => "regex filter".to_string(),
         Rule::kw_is => "`is` keyword".to_string(),
         Rule::is_filter => "type filter (e.g., is string)".to_string(),
-        Rule::tag_type => "tag type (string, int, float, or bool)".to_string(),
+        Rule::tag_type => "tag type (array, string, int, float, or bool)".to_string(),
 
         // Tags
         Rule::tags => "tags (comma-separated field names)".to_string(),
@@ -670,6 +682,7 @@ fn rules_keywords(rules: &[Rule]) -> Vec<&'static str> {
             Rule::join => keywords.push("join"),
             Rule::kw_is => keywords.push("is"),
             Rule::tag_type => {
+                keywords.push("array");
                 keywords.push("string");
                 keywords.push("int");
                 keywords.push("float");

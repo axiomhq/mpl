@@ -568,6 +568,290 @@ fn filter_is_types() {
 }
 
 #[test]
+fn filter_in_matches() {
+    // `where host in ["a", "c"]` keeps only the series whose tag equals one of
+    // the listed elements.
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(&[("host", "a")], vec![0.0], vec![1.0]),
+            s(&[("host", "b")], vec![0.0], vec![2.0]),
+            s(&[("host", "c")], vec![0.0], vec![3.0]),
+        ],
+    );
+    let filter = Filter::Cmp {
+        field: "host".into(),
+        rhs: Cmp::In(Expr::Array(vec![
+            Expr::Const(TagValue::String(
+                strumbra::SharedString::try_from("a").unwrap(),
+            )),
+            Expr::Const(TagValue::String(
+                strumbra::SharedString::try_from("c").unwrap(),
+            )),
+        ])),
+    };
+    let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
+    let result = interpret(&steps, &datasets);
+    let kept = result[1].as_ref().unwrap();
+    assert_eq!(kept.len(), 2);
+    assert_eq!(kept[0].values, vec![1.0]);
+    assert_eq!(kept[1].values, vec![3.0]);
+}
+
+#[test]
+fn filter_in_mixed_type_elements() {
+    // Each element is rendered to its `raw_tag` string form before comparison,
+    // so `in [200, 3.5, false]` matches tags spelled "200", "3.5" and "false".
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(&[("v", "200")], vec![0.0], vec![1.0]),
+            s(&[("v", "3.5")], vec![0.0], vec![2.0]),
+            s(&[("v", "false")], vec![0.0], vec![3.0]),
+            s(&[("v", "404")], vec![0.0], vec![4.0]),
+        ],
+    );
+    let filter = Filter::Cmp {
+        field: "v".into(),
+        rhs: Cmp::In(Expr::Array(vec![
+            Expr::Const(TagValue::Int(200)),
+            Expr::Const(TagValue::Float(3.5)),
+            Expr::Const(TagValue::Bool(false)),
+        ])),
+    };
+    let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
+    let result = interpret(&steps, &datasets);
+    assert_eq!(result[1].as_ref().unwrap().len(), 3);
+}
+
+#[test]
+fn filter_in_const_array() {
+    // Covers the pre-resolved `Expr::Const(TagValue::Array(..))` form: the tag
+    // matches when it equals any element rendered via `raw_tag`.
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(&[("host", "a")], vec![0.0], vec![1.0]),
+            s(&[("host", "1")], vec![0.0], vec![2.0]),
+            s(&[("host", "b")], vec![0.0], vec![3.0]),
+        ],
+    );
+    let filter = Filter::Cmp {
+        field: "host".into(),
+        rhs: Cmp::In(Expr::Const(TagValue::Array(vec![
+            TagValue::String(strumbra::SharedString::try_from("a").unwrap()),
+            TagValue::Int(1),
+        ]))),
+    };
+    let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
+    let result = interpret(&steps, &datasets);
+    assert_eq!(result[1].as_ref().unwrap().len(), 2);
+}
+
+#[test]
+fn eval_array_expr_joins_like_raw_tag() {
+    // A bare array on the RHS of `==` renders to the comma-joined `raw_tag`
+    // form, so it only matches a tag literally spelled that way.
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(&[("host", "a, b")], vec![0.0], vec![1.0]),
+            s(&[("host", "a")], vec![0.0], vec![2.0]),
+        ],
+    );
+    let filter = Filter::Cmp {
+        field: "host".into(),
+        rhs: Cmp::Eq(Expr::Array(vec![
+            Expr::Const(TagValue::String(
+                strumbra::SharedString::try_from("a").unwrap(),
+            )),
+            Expr::Const(TagValue::String(
+                strumbra::SharedString::try_from("b").unwrap(),
+            )),
+        ])),
+    };
+    let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
+    let result = interpret(&steps, &datasets);
+    let kept = result[1].as_ref().unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].values, vec![1.0]);
+}
+
+#[test]
+fn eval_array_expr_unevaluable_element_is_non_match() {
+    // When an array element interpolates a tag that is missing on a given
+    // series, that element — and thus the whole array — is unevaluable, so the
+    // comparison does not match that series (the `None` branch). `env` exists
+    // on the first series, so the filter still passes tag-existence validation.
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(&[("host", "a, x"), ("env", "x")], vec![0.0], vec![1.0]),
+            s(&[("host", "a, x")], vec![0.0], vec![2.0]),
+        ],
+    );
+    let filter = Filter::Cmp {
+        field: "host".into(),
+        rhs: Cmp::Eq(Expr::Array(vec![
+            Expr::Const(TagValue::String(
+                strumbra::SharedString::try_from("a").unwrap(),
+            )),
+            // Interpolates `env`, which the second series lacks.
+            Expr::String(vec![StringFragment::Expr(Expr::Tag("env".into()))]),
+        ])),
+    };
+    let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
+    let result = interpret(&steps, &datasets);
+    let kept = result[1].as_ref().unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].values, vec![1.0]);
+}
+
+#[test]
+fn filter_in_scalar_degrades_to_equality() {
+    // The parser rejects a scalar right-hand side for `in`, but the AST permits
+    // it; when constructed directly it degrades to a plain equality check
+    // rather than panicking (covers the defensive `Cmp::In(other)` arm).
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(&[("host", "a")], vec![0.0], vec![1.0]),
+            s(&[("host", "b")], vec![0.0], vec![2.0]),
+        ],
+    );
+    let filter = Filter::Cmp {
+        field: "host".into(),
+        rhs: Cmp::In(Expr::Const(TagValue::String(
+            strumbra::SharedString::try_from("a").unwrap(),
+        ))),
+    };
+    let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
+    let result = interpret(&steps, &datasets);
+    let kept = result[1].as_ref().unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].values, vec![1.0]);
+}
+
+#[test]
+fn filter_in_unknown_tag_ref_errors() {
+    // `in` participates in the same unknown-tag validation as `==`: a tag
+    // referenced from inside an array element (via string interpolation) that
+    // no series carries must fail the step, not silently drop everything.
+    let datasets = ds("ds", "m", vec![s(&[("host", "a")], vec![0.0], vec![1.0])]);
+    let filter = Filter::Cmp {
+        field: "host".into(),
+        rhs: Cmp::In(Expr::Array(vec![Expr::String(vec![StringFragment::Expr(
+            Expr::Tag("env".into()),
+        )])])),
+    };
+    let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
+    let result = interpret(&steps, &datasets);
+    let err = result[1].as_ref().unwrap_err();
+    assert!(
+        err.to_string().contains("Unknown tag: env"),
+        "expected unknown-tag error, got: {err:#}"
+    );
+}
+
+/// End-to-end through `compile()`: a real `in` query string is parsed, planned,
+/// and evaluated without panicking, keeping only matching series.
+#[test]
+fn run_path_in_filter() {
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(&[("host", "a")], vec![0.0], vec![1.0]),
+            s(&[("host", "b")], vec![0.0], vec![2.0]),
+            s(&[("host", "c")], vec![0.0], vec![3.0]),
+        ],
+    );
+    let (query, _) = compile("ds:m | where host in [\"a\", \"c\"]", HashMap::new())
+        .expect("`in` query must compile");
+    let steps = query_steps(query);
+    let results = interpret(&steps, &datasets);
+    let kept = results.last().unwrap().as_ref().unwrap();
+    assert_eq!(kept.len(), 2);
+    assert_eq!(kept[0].values, vec![1.0]);
+    assert_eq!(kept[1].values, vec![3.0]);
+}
+
+#[test]
+fn filter_in_empty_array_matches_nothing() {
+    // `in []` is legal and matches nothing — the step succeeds with an empty
+    // result rather than erroring. The empty-string tag guards against the
+    // empty array accidentally matching an "empty" value.
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(&[("host", "a")], vec![0.0], vec![1.0]),
+            s(&[("host", "")], vec![0.0], vec![2.0]),
+        ],
+    );
+    let filter = Filter::Cmp {
+        field: "host".into(),
+        rhs: Cmp::In(Expr::Array(vec![])),
+    };
+    let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
+    let result = interpret(&steps, &datasets);
+    let kept = result[1].as_ref().unwrap();
+    assert!(kept.is_empty(), "in [] must match nothing, kept {kept:?}");
+}
+
+// Property: a single-element array is equivalent to `==` — for every element
+// type (matching or not), `t in [v]` keeps exactly the series `t == v` keeps.
+#[test]
+fn filter_in_single_element_equals_eq() {
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(&[("t", "a")], vec![0.0], vec![1.0]),
+            s(&[("t", "200")], vec![0.0], vec![2.0]),
+            s(&[("t", "true")], vec![0.0], vec![3.0]),
+            s(&[("t", "b")], vec![0.0], vec![4.0]),
+        ],
+    );
+    let elements = [
+        Expr::Const(TagValue::String(
+            strumbra::SharedString::try_from("a").unwrap(),
+        )),
+        Expr::Const(TagValue::Int(200)),
+        Expr::Const(TagValue::Bool(true)),
+        // Matches no series: the equivalence must hold for empty results too.
+        Expr::Const(TagValue::Float(2.5)),
+    ];
+    for element in elements {
+        let kept_values = |rhs: Cmp| -> Vec<Vec<f64>> {
+            let filter = Filter::Cmp {
+                field: "t".into(),
+                rhs,
+            };
+            let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
+            interpret(&steps, &datasets)[1]
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|s| s.values.clone())
+                .collect()
+        };
+        let eq_kept = kept_values(Cmp::Eq(element.clone()));
+        let in_kept = kept_values(Cmp::In(Expr::Array(vec![element.clone()])));
+        assert_eq!(
+            eq_kept, in_kept,
+            "single-element `in` must match `==` for {element:?}"
+        );
+    }
+}
+
+#[test]
 fn map_abs() {
     let datasets = ds("ds", "m", vec![s(&[], vec![0.0], vec![-5.0])]);
     let steps = vec![
@@ -622,6 +906,15 @@ fn raw_tag_variants() {
             strumbra::SharedString::try_from("hello").unwrap()
         )),
         "hello"
+    );
+    // Arrays render as their comma-joined elements, recursing into nested
+    // arrays.
+    assert_eq!(
+        raw_tag(&TagValue::Array(vec![
+            TagValue::Int(1),
+            TagValue::Array(vec![TagValue::Int(2), TagValue::Bool(true)]),
+        ])),
+        "1, 2, true"
     );
 }
 
