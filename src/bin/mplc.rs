@@ -45,12 +45,58 @@ enum Command {
         #[arg(short, long)]
         output: Option<String>,
     },
+    /// Parses a ndjson formated test corpus
+    Corpus { file: String },
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
 
     match args.command {
+        Command::Corpus { file } => {
+            let content = fs::read_to_string(&file)
+                .into_diagnostic()
+                .map_err(|e| e.context(format!("Failed to read file '{file}'")))?;
+            let corpus = content
+                .lines()
+                .filter_map(|l| {
+                    Some(
+                        serde_json::from_str::<serde_json::Value>(l)
+                            .ok()?
+                            .get("mpl")?
+                            .as_str()?
+                            .to_string(),
+                    )
+                })
+                .collect::<Vec<String>>();
+
+            let mut system_params = HashMap::new();
+            system_params.insert(
+                "__interval".to_string(),
+                ParamType::Terminal(TerminalParamType::Duration),
+            );
+            let mut success = 0;
+            let mut errors = Vec::new();
+
+            for c in &corpus {
+                let params = system_params.clone();
+                let parsed = mpl_lang::compile(c.as_str(), params).map_err(|e| {
+                    Report::new(e).with_source_code(NamedSource::new(&file, c.clone()))
+                });
+                match parsed {
+                    Ok(_) => success += 1,
+                    Err(e) => errors.push((c.clone(), e)),
+                }
+            }
+            println!(
+                "total: {}, success: {success}, errors: {}",
+                corpus.len(),
+                errors.len()
+            );
+            for (q, e) in &errors {
+                println!("error: {q}: {e}");
+            }
+        }
         Command::Parse {
             file,
             format,
