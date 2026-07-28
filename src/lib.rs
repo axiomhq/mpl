@@ -9,6 +9,8 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(unused_assignments)] // We need this for the type error
 
+/// The lexer for the MPL query language.
+pub mod lexer;
 mod parser;
 pub use parser::{MPLParser, Rule};
 
