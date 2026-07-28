@@ -14,9 +14,13 @@ fn lex_examples() {
             println!("Running example: {file_name}");
             let content = fs::read_to_string(&path).unwrap();
             let mut lexer = mpl_lang::lexer::Lexer::new(&content);
-            if let Some(Token::Invalid(pos, t)) = lexer.find(|t| matches!(t, Token::Invalid(_, _)))
-            {
-                panic!("[{file_name}] Invalid token at position {pos}: `{t}`");
+
+            if let Some(token) = lexer.find(Token::is_invalid) {
+                panic!(
+                    "[{file_name}] Invalid token at position {}: `{}`",
+                    token.pos(),
+                    token.text()
+                );
             }
         });
 }
@@ -38,9 +42,12 @@ fn parse_unimplemented_examples() {
             println!("Running example: {file_name}");
             let content = fs::read_to_string(&path).unwrap();
             let mut lexer = mpl_lang::lexer::Lexer::new(&content);
-            if let Some(Token::Invalid(pos, t)) = lexer.find(|t| matches!(t, Token::Invalid(_, _)))
-            {
-                panic!("[{file_name}] Invalid token at position {pos}: `{t}`");
+            if let Some(token) = lexer.find(Token::is_invalid) {
+                panic!(
+                    "[{file_name}] Invalid token at position {}: `{}`",
+                    token.pos(),
+                    token.text()
+                );
             }
         });
 }
@@ -60,13 +67,15 @@ fn lex_error_examples() {
             let mut lexer = mpl_lang::lexer::Lexer::new(&content);
             if failing.contains(&file_name) {
                 assert!(
-                    lexer.find(|t| matches!(t, Token::Invalid(_, _))).is_some(),
+                    lexer.find(Token::is_invalid).is_some(),
                     "[{file_name}] should fail"
                 );
-            } else if let Some(Token::Invalid(pos, t)) =
-                lexer.find(|t| matches!(t, Token::Invalid(_, _)))
-            {
-                panic!("[{file_name}] Invalid token at position {pos}: `{t}`");
+            } else if let Some(token) = lexer.find(Token::is_invalid) {
+                panic!(
+                    "[{file_name}] Invalid token at position {}: `{}`",
+                    token.pos(),
+                    token.text()
+                );
             }
         });
 }

@@ -5,84 +5,137 @@
 //
 use std::{iter::Peekable, str::Chars};
 
-/// Represents a token parsed from the input.
-pub enum Token<'input> {
+/// Represents a token parsed from the input, type, position in the input and text representation.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct Token<'input> {
+    /// The type of the token.
+    tpe: TokenType,
+    /// The text of the token.
+    text: &'input str,
+    /// The byte position of the token in the input string.
+    pos: usize,
+}
+
+/// Represents the type of a token.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum TokenType {
     /// An invalid token.
-    Invalid(usize, &'input str),
+    Invalid,
     /// Whitespace.
-    Whitespace(usize, &'input str),
+    Whitespace,
     /// An identifier.
-    Ident(usize, &'input str),
+    Ident,
     /// An escaped identifier.
-    EscapedIdent(usize, &'input str),
+    EscapedIdent,
     /// A comment.
-    Comment(usize, &'input str),
+    Comment,
     /// A division operator.
-    Div(usize),
+    Div,
     /// A multiplication operator.
-    Mul(usize),
+    Mul,
     /// A plus operator.
-    Plus(usize),
+    Plus,
     /// A minus operator.
-    Minus(usize),
+    Minus,
     /// A pipe character.
-    Pipe(usize),
+    Pipe,
     /// A double colon character.
-    DoubleColon(usize),
+    DoubleColon,
     /// A colon character.
-    Colon(usize),
+    Colon,
     /// An integer.
-    Integer(usize, &'input str),
+    Integer,
     /// A float.
-    Float(usize, &'input str),
+    Float,
     /// An equal comparison operator.
-    EqualEqual(usize),
+    EqualEqual,
     /// An equal sign.
-    Equal(usize),
+    Equal,
     /// A variable reference.
-    Variable(usize, &'input str),
+    Variable,
     /// An escaped variable reference.
-    EscapedVariable(usize, &'input str),
+    EscapedVariable,
     /// A regex literal.
-    Regex(usize, &'input str),
+    Regex,
     /// A comma character.
-    Comma(usize),
+    Comma,
     /// A open parenthesis `(`.
-    ParenOpen(usize),
+    ParenOpen,
     /// A close parenthesis `)`.
-    ParenClose(usize),
+    ParenClose,
     /// A open bracket `[`.
-    BracketOpen(usize),
+    BracketOpen,
     /// A close bracket `]`.
-    BracketClose(usize),
+    BracketClose,
     /// A open brace `{`.
-    BraceOpen(usize),
+    BraceOpen,
     /// A close brace `}`.
-    BraceClose(usize),
+    BraceClose,
     /// A question mark `?`.
-    QuestionMark(usize),
+    QuestionMark,
     /// A bang `!`.
-    Bang(usize),
+    Bang,
     /// A semicolon `;`.
-    SemiColon(usize),
+    SemiColon,
     /// A less than or equal comparison operator.
-    LessThanEqual(usize),
+    LessThanEqual,
     /// A greater than or equal comparison operator.
-    GreaterThanEqual(usize),
+    GreaterThanEqual,
     /// A less than comparison operator.
-    LessThan(usize),
+    LessThan,
     /// A greater than comparison operator.
-    GreaterThan(usize),
+    GreaterThan,
     /// A not equal comparison operator.
-    NotEqual(usize),
+    NotEqual,
     /// A dot dot `..` operator.
-    DotDot(usize),
+    DotDot,
     /// A string literal.
-    String(usize, &'input str),
+    String,
     /// A bool literal value.
-    Bool(usize, &'input str),
+    Bool,
     /// A inf literal value.
-    Inf(usize, &'input str),
+    Inf,
+}
+
+impl Token<'_> {
+    /// Returns the start position of the token.
+    #[must_use]
+    pub fn pos(&self) -> usize {
+        self.pos
+    }
+
+    /// Returns the length of the token.
+    #[must_use]
+    fn len(&self) -> usize {
+        self.text().len()
+    }
+
+    /// Returns the end position of the token.
+    #[must_use]
+    pub fn end(&self) -> usize {
+        self.pos() + self.len()
+    }
+
+    /// Returns the text  of the token.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        self.text
+    }
+    /// Returns the type of the token.
+    #[must_use]
+    pub fn tpe(&self) -> TokenType {
+        self.tpe
+    }
+    /// returns if the token is invalid
+    #[must_use]
+    pub fn is_invalid(&self) -> bool {
+        self.tpe == TokenType::Invalid
+    }
+    /// returns if the token is valid
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.tpe != TokenType::Invalid
+    }
 }
 
 enum State {
@@ -136,15 +189,27 @@ impl<'input> Lexer<'input> {
                 .get(self.pos + 1)
                 .is_some_and(|c| *c == b'.')
             {
-                return Token::Integer(start, &self.input[start..self.pos]);
+                return Token {
+                    tpe: TokenType::Integer,
+                    text: &self.input[start..self.pos],
+                    pos: start,
+                };
             }
             self.advance_char();
             while self.chars.peek().is_some_and(char::is_ascii_digit) {
                 self.advance_char();
             }
-            Token::Float(start, &self.input[start..self.pos])
+            Token {
+                tpe: TokenType::Float,
+                text: &self.input[start..self.pos],
+                pos: start,
+            }
         } else {
-            Token::Integer(start, &self.input[start..self.pos])
+            Token {
+                tpe: TokenType::Integer,
+                text: &self.input[start..self.pos],
+                pos: start,
+            }
         }
     }
 
@@ -156,10 +221,18 @@ impl<'input> Lexer<'input> {
                 '\\' => {
                     self.advance_char();
                     let Some(c) = self.chars.peek() else {
-                        return Token::Invalid(start, &self.input[start..self.pos]);
+                        return Token {
+                            tpe: TokenType::Invalid,
+                            text: &self.input[start..self.pos],
+                            pos: start,
+                        };
                     };
                     if !(*c == '`' || *c == 'n' || *c == 't' || *c == 'r' || *c == '\\') {
-                        return Token::Invalid(start, &self.input[start..self.pos]);
+                        return Token {
+                            tpe: TokenType::Invalid,
+                            text: &self.input[start..self.pos],
+                            pos: start,
+                        };
                     }
                 }
                 _ => {}
@@ -168,9 +241,17 @@ impl<'input> Lexer<'input> {
         }
         if self.chars.next() == Some('`') {
             self.pos += 1;
-            Token::EscapedIdent(start, &self.input[start..self.pos])
+            Token {
+                tpe: TokenType::EscapedIdent,
+                text: &self.input[start..self.pos],
+                pos: start,
+            }
         } else {
-            Token::Invalid(start, &self.input[start..self.pos])
+            Token {
+                tpe: TokenType::Invalid,
+                text: &self.input[start..self.pos],
+                pos: start,
+            }
         }
     }
 
@@ -189,7 +270,11 @@ impl<'input> Lexer<'input> {
                     {
                         self.advance_char();
                     } else {
-                        return Token::Invalid(start, &self.input[start..self.pos]);
+                        return Token {
+                            tpe: TokenType::Invalid,
+                            text: &self.input[start..self.pos],
+                            pos: start,
+                        };
                     }
                 }
                 '$' => {
@@ -202,7 +287,11 @@ impl<'input> Lexer<'input> {
                         }
                     } else {
                         // there is no char after the dollar sign, so it's invalid
-                        return Token::Invalid(start, &self.input[start..self.pos]);
+                        return Token {
+                            tpe: TokenType::Invalid,
+                            text: &self.input[start..self.pos],
+                            pos: start,
+                        };
                     }
                 }
                 _ => {
@@ -218,14 +307,26 @@ impl<'input> Lexer<'input> {
                 //     return Token::Invalid(start, &self.input[start..self.pos]);
                 // }
                 self.pos += 1;
-                Token::String(start, &self.input[start..self.pos])
+                Token {
+                    tpe: TokenType::String,
+                    text: &self.input[start..self.pos],
+                    pos: start,
+                }
             }
             Some('{') => {
                 // we don't pop since we enter nested terretorry
                 self.pos += 1;
-                Token::String(start, &self.input[start..self.pos])
+                Token {
+                    tpe: TokenType::String,
+                    text: &self.input[start..self.pos],
+                    pos: start,
+                }
             }
-            _ => Token::Invalid(start, &self.input[start..self.pos]),
+            _ => Token {
+                tpe: TokenType::Invalid,
+                text: &self.input[start..self.pos],
+                pos: start,
+            },
         }
     }
 
@@ -239,7 +340,11 @@ impl<'input> Lexer<'input> {
                     '\\' => {
                         self.advance_char();
                         let Some(c) = self.chars.peek() else {
-                            return Token::Invalid(start, &self.input[start..self.pos]);
+                            return Token {
+                                tpe: TokenType::Invalid,
+                                text: &self.input[start..self.pos],
+                                pos: start,
+                            };
                         };
                         if !(*c == '/'
                             || *c == '\\'
@@ -258,7 +363,11 @@ impl<'input> Lexer<'input> {
                             || *c == 't'
                             || *c == 'r')
                         {
-                            return Token::Invalid(start, &self.input[start..self.pos]);
+                            return Token {
+                                tpe: TokenType::Invalid,
+                                text: &self.input[start..self.pos],
+                                pos: start,
+                            };
                         }
                     }
                     _ => {}
@@ -267,12 +376,24 @@ impl<'input> Lexer<'input> {
             }
             if self.chars.next() == Some('/') {
                 self.pos += 1;
-                Token::Regex(start, &self.input[start..self.pos])
+                Token {
+                    tpe: TokenType::Regex,
+                    text: &self.input[start..self.pos],
+                    pos: start,
+                }
             } else {
-                Token::Invalid(start, &self.input[start..self.pos])
+                Token {
+                    tpe: TokenType::Invalid,
+                    text: &self.input[start..self.pos],
+                    pos: start,
+                }
             }
         } else {
-            Token::Invalid(start, &self.input[start..self.pos])
+            Token {
+                tpe: TokenType::Invalid,
+                text: &self.input[start..self.pos],
+                pos: start,
+            }
         }
     }
 
@@ -288,14 +409,27 @@ impl<'input> Lexer<'input> {
         let ident = &self.input[start..self.pos];
         // check if we have a ident or a keyword
         match ident {
-            "true" | "false" => Token::Bool(start, ident),
-            "inf" => Token::Inf(start, ident),
-            other => Token::Ident(start, other),
+            "true" | "false" => Token {
+                tpe: TokenType::Bool,
+                text: ident,
+                pos: start,
+            },
+            "inf" => Token {
+                tpe: TokenType::Inf,
+                text: ident,
+                pos: start,
+            },
+            other => Token {
+                tpe: TokenType::Ident,
+                text: other,
+                pos: start,
+            },
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn next_token(&mut self) -> Option<Token<'input>> {
-        let start = self.pos;
+        let pos = self.pos;
         let c = self.chars.next()?;
         self.pos += c.len_utf8();
         let token = match c {
@@ -303,68 +437,184 @@ impl<'input> Lexer<'input> {
                 while self.chars.peek().is_some_and(|c| c.is_whitespace()) {
                     self.advance_char();
                 }
-                Token::Whitespace(start, &self.input[start..self.pos])
+                Token {
+                    tpe: TokenType::Whitespace,
+                    text: &self.input[pos..self.pos],
+                    pos,
+                }
             }
-            '|' => Token::Pipe(start),
-            ',' => Token::Comma(start),
-            '(' => Token::ParenOpen(start),
-            ')' => Token::ParenClose(start),
-            '[' => Token::BracketOpen(start),
-            ']' => Token::BracketClose(start),
+            '|' => Token {
+                tpe: TokenType::Pipe,
+                text: &self.input[pos..self.pos],
+                pos,
+            },
+            ',' => Token {
+                tpe: TokenType::Comma,
+                text: &self.input[pos..self.pos],
+                pos,
+            },
+            '(' => Token {
+                tpe: TokenType::ParenOpen,
+                text: &self.input[pos..self.pos],
+                pos,
+            },
+            ')' => Token {
+                tpe: TokenType::ParenClose,
+                text: &self.input[pos..self.pos],
+                pos,
+            },
+            '[' => Token {
+                tpe: TokenType::BracketOpen,
+                text: &self.input[pos..self.pos],
+                pos,
+            },
+            ']' => Token {
+                tpe: TokenType::BracketClose,
+                text: &self.input[pos..self.pos],
+                pos,
+            },
             '{' => {
                 self.state.push(State::BraceOpen);
-                Token::BraceOpen(start)
+                Token {
+                    tpe: TokenType::BraceOpen,
+                    text: &self.input[pos..self.pos],
+                    pos,
+                }
             }
             '}' => match self.state.pop() {
-                Some(State::BraceOpen) | None => Token::BraceClose(start),
-                Some(State::StrOpen) => self.parse_string(start),
+                Some(State::BraceOpen) | None => Token {
+                    tpe: TokenType::BraceClose,
+                    text: &self.input[pos..self.pos],
+                    pos,
+                },
+                Some(State::StrOpen) => self.parse_string(pos),
             },
-            '?' => Token::QuestionMark(start),
-            ';' => Token::SemiColon(start),
-            '*' => Token::Mul(start),
-            '+' => Token::Plus(start),
-            '-' => Token::Minus(start),
+            '?' => Token {
+                tpe: TokenType::QuestionMark,
+                text: &self.input[pos..self.pos],
+                pos,
+            },
+            ';' => Token {
+                tpe: TokenType::SemiColon,
+                text: &self.input[pos..self.pos],
+                pos,
+            },
+            '*' => Token {
+                tpe: TokenType::Mul,
+                text: &self.input[pos..self.pos],
+                pos,
+            },
+            '+' => Token {
+                tpe: TokenType::Plus,
+                text: &self.input[pos..self.pos],
+                pos,
+            },
+            '-' => Token {
+                tpe: TokenType::Minus,
+                text: &self.input[pos..self.pos],
+                pos,
+            },
             '.' if self.chars.peek().is_some_and(|c| *c == '.') => {
                 self.advance_char();
-                Token::DotDot(start)
+                Token {
+                    tpe: TokenType::DotDot,
+                    text: &self.input[pos..self.pos],
+                    pos,
+                }
             }
             '!' if self.chars.peek().is_some_and(|c| *c == '=') => {
                 self.advance_char();
-                Token::NotEqual(start)
+                Token {
+                    tpe: TokenType::NotEqual,
+                    text: &self.input[pos..self.pos],
+                    pos,
+                }
             }
-            '!' => Token::Bang(start),
+            '!' => Token {
+                tpe: TokenType::Bang,
+                text: &self.input[pos..self.pos],
+                pos,
+            },
             ':' if self.chars.peek().is_some_and(|c| *c == ':') => {
                 self.advance_char();
-                Token::DoubleColon(start)
+                Token {
+                    tpe: TokenType::DoubleColon,
+                    text: &self.input[pos..self.pos],
+                    pos,
+                }
             }
-            ':' => Token::Colon(start),
+            ':' => Token {
+                tpe: TokenType::Colon,
+                text: &self.input[pos..self.pos],
+                pos,
+            },
             '=' if self.chars.peek().is_some_and(|c| *c == '=') => {
                 self.advance_char();
-                Token::EqualEqual(start)
+                Token {
+                    tpe: TokenType::EqualEqual,
+                    text: &self.input[pos..self.pos],
+                    pos,
+                }
             }
-            '=' => Token::Equal(start),
+            '=' => Token {
+                tpe: TokenType::Equal,
+                text: &self.input[pos..self.pos],
+                pos,
+            },
             '<' if self.chars.peek().is_some_and(|c| *c == '=') => {
                 self.advance_char();
-                Token::LessThanEqual(start)
+                Token {
+                    tpe: TokenType::LessThanEqual,
+                    text: &self.input[pos..self.pos],
+                    pos,
+                }
             }
-            '<' => Token::LessThan(start),
+            '<' => Token {
+                tpe: TokenType::LessThan,
+                text: &self.input[pos..self.pos],
+                pos,
+            },
             '>' if self.chars.peek().is_some_and(|c| *c == '=') => {
                 self.advance_char();
-                Token::GreaterThanEqual(start)
+                Token {
+                    tpe: TokenType::GreaterThanEqual,
+                    text: &self.input[pos..self.pos],
+                    pos,
+                }
             }
-            '>' => Token::GreaterThan(start),
+            '>' => Token {
+                tpe: TokenType::GreaterThan,
+                text: &self.input[pos..self.pos],
+                pos,
+            },
             '/' if self.chars.peek().is_some_and(|c| *c == '/') => {
                 while self.chars.peek().is_some_and(|c| *c != '\n') {
                     self.advance_char();
                 }
-                Token::Comment(start, &self.input[start..self.pos])
+                Token {
+                    tpe: TokenType::Comment,
+                    text: &self.input[pos..self.pos],
+                    pos,
+                }
             }
-            '/' => Token::Div(start),
-            c if c.is_alphabetic() || c == '_' => self.parse_ident_or_kw(start),
+            '/' => Token {
+                tpe: TokenType::Div,
+                text: &self.input[pos..self.pos],
+                pos,
+            },
+            c if c.is_alphabetic() || c == '_' => self.parse_ident_or_kw(pos),
             '$' if self.chars.peek().is_some_and(|c| *c == '`') => {
                 self.advance_char();
-                match self.parse_escaped_ident(start) {
-                    Token::EscapedIdent(s, token) => Token::EscapedVariable(s, token),
+                match self.parse_escaped_ident(pos) {
+                    Token {
+                        tpe: TokenType::EscapedIdent,
+                        text,
+                        pos,
+                    } => Token {
+                        tpe: TokenType::EscapedVariable,
+                        text,
+                        pos,
+                    },
                     o => o,
                 }
             }
@@ -381,13 +631,21 @@ impl<'input> Lexer<'input> {
                 {
                     self.advance_char();
                 }
-                Token::Variable(start, &self.input[start..self.pos])
+                Token {
+                    tpe: TokenType::Variable,
+                    text: &self.input[pos..self.pos],
+                    pos,
+                }
             }
-            c if c.is_ascii_digit() => self.parse_number(start),
-            '`' => self.parse_escaped_ident(start),
-            '"' => self.parse_string(start),
-            '#' => self.parse_regex(start),
-            _ => Token::Invalid(start, &self.input[start..self.pos]),
+            c if c.is_ascii_digit() => self.parse_number(pos),
+            '`' => self.parse_escaped_ident(pos),
+            '"' => self.parse_string(pos),
+            '#' => self.parse_regex(pos),
+            _ => Token {
+                tpe: TokenType::Invalid,
+                text: &self.input[pos..self.pos],
+                pos,
+            },
         };
         Some(token)
     }
