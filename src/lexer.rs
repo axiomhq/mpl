@@ -1,3 +1,8 @@
+// Choices:
+//
+// - we do not allow unicode escapes
+// - we do not allow rfc 3339 timestamps
+//
 use std::{iter::Peekable, str::Chars};
 
 /// Represents a token parsed from the input.
@@ -8,8 +13,6 @@ pub enum Token<'input> {
     Whitespace(usize, &'input str),
     /// An identifier.
     Ident(usize, &'input str),
-    /// A keyword.
-    Keyword(usize, &'input str),
     /// An escaped identifier.
     EscapedIdent(usize, &'input str),
     /// A comment.
@@ -76,6 +79,15 @@ pub enum Token<'input> {
     DotDot(usize),
     /// A string literal.
     String(usize, &'input str),
+    /// A bool literal value.
+    Bool(usize, &'input str),
+    /// A inf literal value.
+    Inf(usize, &'input str),
+}
+
+enum State {
+    BraceOpen,
+    StrOpen,
 }
 
 /// The lexer for the MPL query language.
@@ -86,6 +98,7 @@ pub struct Lexer<'input> {
     chars: Peekable<Chars<'input>>,
     /// the current **byte** position in the input. for substring extraction.
     pos: usize,
+    state: Vec<State>,
 }
 
 impl<'input> Lexer<'input> {
@@ -96,6 +109,7 @@ impl<'input> Lexer<'input> {
             input,
             chars: input.chars().peekable(),
             pos: 0,
+            state: Vec::new(),
         }
     }
 
@@ -161,14 +175,57 @@ impl<'input> Lexer<'input> {
     }
 
     fn parse_string(&mut self, start: usize) -> Token<'input> {
-        while self.chars.peek().is_some_and(|c| *c != '"') {
-            self.advance_char();
+        self.state.push(State::StrOpen);
+        while let Some(c) = self.chars.peek() {
+            match c {
+                '"' => {
+                    break;
+                }
+                '\\' => {
+                    self.advance_char();
+                    // escape at the end of the input is invalid
+                    if let Some(c) = self.chars.peek()
+                        && matches!(c, '\\' | '"' | 'n' | 't' | 'r' | 'b' | 'f' | '$')
+                    {
+                        self.advance_char();
+                    } else {
+                        return Token::Invalid(start, &self.input[start..self.pos]);
+                    }
+                }
+                '$' => {
+                    self.advance_char();
+                    if let Some(c) = self.chars.peek() {
+                        // we only break if `$` is followed by `{`
+                        // otherwise, $ is a normal character in a string literal
+                        if *c == '{' {
+                            break;
+                        }
+                    } else {
+                        // there is no char after the dollar sign, so it's invalid
+                        return Token::Invalid(start, &self.input[start..self.pos]);
+                    }
+                }
+                _ => {
+                    self.advance_char();
+                }
+            }
         }
-        if self.chars.next() == Some('"') {
-            self.pos += 1;
-            Token::String(start, &self.input[start..self.pos])
-        } else {
-            Token::Invalid(start, &self.input[start..self.pos])
+        match self.chars.next() {
+            Some('"') => {
+                self.state.pop();
+                // Oh no!  is this  a invalid string? Or should the tokenizer not care?
+                // if !matches!(self.state.pop(), Some(State::StrOpen)) {
+                //     return Token::Invalid(start, &self.input[start..self.pos]);
+                // }
+                self.pos += 1;
+                Token::String(start, &self.input[start..self.pos])
+            }
+            Some('{') => {
+                // we don't pop since we enter nested terretorry
+                self.pos += 1;
+                Token::String(start, &self.input[start..self.pos])
+            }
+            _ => Token::Invalid(start, &self.input[start..self.pos]),
         }
     }
 
@@ -231,18 +288,13 @@ impl<'input> Lexer<'input> {
         let ident = &self.input[start..self.pos];
         // check if we have a ident or a keyword
         match ident {
-            "param" | "where" | "and" | "or" | "not" | "align" | "to" | "using" | "filter"
-            | "group" | "by" | "compute" | "ifdef" | "else" => Token::Keyword(start, ident),
+            "true" | "false" => Token::Bool(start, ident),
+            "inf" => Token::Inf(start, ident),
             other => Token::Ident(start, other),
         }
     }
-}
 
-impl<'input> Iterator for Lexer<'input> {
-    type Item = Token<'input>;
-
-    #[allow(clippy::too_many_lines)]
-    fn next(&mut self) -> Option<Token<'input>> {
+    fn next_token(&mut self) -> Option<Token<'input>> {
         let start = self.pos;
         let c = self.chars.next()?;
         self.pos += c.len_utf8();
@@ -259,8 +311,14 @@ impl<'input> Iterator for Lexer<'input> {
             ')' => Token::ParenClose(start),
             '[' => Token::BracketOpen(start),
             ']' => Token::BracketClose(start),
-            '{' => Token::BraceOpen(start),
-            '}' => Token::BraceClose(start),
+            '{' => {
+                self.state.push(State::BraceOpen);
+                Token::BraceOpen(start)
+            }
+            '}' => match self.state.pop() {
+                Some(State::BraceOpen) | None => Token::BraceClose(start),
+                Some(State::StrOpen) => self.parse_string(start),
+            },
             '?' => Token::QuestionMark(start),
             ';' => Token::SemiColon(start),
             '*' => Token::Mul(start),
@@ -332,5 +390,14 @@ impl<'input> Iterator for Lexer<'input> {
             _ => Token::Invalid(start, &self.input[start..self.pos]),
         };
         Some(token)
+    }
+}
+
+impl<'input> Iterator for Lexer<'input> {
+    type Item = Token<'input>;
+
+    #[allow(clippy::too_many_lines)]
+    fn next(&mut self) -> Option<Token<'input>> {
+        self.next_token()
     }
 }
