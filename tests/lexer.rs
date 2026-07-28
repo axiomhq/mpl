@@ -14,7 +14,7 @@ use test_case::test_case;
 
 /// Decomposes a token into `(start, kind, source text)`.
 ///
-/// Every other helper derives from this, so the 37-variant list is written exactly once and
+/// Every other helper derives from this, so the 38-variant list is written exactly once and
 /// a newly added variant fails to compile here rather than being silently skipped.
 ///
 /// For operators the kind string *is* the source text the lexer consumed, which is what lets
@@ -26,7 +26,6 @@ fn parts<'input>(token: &Token<'input>) -> (usize, &'static str, Option<&'input 
         Token::Invalid(p, s) => (p, "Invalid", Some(s)),
         Token::Whitespace(p, s) => (p, "WS", Some(s)),
         Token::Ident(p, s) => (p, "Ident", Some(s)),
-        Token::Keyword(p, s) => (p, "Kw", Some(s)),
         Token::EscapedIdent(p, s) => (p, "EscIdent", Some(s)),
         Token::Comment(p, s) => (p, "Comment", Some(s)),
         Token::Integer(p, s) => (p, "Int", Some(s)),
@@ -60,6 +59,10 @@ fn parts<'input>(token: &Token<'input>) -> (usize, &'static str, Option<&'input 
         Token::GreaterThan(p) => (p, ">", None),
         Token::NotEqual(p) => (p, "!=", None),
         Token::DotDot(p) => (p, "..", None),
+        Token::Inf(p, _) => (p, "inf", None),
+        Token::Bool(p, "true") => (p, "true", None),
+        Token::Bool(p, "false") => (p, "false", None),
+        Token::Bool(p, other) => (p, "Bool", Some(other)),
     }
 }
 
@@ -148,16 +151,58 @@ fn numbers_and_ranges(src: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------------------
-// Identifiers and keywords
+// Identifiers
+//
+// The lexer emits no keywords at all: every word-shaped thing is an `Ident` and the parser
+// decides what it means. Deciding here would need to know grammar position — whether `filter`
+// sits in a pipeline verb, a module path or a tag slot — and that is parser state. Paying for
+// it would buy nothing, because the parser matches the text either way.
+//
+// `filter` and `is` are why the alternative cannot be patched into working: each is both a
+// grammar keyword (mpl.pest:96, :87) and a stdlib module (src/stdlib.rs), and `func` is
+// `(module ~ "::")* ~ ident` (mpl.pest:124), so there is no keyword reading of
+// `map filter::gt(1)` — a query that ships in tests/examples/map-gt.mpl:2.
 // ---------------------------------------------------------------------------------------
 
-#[test_case("foo"       => "Ident(foo)"          ; "plain")]
-#[test_case("_foo"      => "Ident(_foo)"         ; "leading underscore")]
-#[test_case("foo_bar1"  => "Ident(foo_bar1)"     ; "digits and underscores")]
-#[test_case("where"     => "Kw(where)"           ; "keyword")]
-#[test_case("group by"  => "Kw(group) Kw(by)"    ; "two keywords")]
-#[test_case("wherever"  => "Ident(wherever)"     ; "keyword prefix is still an ident")]
+#[test_case("foo"        => "Ident(foo)"                 ; "plain")]
+#[test_case("_foo"       => "Ident(_foo)"                ; "leading underscore")]
+#[test_case("foo_bar1"   => "Ident(foo_bar1)"            ; "digits and underscores")]
+#[test_case("where"      => "Ident(where)"               ; "grammar keyword is a plain ident")]
+#[test_case("group by"   => "Ident(group) Ident(by)"     ; "two grammar keywords")]
+#[test_case("wherever"   => "Ident(wherever)"            ; "maximal munch over a keyword prefix")]
+#[test_case("sum"        => "Ident(sum)"                 ; "stdlib function name")]
+#[test_case("filter::gt" => "Ident(filter) :: Ident(gt)" ; "module path a keyword would break")]
+#[test_case("is::lt"     => "Ident(is) :: Ident(lt)"     ; "second module path a keyword would break")]
 fn identifiers(src: &str) -> String {
+    lex(src)
+}
+
+// ---------------------------------------------------------------------------------------
+// Value literals
+//
+// `true`, `false` and `inf` are the only words the lexer resolves, because they are values
+// rather than names — `inf` is a number in the grammar (`number = { inf | float | int }`,
+// mpl.pest:30). They therefore behave like the numeric tokens, sign included: `+inf` splits
+// its sign exactly as `-5` lexes as `-` `Int(5)`.
+//
+// The grammar spells the boundary out as `word_boundary` (mpl.pest:27-33); the lexer gets it
+// from maximal munch instead, so the cases worth having are the ones where a longer ident
+// starts with a literal.
+// ---------------------------------------------------------------------------------------
+
+#[test_case("true"           => "true"                    ; "true literal")]
+#[test_case("false"          => "false"                   ; "false literal")]
+#[test_case("inf"            => "inf"                     ; "inf literal")]
+#[test_case("+inf"           => "+ inf"                   ; "sign splits off, as it does for ints")]
+#[test_case("-inf"           => "- inf"                   ; "negative sign splits off too")]
+#[test_case("infinity"       => "Ident(infinity)"         ; "longer ident starting with inf")]
+#[test_case("trueish"        => "Ident(trueish)"          ; "longer ident starting with true")]
+#[test_case("inf_"           => "Ident(inf_)"             ; "underscore continues the ident")]
+#[test_case("Inf"            => "Ident(Inf)"              ; "inf is case sensitive")]
+#[test_case("True"           => "Ident(True)"             ; "bools are case sensitive")]
+#[test_case("[1, true, inf]" => "[ Int(1) , true , inf ]" ; "literals inside an array")]
+#[test_case("\"true\""       => "Str(\"true\")"           ; "inside a string it stays text")]
+fn value_literals(src: &str) -> String {
     lex(src)
 }
 
@@ -238,7 +283,7 @@ fn string_escapes(src: &str) -> String {
 #[test_case(r#""${a + b}""#    => r#"Str("${) Ident(a) + Ident(b) Str(}")"# ; "expression body")]
 #[test_case(r#""${a:b}""#      => r#"Str("${) Ident(a) : Ident(b) Str(}")"# ; "colon in body")]
 #[test_case(r#""${$foo}""#     => r#"Str("${) Var($foo) Str(}")"#           ; "variable body")]
-#[test_case(r#""${where}""#    => r#"Str("${) Kw(where) Str(}")"#           ; "keyword body")]
+#[test_case(r#""${where}""#    => r#"Str("${) Ident(where) Str(}")"#        ; "grammar keyword body")]
 #[test_case(r#""${1.5}""#      => r#"Str("${) Float(1.5) Str(}")"#          ; "float body")]
 #[test_case(r#""${#/a/}""#     => r#"Str("${) Regex(#/a/) Str(}")"#         ; "regex body")]
 #[test_case(r#""${f(a, b)}""#  => r#"Str("${) Ident(f) ( Ident(a) , Ident(b) ) Str(}")"# ; "call body")]
@@ -345,7 +390,7 @@ fn interpolation_whitespace(src: &str) -> String {
 )]
 #[test_case(
     r#"d:m | compute msg = "svc=${svc} code=${code}""#
-    => r#"Ident(d) : Ident(m) | Kw(compute) Ident(msg) = Str("svc=${) Ident(svc) Str(} code=${) Ident(code) Str(}")"#
+    => r#"Ident(d) : Ident(m) | Ident(compute) Ident(msg) = Str("svc=${) Ident(svc) Str(} code=${) Ident(code) Str(}")"#
     ; "interpolation in a realistic query"
 )]
 fn nested_string_interpolation(src: &str) -> String {
@@ -462,27 +507,32 @@ fn unicode(src: &str) -> String {
 
 #[test_case(
     "d:m | where code >= 500"
-    => "Ident(d) : Ident(m) | Kw(where) Ident(code) >= Int(500)"
+    => "Ident(d) : Ident(m) | Ident(where) Ident(code) >= Int(500)"
     ; "filter with comparison"
 )]
 #[test_case(
     "d:m[5m..] | group by pod using sum"
-    => "Ident(d) : Ident(m) [ Int(5) Ident(m) .. ] | Kw(group) Kw(by) Ident(pod) Kw(using) Ident(sum)"
+    => "Ident(d) : Ident(m) [ Int(5) Ident(m) .. ] | Ident(group) Ident(by) Ident(pod) Ident(using) Ident(sum)"
     ; "time range and group by"
 )]
 #[test_case(
     "d:m | where tag in [\"a\", 1, 2.3]"
-    => "Ident(d) : Ident(m) | Kw(where) Ident(tag) Ident(in) [ Str(\"a\") , Int(1) , Float(2.3) ]"
+    => "Ident(d) : Ident(m) | Ident(where) Ident(tag) Ident(in) [ Str(\"a\") , Int(1) , Float(2.3) ]"
     ; "in with a mixed array"
 )]
 #[test_case(
     "param $ds: Dataset; $ds:m | filter svc == #/api-.+/"
-    => "Kw(param) Var($ds) : Ident(Dataset) ; Var($ds) : Ident(m) | Kw(filter) Ident(svc) == Regex(#/api-.+/)"
+    => "Ident(param) Var($ds) : Ident(Dataset) ; Var($ds) : Ident(m) | Ident(filter) Ident(svc) == Regex(#/api-.+/)"
     ; "param declaration and regex filter"
 )]
 #[test_case(
+    "d:m | map filter::gt(1) | map is::lt(0.4)"
+    => "Ident(d) : Ident(m) | Ident(map) Ident(filter) :: Ident(gt) ( Int(1) ) | Ident(map) Ident(is) :: Ident(lt) ( Float(0.4) )"
+    ; "stdlib module paths that a keyword set would break"
+)]
+#[test_case(
     "( a:b | compute x using sum, c:d, ) | compute y using /"
-    => "( Ident(a) : Ident(b) | Kw(compute) Ident(x) Kw(using) Ident(sum) , Ident(c) : Ident(d) , ) | Kw(compute) Ident(y) Kw(using) /"
+    => "( Ident(a) : Ident(b) | Ident(compute) Ident(x) Ident(using) Ident(sum) , Ident(c) : Ident(d) , ) | Ident(compute) Ident(y) Ident(using) /"
     ; "compute query"
 )]
 fn queries(src: &str) -> String {
@@ -543,6 +593,14 @@ const CORPUS: &[&str] = &[
     r#""${x}"#,
     r#""${"${"}""#,
     r#""héllo ${é}""#,
+    // Value literals: `Inf`/`Bool` carry no text through `parts`, so their span length comes
+    // from the kind string — `assert_tiles` is what proves that coupling still holds.
+    "inf",
+    "+inf",
+    "true",
+    "infinity",
+    "[1, true, inf]",
+    "filter::gt",
     "~",
     r"`aA`",
     r"\",
@@ -660,7 +718,8 @@ impl Rng {
 const FRAGMENTS: &[&str] = &[
     "0", "1", "9", "a", "z", "_", " ", "\n", "\t", ".", "..", ":", "::", ";", ",", "|", "(", ")",
     "[", "]", "{", "}", "<", ">", "=", "!", "?", "+", "-", "*", "/", "//", "\"", "`", "#", "$",
-    "\\", "~", "%", "é", "ö", "€", "🎉", "\u{00B2}", "\u{00A0}", "\u{3000}", "where", "1.5",
+    "\\", "~", "%", "é", "ö", "€", "🎉", "\u{00B2}", "\u{00A0}", "\u{3000}", "where", "1.5", "inf",
+    "true",
     // `${` as one fragment rather than relying on `$` and `{` landing next to each other by
     // chance, so interpolation openers appear often enough to interleave with `"` and `}`.
     "${",
@@ -673,7 +732,7 @@ fn generated_inputs_tile() {
         let len = usize::try_from(rng.next_u64() % 20).unwrap_or(0);
         let mut input = String::new();
         for _ in 0..len {
-            input.push_str(rng.pick(FRAGMENTS));
+            input.push_str(rng.pick::<&str>(FRAGMENTS));
         }
         assert_tiles(&input);
         assert_total(&input);
