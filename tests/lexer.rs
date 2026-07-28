@@ -1,91 +1,55 @@
 //! Token-stream tests for the MPL lexer.
 //!
 //! Cases are written as `source => expected token stream`, where the expected side is a
-//! compact rendering: operators render as their own source text (`<=`, `..`), tokens that
-//! carry text render as `Kind(text)`. Writing the whole stream on one line is what makes a
-//! table readable; the alternative — building `Vec<Token>` literals — buries the signal in
-//! offsets that are better checked by the structural properties at the bottom of this file.
+//! compact rendering: operators and literals render as their own source text (`<=`, `..`,
+//! `true`), everything else as `TokenType(text)` using the type's own `Debug` name. Writing
+//! the whole stream on one line is what makes a table readable; the alternative — building
+//! `Vec<Token>` literals — buries the signal in offsets that are better checked by the
+//! structural properties at the bottom of this file.
 //!
 //! Offsets are deliberately absent from the tables. They are covered exhaustively by
 //! `assert_tiles`, which is a stronger check than spot-asserting a few numbers by hand.
 
-use mpl_lang::lexer::{Lexer, Token};
+use mpl_lang::lexer::{Lexer, Token, TokenType};
 use test_case::test_case;
 
-/// Decomposes a token into `(start, kind, source text)`.
+/// Whether a token's own source text is its name. `==` and `..` describe themselves, so
+/// rendering them as `EqualEqual(==)` would only add noise; `true`/`false`/`inf` are the same
+/// case, the text *is* the literal.
 ///
-/// Every other helper derives from this, so the 38-variant list is written exactly once and
-/// a newly added variant fails to compile here rather than being silently skipped.
-///
-/// For operators the kind string *is* the source text the lexer consumed, which is what lets
-/// `span_len` work without the tokens carrying a length. `assert_tiles` verifies that
-/// coupling on every input, so a mismatch surfaces as a failing test rather than as silent
-/// drift.
-fn parts<'input>(token: &Token<'input>) -> (usize, &'static str, Option<&'input str>) {
-    match *token {
-        Token::Invalid(p, s) => (p, "Invalid", Some(s)),
-        Token::Whitespace(p, s) => (p, "WS", Some(s)),
-        Token::Ident(p, s) => (p, "Ident", Some(s)),
-        Token::EscapedIdent(p, s) => (p, "EscIdent", Some(s)),
-        Token::Comment(p, s) => (p, "Comment", Some(s)),
-        Token::Integer(p, s) => (p, "Int", Some(s)),
-        Token::Float(p, s) => (p, "Float", Some(s)),
-        Token::Variable(p, s) => (p, "Var", Some(s)),
-        Token::EscapedVariable(p, s) => (p, "EscVar", Some(s)),
-        Token::Regex(p, s) => (p, "Regex", Some(s)),
-        Token::String(p, s) => (p, "Str", Some(s)),
-        Token::Div(p) => (p, "/", None),
-        Token::Mul(p) => (p, "*", None),
-        Token::Plus(p) => (p, "+", None),
-        Token::Minus(p) => (p, "-", None),
-        Token::Pipe(p) => (p, "|", None),
-        Token::DoubleColon(p) => (p, "::", None),
-        Token::Colon(p) => (p, ":", None),
-        Token::EqualEqual(p) => (p, "==", None),
-        Token::Equal(p) => (p, "=", None),
-        Token::Comma(p) => (p, ",", None),
-        Token::ParenOpen(p) => (p, "(", None),
-        Token::ParenClose(p) => (p, ")", None),
-        Token::BracketOpen(p) => (p, "[", None),
-        Token::BracketClose(p) => (p, "]", None),
-        Token::BraceOpen(p) => (p, "{", None),
-        Token::BraceClose(p) => (p, "}", None),
-        Token::QuestionMark(p) => (p, "?", None),
-        Token::Bang(p) => (p, "!", None),
-        Token::SemiColon(p) => (p, ";", None),
-        Token::LessThanEqual(p) => (p, "<=", None),
-        Token::GreaterThanEqual(p) => (p, ">=", None),
-        Token::LessThan(p) => (p, "<", None),
-        Token::GreaterThan(p) => (p, ">", None),
-        Token::NotEqual(p) => (p, "!=", None),
-        Token::DotDot(p) => (p, "..", None),
-        Token::Inf(p, _) => (p, "inf", None),
-        Token::Bool(p, "true") => (p, "true", None),
-        Token::Bool(p, "false") => (p, "false", None),
-        Token::Bool(p, other) => (p, "Bool", Some(other)),
-    }
+/// Only the exceptions are listed — the tokens whose text varies and therefore need naming.
+/// Everything else renders as `Debug(text)`, so a new operator or literal costs no edit here
+/// and a new named token costs one line.
+fn is_self_describing(tpe: TokenType) -> bool {
+    !matches!(
+        tpe,
+        TokenType::Invalid
+            | TokenType::Whitespace
+            | TokenType::Ident
+            | TokenType::EscapedIdent
+            | TokenType::Comment
+            | TokenType::Integer
+            | TokenType::Float
+            | TokenType::Variable
+            | TokenType::EscapedVariable
+            | TokenType::Regex
+            | TokenType::String
+    )
 }
 
-/// Renders one token for the expected column. Whitespace collapses to `WS` because its
-/// actual text is noise in a table; its real extent is still checked by `assert_tiles`.
+/// Renders one token for the expected column.
 fn describe(token: &Token<'_>) -> String {
-    let (_, kind, text) = parts(token);
-    if matches!(token, Token::Whitespace(..)) {
-        return "WS".to_string();
+    let tpe = token.tpe();
+    if is_self_describing(tpe) {
+        return token.text().to_string();
     }
-    text.map_or_else(|| kind.to_string(), |s| format!("{kind}({s})"))
-}
-
-/// How many bytes of input this token consumed.
-fn span_len(token: &Token<'_>) -> usize {
-    let (_, kind, text) = parts(token);
-    text.map_or(kind.len(), str::len)
+    format!("{tpe:?}({})", token.text())
 }
 
 /// Lexes into the compact form, dropping whitespace — the default for the tables below.
 fn lex(input: &str) -> String {
     Lexer::new(input)
-        .filter(|t| !matches!(t, Token::Whitespace(..)))
+        .filter(|t| t.tpe() != TokenType::Whitespace)
         .map(|t| describe(&t))
         .collect::<Vec<_>>()
         .join(" ")
@@ -106,16 +70,16 @@ fn lex_ws(input: &str) -> String {
 // comparison token at some point, and none of them is an MPL operator (mpl.pest:84).
 // ---------------------------------------------------------------------------------------
 
-#[test_case("a == 1" => "Ident(a) == Int(1)"     ; "equal equal")]
-#[test_case("a != 1" => "Ident(a) != Int(1)"     ; "not equal")]
-#[test_case("a = 1"  => "Ident(a) = Int(1)"      ; "assign")]
-#[test_case("a < 1"  => "Ident(a) < Int(1)"      ; "less than")]
-#[test_case("a <= 1" => "Ident(a) <= Int(1)"     ; "less than equal")]
-#[test_case("a > 1"  => "Ident(a) > Int(1)"      ; "greater than")]
-#[test_case("a >= 1" => "Ident(a) >= Int(1)"     ; "greater than equal")]
-#[test_case("a <> 1" => "Ident(a) < > Int(1)"    ; "diamond is not an operator")]
-#[test_case("a =< 1" => "Ident(a) = < Int(1)"    ; "reversed le is not an operator")]
-#[test_case("a => 1" => "Ident(a) = > Int(1)"    ; "reversed ge is not an operator")]
+#[test_case("a == 1" => "Ident(a) == Integer(1)"     ; "equal equal")]
+#[test_case("a != 1" => "Ident(a) != Integer(1)"     ; "not equal")]
+#[test_case("a = 1"  => "Ident(a) = Integer(1)"      ; "assign")]
+#[test_case("a < 1"  => "Ident(a) < Integer(1)"      ; "less than")]
+#[test_case("a <= 1" => "Ident(a) <= Integer(1)"     ; "less than equal")]
+#[test_case("a > 1"  => "Ident(a) > Integer(1)"      ; "greater than")]
+#[test_case("a >= 1" => "Ident(a) >= Integer(1)"     ; "greater than equal")]
+#[test_case("a <> 1" => "Ident(a) < > Integer(1)"    ; "diamond is not an operator")]
+#[test_case("a =< 1" => "Ident(a) = < Integer(1)"    ; "reversed le is not an operator")]
+#[test_case("a => 1" => "Ident(a) = > Integer(1)"    ; "reversed ge is not an operator")]
 #[test_case("a ! b"  => "Ident(a) ! Ident(b)"    ; "bare bang")]
 #[test_case("+ - * /" => "+ - * /"               ; "arithmetic")]
 #[test_case("a::b"   => "Ident(a) :: Ident(b)"   ; "double colon")]
@@ -132,19 +96,19 @@ fn operators(src: &str) -> String {
 // must not eat a float's dot, and a float must not eat a range's first dot.
 // ---------------------------------------------------------------------------------------
 
-#[test_case("0"        => "Int(0)"                 ; "zero")]
-#[test_case("42"       => "Int(42)"                ; "integer")]
+#[test_case("0"        => "Integer(0)"                 ; "zero")]
+#[test_case("42"       => "Integer(42)"                ; "integer")]
 #[test_case("1.5"      => "Float(1.5)"             ; "float")]
 #[test_case("2."       => "Float(2.)"              ; "trailing dot float is legal per mpl.pest:31")]
-#[test_case("f(2., 3)" => "Ident(f) ( Float(2.) , Int(3) )" ; "trailing dot before delimiter")]
-#[test_case("300..600" => "Int(300) .. Int(600)"   ; "timestamp range")]
-#[test_case("1..2"     => "Int(1) .. Int(2)"       ; "single digit range")]
-#[test_case("[2.5..3]" => "[ Float(2.5) .. Int(3) ]" ; "float then range")]
-#[test_case("[1..2.5]" => "[ Int(1) .. Float(2.5) ]" ; "range then float")]
-#[test_case("[5m..]"   => "[ Int(5) Ident(m) .. ]" ; "relative open ended range")]
-#[test_case("[..600]"  => "[ .. Int(600) ]"        ; "open start range")]
-#[test_case("1700000000..1700003600" => "Int(1700000000) .. Int(1700003600)" ; "unix timestamp range")]
-#[test_case("1...2"    => "Int(1) .. Invalid(.) Int(2)" ; "three dots is not valid syntax")]
+#[test_case("f(2., 3)" => "Ident(f) ( Float(2.) , Integer(3) )" ; "trailing dot before delimiter")]
+#[test_case("300..600" => "Integer(300) .. Integer(600)"   ; "timestamp range")]
+#[test_case("1..2"     => "Integer(1) .. Integer(2)"       ; "single digit range")]
+#[test_case("[2.5..3]" => "[ Float(2.5) .. Integer(3) ]" ; "float then range")]
+#[test_case("[1..2.5]" => "[ Integer(1) .. Float(2.5) ]" ; "range then float")]
+#[test_case("[5m..]"   => "[ Integer(5) Ident(m) .. ]" ; "relative open ended range")]
+#[test_case("[..600]"  => "[ .. Integer(600) ]"        ; "open start range")]
+#[test_case("1700000000..1700003600" => "Integer(1700000000) .. Integer(1700003600)" ; "unix timestamp range")]
+#[test_case("1...2"    => "Integer(1) .. Invalid(.) Integer(2)" ; "three dots is not valid syntax")]
 #[test_case("a . b"    => "Ident(a) Invalid(.) Ident(b)" ; "lone dot is invalid")]
 fn numbers_and_ranges(src: &str) -> String {
     lex(src)
@@ -183,7 +147,7 @@ fn identifiers(src: &str) -> String {
 // `true`, `false` and `inf` are the only words the lexer resolves, because they are values
 // rather than names — `inf` is a number in the grammar (`number = { inf | float | int }`,
 // mpl.pest:30). They therefore behave like the numeric tokens, sign included: `+inf` splits
-// its sign exactly as `-5` lexes as `-` `Int(5)`.
+// its sign exactly as `-5` lexes as `-` `Integer(5)`.
 //
 // The grammar spells the boundary out as `word_boundary` (mpl.pest:27-33); the lexer gets it
 // from maximal munch instead, so the cases worth having are the ones where a longer ident
@@ -200,8 +164,8 @@ fn identifiers(src: &str) -> String {
 #[test_case("inf_"           => "Ident(inf_)"             ; "underscore continues the ident")]
 #[test_case("Inf"            => "Ident(Inf)"              ; "inf is case sensitive")]
 #[test_case("True"           => "Ident(True)"             ; "bools are case sensitive")]
-#[test_case("[1, true, inf]" => "[ Int(1) , true , inf ]" ; "literals inside an array")]
-#[test_case("\"true\""       => "Str(\"true\")"           ; "inside a string it stays text")]
+#[test_case("[1, true, inf]" => "[ Integer(1) , true , inf ]" ; "literals inside an array")]
+#[test_case("\"true\""       => "String(\"true\")"           ; "inside a string it stays text")]
 fn value_literals(src: &str) -> String {
     lex(src)
 }
@@ -214,14 +178,14 @@ fn value_literals(src: &str) -> String {
 // puts an escape immediately before the terminator.
 // ---------------------------------------------------------------------------------------
 
-#[test_case("`foo`"    => "EscIdent(`foo`)"      ; "plain")]
-#[test_case("``"       => "EscIdent(``)"         ; "empty")]
-#[test_case("`a b`"    => "EscIdent(`a b`)"      ; "with space")]
-#[test_case(r"`a\n`"   => r"EscIdent(`a\n`)"     ; "escape before terminator")]
-#[test_case(r"`a\nb`"  => r"EscIdent(`a\nb`)"    ; "escape mid literal")]
-#[test_case(r"`a\``"   => r"EscIdent(`a\``)"     ; "escaped backtick before terminator")]
-#[test_case(r"`a\\`"   => r"EscIdent(`a\\`)"     ; "escaped backslash before terminator")]
-#[test_case(r"`a\t\r`" => r"EscIdent(`a\t\r`)"   ; "consecutive escapes")]
+#[test_case("`foo`"    => "EscapedIdent(`foo`)"      ; "plain")]
+#[test_case("``"       => "EscapedIdent(``)"         ; "empty")]
+#[test_case("`a b`"    => "EscapedIdent(`a b`)"      ; "with space")]
+#[test_case(r"`a\n`"   => r"EscapedIdent(`a\n`)"     ; "escape before terminator")]
+#[test_case(r"`a\nb`"  => r"EscapedIdent(`a\nb`)"    ; "escape mid literal")]
+#[test_case(r"`a\``"   => r"EscapedIdent(`a\``)"     ; "escaped backtick before terminator")]
+#[test_case(r"`a\\`"   => r"EscapedIdent(`a\\`)"     ; "escaped backslash before terminator")]
+#[test_case(r"`a\t\r`" => r"EscapedIdent(`a\t\r`)"   ; "consecutive escapes")]
 #[test_case("`abc"     => "Invalid(`abc)"        ; "unterminated")]
 fn escaped_identifiers(src: &str) -> String {
     lex(src)
@@ -234,9 +198,9 @@ fn escaped_identifiers(src: &str) -> String {
 // so they must not collapse to the same token kind.
 // ---------------------------------------------------------------------------------------
 
-#[test_case("\"foo\""       => "Str(\"foo\")"                  ; "plain")]
-#[test_case("\"\""          => "Str(\"\")"                     ; "empty")]
-#[test_case("\"foo\" `foo`" => "Str(\"foo\") EscIdent(`foo`)"  ; "string is distinct from escaped ident")]
+#[test_case("\"foo\""       => "String(\"foo\")"                  ; "plain")]
+#[test_case("\"\""          => "String(\"\")"                     ; "empty")]
+#[test_case("\"foo\" `foo`" => "String(\"foo\") EscapedIdent(`foo`)"  ; "string is distinct from escaped ident")]
 #[test_case("\"abc"         => "Invalid(\"abc)"                ; "unterminated")]
 fn strings(src: &str) -> String {
     lex(src)
@@ -246,10 +210,10 @@ fn strings(src: &str) -> String {
 // unnoticed. Each escape sits immediately before the closing quote: an escape arm that
 // consumes one character too many swallows the terminator, which is the failure mode the
 // escaped-identifier tests above were written for.
-#[test_case(r#""say \"hi\"""# => r#"Str("say \"hi\"")"# ; "escaped quote")]
-#[test_case(r#""a\\""#        => r#"Str("a\\")"#        ; "escaped backslash")]
-#[test_case(r#""a\n\t\r""#    => r#"Str("a\n\t\r")"#    ; "escaped control characters")]
-#[test_case(r#""a\b\f""#      => r#"Str("a\b\f")"#      ; "escaped backspace and form feed")]
+#[test_case(r#""say \"hi\"""# => r#"String("say \"hi\"")"# ; "escaped quote")]
+#[test_case(r#""a\\""#        => r#"String("a\\")"#        ; "escaped backslash")]
+#[test_case(r#""a\n\t\r""#    => r#"String("a\n\t\r")"#    ; "escaped control characters")]
+#[test_case(r#""a\b\f""#      => r#"String("a\b\f")"#      ; "escaped backspace and form feed")]
 #[test_case(r#""a\q""#        => r#"Invalid("a\) Ident(q) Invalid(")"# ; "escape outside the whitelist is rejected")]
 #[test_case(r#""a\"#          => r#"Invalid("a\)"#      ; "backslash at end of input")]
 fn string_escapes(src: &str) -> String {
@@ -261,7 +225,7 @@ fn string_escapes(src: &str) -> String {
 //
 // `${` does not get a token of its own: it terminates the `Str` fragment that precedes it
 // and is included in that fragment's text, and the matching `}` opens the fragment that
-// follows it. So `"a${x}b"` is three tokens — `Str("a${)`, `Ident(x)`, `Str(}b")` — and a
+// follows it. So `"a${x}b"` is three tokens — `String("a${)`, `Ident(x)`, `String(}b")` — and a
 // consumer reassembles the literal by stripping the `${` / `}` markers from the fragments.
 // The tests are written against that shape deliberately: the invariant worth pinning is
 // that the interpolation markers stay attached to the string fragments and that the body
@@ -271,38 +235,38 @@ fn string_escapes(src: &str) -> String {
 // `$` is *not* followed by `{` must stay inside the literal.
 // ---------------------------------------------------------------------------------------
 
-#[test_case(r#""${x}""#        => r#"Str("${) Ident(x) Str(}")"#            ; "whole string is one interpolation")]
-#[test_case(r#""a${x}b""#      => r#"Str("a${) Ident(x) Str(}b")"#          ; "text on both sides")]
-#[test_case(r#""${x}b""#       => r#"Str("${) Ident(x) Str(}b")"#           ; "text after only")]
-#[test_case(r#""a${x}""#       => r#"Str("a${) Ident(x) Str(}")"#           ; "text before only")]
-#[test_case(r#""${}""#         => r#"Str("${) Str(}")"#                     ; "empty interpolation")]
-#[test_case(r#""a${x}b${y}c""# => r#"Str("a${) Ident(x) Str(}b${) Ident(y) Str(}c")"# ; "two interpolations")]
-#[test_case(r#""${x}${y}""#    => r#"Str("${) Ident(x) Str(}${) Ident(y) Str(}")"#    ; "adjacent interpolations")]
+#[test_case(r#""${x}""#        => r#"String("${) Ident(x) String(}")"#            ; "whole string is one interpolation")]
+#[test_case(r#""a${x}b""#      => r#"String("a${) Ident(x) String(}b")"#          ; "text on both sides")]
+#[test_case(r#""${x}b""#       => r#"String("${) Ident(x) String(}b")"#           ; "text after only")]
+#[test_case(r#""a${x}""#       => r#"String("a${) Ident(x) String(}")"#           ; "text before only")]
+#[test_case(r#""${}""#         => r#"String("${) String(}")"#                     ; "empty interpolation")]
+#[test_case(r#""a${x}b${y}c""# => r#"String("a${) Ident(x) String(}b${) Ident(y) String(}c")"# ; "two interpolations")]
+#[test_case(r#""${x}${y}""#    => r#"String("${) Ident(x) String(}${) Ident(y) String(}")"#    ; "adjacent interpolations")]
 // The body is a token stream, not a substring: operators, keywords, numbers, variables and
 // regexes all lex as themselves inside `${ }`.
-#[test_case(r#""${a + b}""#    => r#"Str("${) Ident(a) + Ident(b) Str(}")"# ; "expression body")]
-#[test_case(r#""${a:b}""#      => r#"Str("${) Ident(a) : Ident(b) Str(}")"# ; "colon in body")]
-#[test_case(r#""${$foo}""#     => r#"Str("${) Var($foo) Str(}")"#           ; "variable body")]
-#[test_case(r#""${where}""#    => r#"Str("${) Ident(where) Str(}")"#        ; "grammar keyword body")]
-#[test_case(r#""${1.5}""#      => r#"Str("${) Float(1.5) Str(}")"#          ; "float body")]
-#[test_case(r#""${#/a/}""#     => r#"Str("${) Regex(#/a/) Str(}")"#         ; "regex body")]
-#[test_case(r#""${f(a, b)}""#  => r#"Str("${) Ident(f) ( Ident(a) , Ident(b) ) Str(}")"# ; "call body")]
+#[test_case(r#""${a + b}""#    => r#"String("${) Ident(a) + Ident(b) String(}")"# ; "expression body")]
+#[test_case(r#""${a:b}""#      => r#"String("${) Ident(a) : Ident(b) String(}")"# ; "colon in body")]
+#[test_case(r#""${$foo}""#     => r#"String("${) Variable($foo) String(}")"#           ; "variable body")]
+#[test_case(r#""${where}""#    => r#"String("${) Ident(where) String(}")"#        ; "grammar keyword body")]
+#[test_case(r#""${1.5}""#      => r#"String("${) Float(1.5) String(}")"#          ; "float body")]
+#[test_case(r#""${#/a/}""#     => r#"String("${) Regex(#/a/) String(}")"#         ; "regex body")]
+#[test_case(r#""${f(a, b)}""#  => r#"String("${) Ident(f) ( Ident(a) , Ident(b) ) String(}")"# ; "call body")]
 // A `$` only opens an interpolation when `{` follows it; everything else stays literal.
-#[test_case(r#""a$b""#         => r#"Str("a$b")"#                           ; "dollar before an ident is literal")]
-#[test_case(r#""a$""#          => r#"Str("a$")"#                            ; "dollar before the terminator is literal")]
-#[test_case(r#""$""#           => r#"Str("$")"#                             ; "lone dollar is literal")]
-#[test_case(r#""$$x""#         => r#"Str("$$x")"#                           ; "double dollar is literal")]
-#[test_case(r#""a\${x}""#      => r#"Str("a\${x}")"#                        ; "escaped dollar suppresses interpolation")]
-#[test_case(r#""héllo ${x}""#  => r#"Str("héllo ${) Ident(x) Str(}")"#      ; "multi byte text before an interpolation")]
-#[test_case(r#""${é}""#        => r#"Str("${) Ident(é) Str(}")"#            ; "multi byte ident in the body")]
+#[test_case(r#""a$b""#         => r#"String("a$b")"#                           ; "dollar before an ident is literal")]
+#[test_case(r#""a$""#          => r#"String("a$")"#                            ; "dollar before the terminator is literal")]
+#[test_case(r#""$""#           => r#"String("$")"#                             ; "lone dollar is literal")]
+#[test_case(r#""$$x""#         => r#"String("$$x")"#                           ; "double dollar is literal")]
+#[test_case(r#""a\${x}""#      => r#"String("a\${x}")"#                        ; "escaped dollar suppresses interpolation")]
+#[test_case(r#""héllo ${x}""#  => r#"String("héllo ${) Ident(x) String(}")"#      ; "multi byte text before an interpolation")]
+#[test_case(r#""${é}""#        => r#"String("${) Ident(é) String(}")"#            ; "multi byte ident in the body")]
 fn string_interpolation(src: &str) -> String {
     lex(src)
 }
 
 /// Whitespace inside `${ }` is a `Whitespace` token, not string content — the clearest
 /// single demonstration that the body leaves string-literal mode entirely.
-#[test_case(r#""${ x }""#   => r#"Str("${) WS Ident(x) WS Str(}")"#  ; "spaces around the body")]
-#[test_case(r#""a b${ c }""# => r#"Str("a b${) WS Ident(c) WS Str(}")"# ; "spaces in the literal stay in the fragment")]
+#[test_case(r#""${ x }""#   => r#"String("${) Whitespace( ) Ident(x) Whitespace( ) String(}")"#  ; "spaces around the body")]
+#[test_case(r#""a b${ c }""# => r#"String("a b${) Whitespace( ) Ident(c) Whitespace( ) String(}")"# ; "spaces in the literal stay in the fragment")]
 fn interpolation_whitespace(src: &str) -> String {
     lex_ws(src)
 }
@@ -319,78 +283,78 @@ fn interpolation_whitespace(src: &str) -> String {
 
 #[test_case(
     r#""${"b"}""#
-    => r#"Str("${) Str("b") Str(}")"#
+    => r#"String("${) String("b") String(}")"#
     ; "string literal inside an interpolation"
 )]
 #[test_case(
     r#""a${"b"}c""#
-    => r#"Str("a${) Str("b") Str(}c")"#
+    => r#"String("a${) String("b") String(}c")"#
     ; "string literal inside an interpolation with surrounding text"
 )]
 #[test_case(
     r#""a${"b${c}d"}e""#
-    => r#"Str("a${) Str("b${) Ident(c) Str(}d") Str(}e")"#
+    => r#"String("a${) String("b${) Ident(c) String(}d") String(}e")"#
     ; "interpolation inside an interpolated string"
 )]
 #[test_case(
     r#""a${"b${"c${d}e"}f"}g""#
-    => r#"Str("a${) Str("b${) Str("c${) Ident(d) Str(}e") Str(}f") Str(}g")"#
+    => r#"String("a${) String("b${) String("c${) Ident(d) String(}e") String(}f") String(}g")"#
     ; "three levels deep"
 )]
 #[test_case(
     r#""${"a" + "b"}""#
-    => r#"Str("${) Str("a") + Str("b") Str(}")"#
+    => r#"String("${) String("a") + String("b") String(}")"#
     ; "two sibling strings in one body"
 )]
 // A `}` inside a nested literal is string content, so it must not pop the outer `StrOpen`
 // and end the interpolation early.
 #[test_case(
     r#""${"}"}""#
-    => r#"Str("${) Str("}") Str(}")"#
+    => r#"String("${) String("}") String(}")"#
     ; "close brace inside a nested literal is content"
 )]
 #[test_case(
     r#""${"${"}""#
-    => r#"Str("${) Str("${) Str("}")"#
+    => r#"String("${) String("${) String("}")"#
     ; "dollar brace inside a nested literal opens another level"
 )]
 // Braces and interpolations interleaved: a `{` pushed inside a body must be popped by its
 // own `}` before the interpolation's `}` is reached.
 #[test_case(
     r#""${{a}}""#
-    => r#"Str("${) { Ident(a) } Str(}")"#
+    => r#"String("${) { Ident(a) } String(}")"#
     ; "brace group inside a body"
 )]
 #[test_case(
     r#""${ {a: "x"} }""#
-    => r#"Str("${) { Ident(a) : Str("x") } Str(}")"#
+    => r#"String("${) { Ident(a) : String("x") } String(}")"#
     ; "brace group containing a string"
 )]
 #[test_case(
     r#"{ "a${b}c" }"#
-    => r#"{ Str("a${) Ident(b) Str(}c") }"#
+    => r#"{ String("a${) Ident(b) String(}c") }"#
     ; "interpolated string inside a brace group"
 )]
 #[test_case(
     r#"{ "a${ {b} }c" }"#
-    => r#"{ Str("a${) { Ident(b) } Str(}c") }"#
+    => r#"{ String("a${) { Ident(b) } String(}c") }"#
     ; "brace group inside an interpolation inside a brace group"
 )]
 // Once a literal is closed the stack is empty again, so a following `}` is a plain
 // `BraceClose` rather than the start of a new string fragment.
 #[test_case(
     r#""a" }"#
-    => r#"Str("a") }"#
+    => r#"String("a") }"#
     ; "close brace after a complete string"
 )]
 #[test_case(
     r#""a${b}c" }"#
-    => r#"Str("a${) Ident(b) Str(}c") }"#
+    => r#"String("a${) Ident(b) String(}c") }"#
     ; "close brace after a complete interpolated string"
 )]
 #[test_case(
     r#"d:m | compute msg = "svc=${svc} code=${code}""#
-    => r#"Ident(d) : Ident(m) | Ident(compute) Ident(msg) = Str("svc=${) Ident(svc) Str(} code=${) Ident(code) Str(}")"#
+    => r#"Ident(d) : Ident(m) | Ident(compute) Ident(msg) = String("svc=${) Ident(svc) String(} code=${) Ident(code) String(}")"#
     ; "interpolation in a realistic query"
 )]
 fn nested_string_interpolation(src: &str) -> String {
@@ -406,15 +370,15 @@ fn nested_string_interpolation(src: &str) -> String {
 // via `CORPUS`, and these cases pin down which token the input degrades to.
 // ---------------------------------------------------------------------------------------
 
-#[test_case(r#""a${"#     => r#"Str("a${)"#                       ; "ends right after the marker")]
-#[test_case(r#""${"#      => r#"Str("${)"#                        ; "ends right after a leading marker")]
+#[test_case(r#""a${"#     => r#"String("a${)"#                       ; "ends right after the marker")]
+#[test_case(r#""${"#      => r#"String("${)"#                        ; "ends right after a leading marker")]
 #[test_case(r#""a$"#      => r#"Invalid("a$)"#                    ; "ends on a dollar")]
-#[test_case(r#""${x"#     => r#"Str("${) Ident(x)"#               ; "ends inside the body")]
-#[test_case(r#""${x}"#    => r#"Str("${) Ident(x) Invalid(})"#    ; "ends on the closing brace")]
-#[test_case(r#""${x}b"#   => r#"Str("${) Ident(x) Invalid(}b)"#   ; "ends inside the trailing fragment")]
-#[test_case(r#""${x}b""#  => r#"Str("${) Ident(x) Str(}b")"#      ; "terminated for contrast")]
-#[test_case(r#""a${"b""#  => r#"Str("a${) Str("b")"#              ; "nested literal closes but the outer does not")]
-#[test_case(r#""a${"b"#   => r#"Str("a${) Invalid("b)"#           ; "nested literal is itself unterminated")]
+#[test_case(r#""${x"#     => r#"String("${) Ident(x)"#               ; "ends inside the body")]
+#[test_case(r#""${x}"#    => r#"String("${) Ident(x) Invalid(})"#    ; "ends on the closing brace")]
+#[test_case(r#""${x}b"#   => r#"String("${) Ident(x) Invalid(}b)"#   ; "ends inside the trailing fragment")]
+#[test_case(r#""${x}b""#  => r#"String("${) Ident(x) String(}b")"#      ; "terminated for contrast")]
+#[test_case(r#""a${"b""#  => r#"String("a${) String("b")"#              ; "nested literal closes but the outer does not")]
+#[test_case(r#""a${"b"#   => r#"String("a${) Invalid("b)"#           ; "nested literal is itself unterminated")]
 fn unterminated_interpolation(src: &str) -> String {
     lex(src)
 }
@@ -448,11 +412,11 @@ fn regexes(src: &str) -> String {
 // Variables
 // ---------------------------------------------------------------------------------------
 
-#[test_case("$foo"     => "Var($foo)"                ; "plain")]
-#[test_case("$_x1"     => "Var($_x1)"                ; "underscore and digit")]
-#[test_case("$`a b`"   => "EscVar($`a b`)"           ; "escaped")]
-#[test_case(r"$`a\n`"  => r"EscVar($`a\n`)"          ; "escaped with escape")]
-#[test_case("$1"       => "Invalid($) Int(1)"        ; "digit cannot start a variable")]
+#[test_case("$foo"     => "Variable($foo)"                ; "plain")]
+#[test_case("$_x1"     => "Variable($_x1)"                ; "underscore and digit")]
+#[test_case("$`a b`"   => "EscapedVariable($`a b`)"           ; "escaped")]
+#[test_case(r"$`a\n`"  => r"EscapedVariable($`a\n`)"          ; "escaped with escape")]
+#[test_case("$1"       => "Invalid($) Integer(1)"        ; "digit cannot start a variable")]
 #[test_case("$"        => "Invalid($)"               ; "bare dollar")]
 fn variables(src: &str) -> String {
     lex(src)
@@ -469,10 +433,10 @@ fn comments(src: &str) -> String {
     lex(src)
 }
 
-#[test_case("a b"      => "Ident(a) WS Ident(b)"      ; "single space")]
-#[test_case("a  \n\t b" => "Ident(a) WS Ident(b)"     ; "mixed whitespace coalesces")]
-#[test_case(" a"       => "WS Ident(a)"               ; "leading")]
-#[test_case("a "       => "Ident(a) WS"               ; "trailing")]
+#[test_case("a b"      => "Ident(a) Whitespace( ) Ident(b)"      ; "single space")]
+#[test_case("a  \n\t b" => "Ident(a) Whitespace(  \n\t ) Ident(b)" ; "mixed whitespace coalesces")]
+#[test_case(" a"       => "Whitespace( ) Ident(a)"               ; "leading")]
+#[test_case("a "       => "Ident(a) Whitespace( )"               ; "trailing")]
 fn whitespace(src: &str) -> String {
     lex_ws(src)
 }
@@ -487,16 +451,16 @@ fn whitespace(src: &str) -> String {
 
 #[test_case("öff"           => "Ident(öff)"                      ; "unicode ident start")]
 #[test_case("a\u{0967}b"    => "Ident(a\u{0967}b)"               ; "unicode digit continues an ident")]
-#[test_case("`föö`"         => "EscIdent(`föö`)"                 ; "unicode escaped ident")]
-#[test_case("\"héllo\""     => "Str(\"héllo\")"                  ; "unicode string")]
+#[test_case("`föö`"         => "EscapedIdent(`föö`)"                 ; "unicode escaped ident")]
+#[test_case("\"héllo\""     => "String(\"héllo\")"                  ; "unicode string")]
 #[test_case("#/é/"          => "Regex(#/é/)"                     ; "unicode regex")]
-#[test_case("// héllo\nfoo" => "Comment(// héllo) WS Ident(foo)" ; "unicode comment")]
+#[test_case("// héllo\nfoo" => "Comment(// héllo) Whitespace(\n) Ident(foo)" ; "unicode comment")]
 #[test_case("€"             => "Invalid(€)"                      ; "unknown multi byte char")]
-#[test_case("a 🎉 b"        => "Ident(a) WS Invalid(🎉) WS Ident(b)" ; "emoji")]
+#[test_case("a 🎉 b"        => "Ident(a) Whitespace( ) Invalid(🎉) Whitespace( ) Ident(b)" ; "emoji")]
 #[test_case("\u{00B2}"      => "Invalid(\u{00B2})"               ; "superscript two is not a digit")]
 #[test_case("\u{0664}"      => "Invalid(\u{0664})"               ; "arabic indic digit is not a digit")]
-#[test_case("a\u{00A0}b"    => "Ident(a) WS Ident(b)"            ; "non breaking space is whitespace")]
-#[test_case("\u{3000}foo"   => "WS Ident(foo)"                   ; "ideographic space is whitespace")]
+#[test_case("a\u{00A0}b"    => "Ident(a) Whitespace(\u{00A0}) Ident(b)"     ; "non breaking space is whitespace")]
+#[test_case("\u{3000}foo"   => "Whitespace(\u{3000}) Ident(foo)"            ; "ideographic space is whitespace")]
 fn unicode(src: &str) -> String {
     lex_ws(src)
 }
@@ -507,27 +471,27 @@ fn unicode(src: &str) -> String {
 
 #[test_case(
     "d:m | where code >= 500"
-    => "Ident(d) : Ident(m) | Ident(where) Ident(code) >= Int(500)"
+    => "Ident(d) : Ident(m) | Ident(where) Ident(code) >= Integer(500)"
     ; "filter with comparison"
 )]
 #[test_case(
     "d:m[5m..] | group by pod using sum"
-    => "Ident(d) : Ident(m) [ Int(5) Ident(m) .. ] | Ident(group) Ident(by) Ident(pod) Ident(using) Ident(sum)"
+    => "Ident(d) : Ident(m) [ Integer(5) Ident(m) .. ] | Ident(group) Ident(by) Ident(pod) Ident(using) Ident(sum)"
     ; "time range and group by"
 )]
 #[test_case(
     "d:m | where tag in [\"a\", 1, 2.3]"
-    => "Ident(d) : Ident(m) | Ident(where) Ident(tag) Ident(in) [ Str(\"a\") , Int(1) , Float(2.3) ]"
+    => "Ident(d) : Ident(m) | Ident(where) Ident(tag) Ident(in) [ String(\"a\") , Integer(1) , Float(2.3) ]"
     ; "in with a mixed array"
 )]
 #[test_case(
     "param $ds: Dataset; $ds:m | filter svc == #/api-.+/"
-    => "Ident(param) Var($ds) : Ident(Dataset) ; Var($ds) : Ident(m) | Ident(filter) Ident(svc) == Regex(#/api-.+/)"
+    => "Ident(param) Variable($ds) : Ident(Dataset) ; Variable($ds) : Ident(m) | Ident(filter) Ident(svc) == Regex(#/api-.+/)"
     ; "param declaration and regex filter"
 )]
 #[test_case(
     "d:m | map filter::gt(1) | map is::lt(0.4)"
-    => "Ident(d) : Ident(m) | Ident(map) Ident(filter) :: Ident(gt) ( Int(1) ) | Ident(map) Ident(is) :: Ident(lt) ( Float(0.4) )"
+    => "Ident(d) : Ident(m) | Ident(map) Ident(filter) :: Ident(gt) ( Integer(1) ) | Ident(map) Ident(is) :: Ident(lt) ( Float(0.4) )"
     ; "stdlib module paths that a keyword set would break"
 )]
 #[test_case(
@@ -620,31 +584,34 @@ const CORPUS: &[&str] = &[
 ///
 /// It does not catch a correct-length but wrongly-split stream — `<` `=` tiles just as well
 /// as `<=`. That is what the tables above are for; the two layers are complementary.
+///
+/// The cursor advances by `Token::end()` rather than by a length the test computes itself, so
+/// this also holds the production accessor to the input it claims to describe.
 fn assert_tiles(input: &str) {
     let mut cursor = 0usize;
     for token in Lexer::new(input) {
-        let (start, kind, text) = parts(&token);
+        let start = token.pos();
+        let tpe = token.tpe();
+        let text = token.text();
 
         assert!(
             start <= input.len(),
-            "token {kind} start {start} past end of {input:?}"
+            "token {tpe:?} start {start} past end of {input:?}"
         );
         assert!(
             input.is_char_boundary(start),
-            "token {kind} start {start} is not a char boundary in {input:?}"
+            "token {tpe:?} start {start} is not a char boundary in {input:?}"
         );
         assert_eq!(
             start, cursor,
-            "gap or overlap before token {kind} in {input:?}"
+            "gap or overlap before token {tpe:?} in {input:?}"
         );
-        if let Some(text) = text {
-            assert!(
-                input[start..].starts_with(text),
-                "token {kind} text {text:?} does not match input at {start} in {input:?}"
-            );
-        }
+        assert!(
+            input[start..].starts_with(text),
+            "token {tpe:?} text {text:?} does not match input at {start} in {input:?}"
+        );
 
-        cursor = start + span_len(&token);
+        cursor = token.end();
     }
     assert_eq!(
         cursor,
@@ -777,16 +744,42 @@ fn prefix_tokens_are_stable() {
 fn filtering_trivia_preserves_the_rest() {
     for input in CORPUS {
         let kept: Vec<String> = Lexer::new(input)
-            .filter(|t| !matches!(t, Token::Whitespace(..) | Token::Comment(..)))
+            .filter(|t| !matches!(t.tpe(), TokenType::Whitespace | TokenType::Comment))
             .map(|t| describe(&t))
             .collect();
         let all: Vec<String> = Lexer::new(input)
             .map(|t| describe(&t))
-            .filter(|d| d != "WS" && !d.starts_with("Comment("))
+            .filter(|d| !d.starts_with("Whitespace(") && !d.starts_with("Comment("))
             .collect();
         assert_eq!(
             kept, all,
             "filtering trivia changed the stream for {input:?}"
         );
+    }
+}
+
+/// Property: `is_valid` and `is_invalid` agree with the token type, and with each other.
+///
+/// These are how a consumer decides whether lexing succeeded — `tests/lex.rs` gates every
+/// shipped example on `Token::is_invalid`, so if it ever disagreed with the type, a lexer
+/// error would pass as a clean parse and the gate would be silently vacuous.
+#[test]
+fn validity_agrees_with_the_token_type() {
+    for input in CORPUS {
+        for token in Lexer::new(input) {
+            let invalid = token.tpe() == TokenType::Invalid;
+            assert_eq!(
+                token.is_invalid(),
+                invalid,
+                "is_invalid disagrees with {:?} in {input:?}",
+                token.tpe()
+            );
+            assert_eq!(
+                token.is_valid(),
+                !invalid,
+                "is_valid disagrees with {:?} in {input:?}",
+                token.tpe()
+            );
+        }
     }
 }
