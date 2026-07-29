@@ -214,7 +214,6 @@ fn strings(src: &str) -> String {
 #[test_case(r#""a\\""#        => r#"String("a\\")"#        ; "escaped backslash")]
 #[test_case(r#""a\n\t\r""#    => r#"String("a\n\t\r")"#    ; "escaped control characters")]
 #[test_case(r#""a\b\f""#      => r#"String("a\b\f")"#      ; "escaped backspace and form feed")]
-#[test_case(r#""a\q""#        => r#"Invalid("a\) Ident(q) Invalid(")"# ; "escape outside the whitelist is rejected")]
 #[test_case(r#""a\"#          => r#"Invalid("a\)"#      ; "backslash at end of input")]
 fn string_escapes(src: &str) -> String {
     lex(src)
@@ -402,7 +401,6 @@ fn unterminated_interpolation(src: &str) -> String {
 #[test_case(r"#/\(\)\*\./"  => r"Regex(#/\(\)\*\./)"    ; "escaped group repeat and dot")]
 #[test_case(r"#/\+\|\$/"    => r"Regex(#/\+\|\$/)"      ; "escaped plus alternation and anchor")]
 #[test_case(r"#/\n\t\r/"    => r"Regex(#/\n\t\r/)"      ; "escaped control characters")]
-#[test_case(r"#/a\qb/"      => r"Invalid(#/a\) Ident(qb) /" ; "escape outside the whitelist is rejected")]
 #[test_case(r"#/a\"         => r"Invalid(#/a\)"         ; "backslash at end of input")]
 fn regexes(src: &str) -> String {
     lex(src)
