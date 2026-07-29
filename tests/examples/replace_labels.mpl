@@ -34,5 +34,5 @@
     | group by pod using sum,
 )
 | compute cpu_usage using /
-| replace service = pod ~ #s/(.+)-.+-.+/$1/
+// not yet implemented | replace service = pod ~ #s/(.+)-.+-.+/$1/
 | group by service using max
