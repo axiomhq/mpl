@@ -220,14 +220,7 @@ impl<'input> Lexer<'input> {
                 '`' => break,
                 '\\' => {
                     self.advance_char();
-                    let Some(c) = self.chars.peek() else {
-                        return Token {
-                            tpe: TokenType::Invalid,
-                            text: &self.input[start..self.pos],
-                            pos: start,
-                        };
-                    };
-                    if !(*c == '`' || *c == 'n' || *c == 't' || *c == 'r' || *c == '\\') {
+                    if self.chars.peek().is_none() {
                         return Token {
                             tpe: TokenType::Invalid,
                             text: &self.input[start..self.pos],
@@ -264,10 +257,7 @@ impl<'input> Lexer<'input> {
                 }
                 '\\' => {
                     self.advance_char();
-                    // escape at the end of the input is invalid
-                    if let Some(c) = self.chars.peek()
-                        && matches!(c, '\\' | '"' | 'n' | 't' | 'r' | 'b' | 'f' | '$')
-                    {
+                    if self.chars.peek().is_some() {
                         self.advance_char();
                     } else {
                         return Token {
@@ -339,30 +329,7 @@ impl<'input> Lexer<'input> {
                     '/' => break,
                     '\\' => {
                         self.advance_char();
-                        let Some(c) = self.chars.peek() else {
-                            return Token {
-                                tpe: TokenType::Invalid,
-                                text: &self.input[start..self.pos],
-                                pos: start,
-                            };
-                        };
-                        if !(*c == '/'
-                            || *c == '\\'
-                            || *c == '{'
-                            || *c == '}'
-                            || *c == '['
-                            || *c == ']'
-                            || *c == '('
-                            || *c == ')'
-                            || *c == '*'
-                            || *c == '.'
-                            || *c == '+'
-                            || *c == '|'
-                            || *c == '$'
-                            || *c == 'n'
-                            || *c == 't'
-                            || *c == 'r')
-                        {
+                        if self.chars.peek().is_none() {
                             return Token {
                                 tpe: TokenType::Invalid,
                                 text: &self.input[start..self.pos],
