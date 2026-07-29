@@ -227,7 +227,7 @@ impl<'input> Lexer<'input> {
                             pos: start,
                         };
                     };
-                    if !(*c == '`' || *c == 'n' || *c == 't' || *c == 'r' || *c == '\\') {
+                    if !matches!(*c, '`' | 'n' | 't' | 'r' | '\\') {
                         return Token {
                             tpe: TokenType::Invalid,
                             text: &self.input[start..self.pos],
@@ -265,9 +265,9 @@ impl<'input> Lexer<'input> {
                 '\\' => {
                     self.advance_char();
                     // escape at the end of the input is invalid
-                    if let Some(c) = self.chars.peek()
-                        && matches!(c, '\\' | '"' | 'n' | 't' | 'r' | 'b' | 'f' | '$')
-                    {
+                    if self.chars.peek().is_some_and(|c| {
+                        matches!(c, '\\' | '"' | 'n' | 't' | 'r' | 'b' | 'f' | '$')
+                    }) {
                         self.advance_char();
                     } else {
                         return Token {
@@ -346,23 +346,24 @@ impl<'input> Lexer<'input> {
                                 pos: start,
                             };
                         };
-                        if !(*c == '/'
-                            || *c == '\\'
-                            || *c == '{'
-                            || *c == '}'
-                            || *c == '['
-                            || *c == ']'
-                            || *c == '('
-                            || *c == ')'
-                            || *c == '*'
-                            || *c == '.'
-                            || *c == '+'
-                            || *c == '|'
-                            || *c == '$'
-                            || *c == 'n'
-                            || *c == 't'
-                            || *c == 'r')
-                        {
+                        if !matches!(
+                            *c,
+                            '/' | '\\'
+                                | '{'
+                                | '}'
+                                | '['
+                                | ']'
+                                | '('
+                                | ')'
+                                | '*'
+                                | '.'
+                                | '+'
+                                | '|'
+                                | '$'
+                                | 'n'
+                                | 't'
+                                | 'r'
+                        ) {
                             return Token {
                                 tpe: TokenType::Invalid,
                                 text: &self.input[start..self.pos],
