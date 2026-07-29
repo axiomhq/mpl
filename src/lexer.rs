@@ -147,7 +147,7 @@ enum State {
 pub struct Lexer<'input> {
     /// The input string to lex.
     input: &'input str,
-    /// Peakable itterator ofer characters for utf8 compatibility
+    /// Peakable iterator of characters for UTF-8 compatibility
     chars: Peekable<Chars<'input>>,
     /// the current **byte** position in the input. for substring extraction.
     pos: usize,
