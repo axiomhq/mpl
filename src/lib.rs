@@ -12,6 +12,8 @@
 /// The lexer for the MPL query language.
 pub mod lexer;
 mod parser;
+/// rowan syntax tree for the MPL query language.
+pub mod syntax_tree;
 pub use parser::{MPLParser, Rule};
 
 pub mod enc_regex;

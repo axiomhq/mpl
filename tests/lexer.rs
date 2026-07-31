@@ -49,7 +49,7 @@ fn describe(token: &Token<'_>) -> String {
 /// Lexes into the compact form, dropping whitespace — the default for the tables below.
 fn lex(input: &str) -> String {
     Lexer::new(input)
-        .filter(|t| t.tpe() != TokenType::Whitespace)
+        .filter(|t| t.tpe() != TokenType::Whitespace && !t.is_eof())
         .map(|t| describe(&t))
         .collect::<Vec<_>>()
         .join(" ")
@@ -58,6 +58,7 @@ fn lex(input: &str) -> String {
 /// Lexes into the compact form, keeping whitespace tokens.
 fn lex_ws(input: &str) -> String {
     Lexer::new(input)
+        .filter(|t| !t.is_eof())
         .map(|t| describe(&t))
         .collect::<Vec<_>>()
         .join(" ")
@@ -588,6 +589,10 @@ const CORPUS: &[&str] = &[
 fn assert_tiles(input: &str) {
     let mut cursor = 0usize;
     for token in Lexer::new(input) {
+        if token.is_eof() {
+            break;
+        }
+
         let start = token.pos();
         let tpe = token.tpe();
         let text = token.text();
@@ -717,12 +722,18 @@ fn prefix_tokens_are_stable() {
         if input.is_empty() {
             continue;
         }
-        let full: Vec<String> = Lexer::new(input).map(|t| describe(&t)).collect();
+        let full: Vec<String> = Lexer::new(input)
+            .filter(|t| !t.is_eof())
+            .map(|t| describe(&t))
+            .collect();
         for split in 1..input.len() {
             if !input.is_char_boundary(split) {
                 continue;
             }
-            let prefix: Vec<String> = Lexer::new(&input[..split]).map(|t| describe(&t)).collect();
+            let prefix: Vec<String> = Lexer::new(&input[..split])
+                .filter(|t| !t.is_eof())
+                .map(|t| describe(&t))
+                .collect();
             // The final prefix token may be cut short by the split, so compare all but that.
             let shared = prefix.len().saturating_sub(1);
             assert_eq!(
