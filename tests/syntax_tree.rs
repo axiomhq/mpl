@@ -78,6 +78,10 @@ fn parse_error_examples() {
         "incomplete_query.mpl",
         "missing_pipe.mpl",
         "typo_keyword.mpl",
+        "in-int.mpl",
+        "invalid_time_unit.mpl",
+        "in-trailing-comma.mpl",
+        "invalid_operator.mpl",
     ];
     fs::read_dir("./tests/errors")
         .unwrap()
@@ -101,16 +105,18 @@ fn parse_error_examples() {
                     eprintln!("{error}")
                 }
                 if n_errors != 0 {
-                    assert_eq!(tree.children().count(), 1);
-                    let list = tree.children().next().unwrap();
-                    let children = list
-                        .children_with_tokens()
-                        .map(|child| format!("{:?}@{:?}", child.kind(), child.text_range()))
-                        .collect::<Vec<_>>();
+                    for list in tree.children() {
+                        let children = list
+                            .children_with_tokens()
+                            .map(|child| format!("{:?}@{:?}", child.kind(), child.text_range()))
+                            .collect::<Vec<_>>();
 
-                    dbg!(children);
+                        dbg!(children);
+                    }
                 }
                 assert_eq!(n_errors, 0);
+            } else {
+                assert!(!errors.is_empty());
             }
         });
 }

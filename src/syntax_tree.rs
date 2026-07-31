@@ -114,20 +114,31 @@ pub enum SyntaxKind {
     FUNCION_PATH,
     DURATION,
     TIME_UNIT,
+    OTEL_TYPE,
 
     EXPR,
+    REGEX,
     CONST,
     INTEGER,
     FLOAT,
     BOOL,
     STRING,
     ARRAY,
+    TAG_LIST,
 
     RULE,
+    EXTEND,
+    EXTEND_PART,
+    IFDEF,
     FILTER,
     SAMPLE,
     MAP,
+    MAP_MATH,
     ALIGN,
+    GROUP,
+    BUCKET,
+    BUCKET_ARG,
+    BUCKET_ARGS,
 
     // IMPORTANT! THIS NEEDS TO BE LAST!!!
     ROOT,
@@ -231,6 +242,18 @@ impl<'input> Parser<'input> {
         self.builder.token(token.kind().into(), token.text());
     }
 
+    fn eat_token_type(&mut self, token_type: TokenType) {
+        let tkn = self.peek();
+        if tkn.tpe() != token_type {
+            self.error_token(
+                tkn,
+                format!("expected {:?}, got {:?}", token_type, tkn.tpe()),
+            );
+        }
+        let tkn = self.next();
+        self.token(tkn);
+    }
+
     fn eat_token(&mut self) {
         let tkn = self.next();
         self.token(tkn);
@@ -259,12 +282,29 @@ impl<'input> Parser<'input> {
         };
         token.tpe() == token_type
     }
+    fn try_structural(&mut self, token_type: TokenType) -> bool {
+        if !self.is_structural(token_type) {
+            return false;
+        }
+        self.eat_token();
+        true
+    }
 
     fn is_keyword(&mut self, text: &str) -> bool {
         let Some(token) = self.lexer.peek() else {
             return false;
         };
         token.tpe() == TokenType::Ident && token.text() == text
+    }
+
+    fn try_keyword(&mut self, text: &str) -> bool {
+        if !self.is_keyword(text) {
+            return false;
+        }
+        self.node(KEYWORD, |s| {
+            s.eat_token();
+        });
+        true
     }
 
     fn peek(&mut self) -> Token<'input> {
@@ -293,6 +333,14 @@ impl<'input> Parser<'input> {
             range: SourceSpan::new(token.pos().into(), token.text().len()),
         });
     }
+
+    fn node(&mut self, kind: SyntaxKind, f: impl FnOnce(&mut Self)) {
+        self.builder.start_node(kind.into());
+        self.eat_trivia();
+        f(self);
+        self.eat_trivia();
+        self.builder.finish_node();
+    }
 }
 
 /// Grammer
@@ -302,446 +350,559 @@ impl Parser<'_> {
     /// Panics because it's not done yet
     #[must_use]
     pub fn parse(mut self) -> (SyntaxNode, Vec<SyntaxError>) {
-        self.start_node(ROOT);
-        self.eat_trivia();
-        while self.is_keyword("set") {
-            self.directive();
-        }
-        while self.is_keyword("param") {
-            self.param();
-        }
+        self.node(ROOT, |s| {
+            s.eat_trivia();
+            while s.is_keyword("set") {
+                s.directive();
+            }
+            while s.is_keyword("param") {
+                s.param();
+            }
 
-        self.query();
-        let rest = self.next();
-        if rest.tpe() != TokenType::Eof {
-            self.errors.push(SyntaxError::TokenAfterEoq {
-                kind: rest.tpe(),
-                range: SourceSpan::new(rest.pos().into(), rest.text().len()),
-            });
-        }
-        self.finish_node();
+            s.query();
+            let rest = s.next();
+            if rest.tpe() != TokenType::Eof {
+                s.errors.push(SyntaxError::TokenAfterEoq {
+                    kind: rest.tpe(),
+                    range: SourceSpan::new(rest.pos().into(), rest.text().len()),
+                });
+            }
+        });
         (SyntaxNode::new_root(self.builder.finish()), self.errors)
     }
 
     fn query(&mut self) {
-        self.start_node(QUERY);
-        let token = self.peek();
-        match token.tpe() {
-            TokenType::Ident | TokenType::EscapedIdent => {
-                self.simple_query();
+        self.node(QUERY, |s| {
+            let token = s.peek();
+            match token.tpe() {
+                TokenType::Ident
+                | TokenType::EscapedIdent
+                | TokenType::Variable
+                | TokenType::EscapedVariable => {
+                    s.simple_query();
+                }
+                TokenType::LParen => {
+                    s.compute_query();
+                }
+                _ => s.error("expected query"),
             }
-            TokenType::LParen => {
-                self.compute_query();
-            }
-            _ => self.error("expected query"),
-        }
-        self.finish_node();
+        });
     }
 
     fn compute_query(&mut self) {
-        self.start_node(COMPUTE_QUERY);
-        self.structural(TokenType::LParen);
-        self.simple_query();
-        self.structural(TokenType::Comma);
-        self.simple_query();
-        self.structural(TokenType::RParen);
-
-        self.finish_node();
+        self.node(COMPUTE_QUERY, |s| {
+            s.structural(TokenType::LParen);
+            s.simple_query();
+            s.structural(TokenType::Comma);
+            s.simple_query();
+            s.structural(TokenType::RParen);
+        });
     }
 
     fn simple_query(&mut self) {
-        self.start_node(SIMPLE_QUERY);
-        self.ident_or_variable();
-        self.structural(TokenType::Colon);
-        self.ident();
-        self.rules();
-        self.finish_node();
+        self.node(SIMPLE_QUERY, |s| {
+            s.ident_or_variable();
+            s.structural(TokenType::Colon);
+            s.ident();
+            s.rules();
+        });
     }
 
     fn directive(&mut self) {
-        self.start_node(DIRECTIVE);
-        self.keyword("set");
-        self.ident();
-        if self.is_structural(TokenType::Equal) {
-            self.structural(TokenType::Equal);
-            self.constant();
-        }
-
-        self.structural(TokenType::SemiColon);
-        self.finish_node();
+        self.node(DIRECTIVE, |s| {
+            s.keyword("set");
+            s.ident();
+            if s.try_structural(TokenType::Equal) {
+                s.constant();
+            }
+            s.structural(TokenType::SemiColon);
+        });
     }
 
     fn param(&mut self) {
-        self.start_node(DIRECTIVE);
-        self.keyword("param");
-        self.variable();
-        self.structural(TokenType::Equal);
-        self.variable_type();
-        self.structural(TokenType::SemiColon);
-        self.finish_node();
+        self.node(DIRECTIVE, |s| {
+            s.keyword("param");
+            s.variable();
+            s.structural(TokenType::Colon);
+            s.variable_type();
+            s.structural(TokenType::SemiColon);
+        });
+    }
+
+    fn float(&mut self) {
+        self.node(FLOAT, |s| s.eat_token_type(TokenType::Float));
+    }
+
+    fn integer(&mut self) {
+        self.node(INTEGER, |s| s.eat_token_type(TokenType::Integer));
+    }
+
+    fn bool(&mut self) {
+        self.node(BOOL, |s| s.eat_token_type(TokenType::Bool));
     }
 
     fn constant(&mut self) {
-        self.start_node(CONST);
-        let token = self.peek();
-        match token.tpe() {
-            TokenType::Inf | TokenType::Float => {
-                self.start_node(FLOAT);
-                self.eat_token();
-                self.finish_node();
+        self.node(CONST, |s| {
+            // we first consume all the + and - in the world
+            while s.try_structural(TokenType::Plus) || s.try_structural(TokenType::Minus) {}
+            let token = s.peek();
+            match token.tpe() {
+                TokenType::Inf => {
+                    s.node(FLOAT, Parser::eat_token);
+                }
+                TokenType::Float => s.float(),
+                TokenType::Integer => s.integer(),
+                TokenType::Bool => s.bool(),
+                TokenType::String | TokenType::StringSegment => s.string(),
+                TokenType::LBrace => s.array(),
+                _ => s.error("expected constant"),
             }
-            TokenType::Integer => {
-                self.start_node(INTEGER);
-                self.eat_token();
-                self.finish_node();
-            }
-            TokenType::Bool => {
-                self.start_node(BOOL);
-                self.eat_token();
-                self.finish_node();
-            }
-            TokenType::String | TokenType::StringSegment => {
-                self.string();
-            }
-            TokenType::LBrace => {
-                self.array();
-            }
-            _ => self.error("expected value"),
-        }
-
-        self.finish_node();
+        });
     }
 
     fn expr(&mut self) {
-        self.start_node(EXPR);
-        match self.peek().tpe() {
+        self.node(EXPR, |s| match s.peek().tpe() {
             TokenType::Ident | TokenType::EscapedIdent => {
-                self.ident();
+                s.ident();
             }
             TokenType::Variable | TokenType::EscapedVariable => {
-                self.variable();
+                s.variable();
             }
-            _ => self.constant(),
-        }
-        self.finish_node();
+            _ => s.constant(),
+        });
     }
 
     fn string(&mut self) {
-        self.start_node(STRING);
-        let mut tkn = self.next();
-        while tkn.tpe() == TokenType::StringSegment {
-            self.token(tkn);
-            self.expr();
-            tkn = self.next();
-        }
-        self.token(tkn);
-        self.finish_node();
+        self.node(STRING, |s| {
+            let mut tkn = s.next();
+            while tkn.tpe() == TokenType::StringSegment {
+                s.token(tkn);
+                s.expr();
+                tkn = s.next();
+            }
+            if tkn.tpe() == TokenType::String {
+                s.token(tkn);
+            } else {
+                s.error_token(tkn, "Unexpected string");
+            }
+        });
     }
 
     fn array(&mut self) {
-        self.start_node(ARRAY);
-        self.error("array is not implemented");
-        self.finish_node();
+        self.node(ARRAY, |s| {
+            s.structural(TokenType::LBracket);
+            if s.try_structural(TokenType::RBracket) {
+                return;
+            }
+            s.expr();
+            while s.try_structural(TokenType::Comma) {
+                s.expr();
+            }
+            s.structural(TokenType::RBracket);
+        });
     }
 
     fn keyword(&mut self, text: &str) {
-        self.start_node(KEYWORD);
-        let token = self.next();
-        if token.text() != text {
-            self.error_token(
-                token,
-                format!("expected keyword {} but got {}", text, token.text()),
-            );
-            self.finish_node();
-            return;
-        }
-        self.token(token);
-        self.finish_node();
+        self.node(KEYWORD, |s| {
+            let token = s.next();
+            if token.text() == text {
+                s.token(token);
+            } else {
+                s.error_token(
+                    token,
+                    format!("expected keyword {} but got {}", text, token.text()),
+                );
+            }
+        });
     }
 
-    fn try_keyword(&mut self, text: &str) -> bool {
-        if !self.is_keyword(text) {
-            return false;
+    fn try_variable(&mut self) -> bool {
+        if matches!(
+            self.peek().tpe(),
+            TokenType::Variable | TokenType::EscapedVariable
+        ) {
+            self.variable();
+            true
+        } else {
+            false
         }
-        self.start_node(KEYWORD);
-        self.eat_token();
-        self.finish_node();
-        true
     }
 
     fn variable(&mut self) {
-        self.start_node(VARIABLE);
-        let token = self.next();
-        if token.tpe() != TokenType::Variable {
-            self.error_token(
-                token,
-                format!(
-                    "expected variable but got {} ({:?})",
-                    token.text(),
-                    token.tpe()
-                ),
-            );
-            self.finish_node();
-            return;
-        }
-        self.token(token);
-        self.finish_node();
+        self.node(VARIABLE, |s| {
+            if s.peek().tpe() == TokenType::EscapedVariable {
+                s.eat_token_type(TokenType::EscapedVariable);
+            } else {
+                s.eat_token_type(TokenType::Variable);
+            }
+        });
     }
 
     fn ident(&mut self) {
-        self.start_node(IDENT);
-        let token = self.next();
-        if token.tpe() != TokenType::Ident && token.tpe() != TokenType::EscapedIdent {
-            self.error_token(
-                token,
-                format!(
-                    "expected ident but got {} ({:?})",
-                    token.text(),
-                    token.tpe()
-                ),
-            );
-            self.finish_node();
-            return;
-        }
-        self.token(token);
-        self.finish_node();
-    }
-
-    fn ident_or_variable(&mut self) {
-        self.start_node(IDENT_OR_VARIABLE);
-
-        let token = self.peek();
-        match token.tpe() {
-            TokenType::Ident | TokenType::EscapedIdent => self.ident(),
-            TokenType::Variable | TokenType::EscapedVariable => self.variable(),
-            _ => {
-                self.error_token(
+        self.node(IDENT, |s| {
+            let token = s.next();
+            if token.tpe() != TokenType::Ident && token.tpe() != TokenType::EscapedIdent {
+                s.error_token(
                     token,
                     format!(
-                        "expected ident or variable but got {} ({:?})",
+                        "expected ident but got {} ({:?})",
                         token.text(),
                         token.tpe()
                     ),
                 );
+                return;
             }
-        }
-        self.finish_node();
+            s.token(token);
+        });
+    }
+
+    fn ident_or_variable(&mut self) {
+        self.node(IDENT_OR_VARIABLE, |s| {
+            let token = s.peek();
+            match token.tpe() {
+                TokenType::Ident | TokenType::EscapedIdent => s.ident(),
+                TokenType::Variable | TokenType::EscapedVariable => s.variable(),
+                _ => {
+                    s.error_token(
+                        token,
+                        format!(
+                            "expected ident or variable but got {} ({:?})",
+                            token.text(),
+                            token.tpe()
+                        ),
+                    );
+                }
+            }
+        });
     }
 
     fn variable_type(&mut self) {
-        self.start_node(TYPE);
-        let token = self.next();
-        if token.tpe() != TokenType::Ident {
-            self.error_token(
-                token,
-                format!(
-                    "expected variable type but got {} ({:?})",
-                    token.text(),
-                    token.tpe()
-                ),
-            );
-            self.finish_node();
-            return;
-        }
-        match token.text() {
+        self.node(TYPE, |s| {
+            let token = s.next();
+            if token.tpe() != TokenType::Ident {
+                s.error_token(
+                    token,
+                    format!(
+                        "expected variable type but got {} ({:?})",
+                        token.text(),
+                        token.tpe()
+                    ),
+                );
+                return;
+            }
+            match token.text() {
              // built-in type
             "string" | "int" | "float" | "bool" | "array" |
             // custom type
             "Dataset" | "Duration" | "duration" | "Regex" =>
-                self.token(token),
+                s.token(token),
             "Option" => {
-                self.token(token);
-                self.structural(TokenType::LessThan);
-                self.variable_type();
-                self.structural(TokenType::GreaterThan);
+                s.token(token);
+                s.structural(TokenType::LessThan);
+                s.variable_type();
+                s.structural(TokenType::GreaterThan);
             }
             _ => {
-                self.error_token(
+                s.error_token(
                     token,
                     format!("unknown type {}", token.text()),
                 );
             }
         }
-        self.finish_node();
-    }
-
-    fn start_node(&mut self, kind: SyntaxKind) {
-        self.builder.start_node(kind.into());
-        self.eat_trivia();
-    }
-    fn finish_node(&mut self) {
-        self.eat_trivia();
-        self.builder.finish_node();
+        });
     }
 
     fn rules(&mut self) {
-        while self.is_structural(TokenType::Pipe) {
-            self.start_node(RULE);
-            self.structural(TokenType::Pipe);
-            let token = self.peek();
-            let tpe = token.tpe();
-            let txt = token.text();
-            if tpe != TokenType::Ident {
-                self.error(format!("expected ident, got {tpe:?}"));
-            }
-            match txt {
-                "filter" | "where" => self.filter_rule(),
-                "sample" => self.sample_rule(),
-                "map" => self.map_rule(),
-                "align" => self.align_rule(),
-                "group" => self.group_rule(),
-                "bucket" => self.bucket_rule(),
-                "ifdef" => self.ifdef_rule(),
-                "extend" => self.extend_rule(),
-                _ => self.error(format!("unknown rule: {txt}")),
-            }
-            self.finish_node();
+        while self.try_structural(TokenType::Pipe) {
+            self.node(RULE, |s| {
+                let token = s.peek();
+                let tpe = token.tpe();
+                let txt = token.text();
+                if tpe != TokenType::Ident {
+                    s.error(format!("expected ident, got {tpe:?}"));
+                    return;
+                }
+                match txt {
+                    "filter" | "where" => s.filter_rule(),
+                    "sample" => s.sample_rule(),
+                    "map" => s.map_rule(),
+                    "align" => s.align_rule(),
+                    "group" => s.group_rule(),
+                    "bucket" => s.bucket_rule(),
+                    "ifdef" => s.ifdef_rule(),
+                    "extend" => s.extend_rule(),
+                    _ => s.error(format!("unknown rule: {txt}")),
+                }
+            });
         }
     }
 
     fn filter_rule(&mut self) {
-        self.start_node(FILTER);
-        if !self.try_keyword("filter") && !self.try_keyword("where") {
-            self.error("expected filter or where");
-            self.finish_node();
-            return;
-        }
+        self.node(FILTER, |s| {
+            if !s.try_keyword("filter") && !s.try_keyword("where") {
+                s.error("expected filter or where");
+                return;
+            }
 
-        self.filter_or();
-
-        self.finish_node();
+            s.filter_or();
+        });
     }
     fn filter_or(&mut self) {
-        self.start_node(FILTER_OR);
-        self.filter_and();
-        if self.try_keyword("or") {
-            self.filter_and();
-        }
-        self.finish_node();
+        self.node(FILTER_OR, |s| {
+            s.filter_and();
+            while s.try_keyword("or") {
+                s.filter_and();
+            }
+        });
     }
 
     fn filter_and(&mut self) {
-        self.start_node(FILTER_AND);
-        self.filter_not();
-        if self.try_keyword("and") {
-            self.filter_not();
-        }
-        self.finish_node();
+        self.node(FILTER_AND, |s| {
+            s.filter_not();
+            while s.try_keyword("and") {
+                s.filter_not();
+            }
+        });
     }
 
     fn filter_not(&mut self) {
-        self.start_node(FILTER_NOT);
-        self.try_keyword("not");
-        self.filter_paren();
-        self.finish_node();
+        self.node(FILTER_NOT, |s| {
+            s.try_keyword("not");
+            s.filter_paren();
+        });
     }
     fn filter_paren(&mut self) {
-        self.start_node(FILTER_PAREN);
-        if self.is_structural(TokenType::LParen) {
-            self.eat_token();
-            self.filter_or();
-            self.structural(TokenType::RParen);
-        } else {
-            self.filter_cmp();
-        }
-        self.finish_node();
+        self.node(FILTER_PAREN, |s| {
+            if s.try_structural(TokenType::LParen) {
+                s.filter_or();
+                s.structural(TokenType::RParen);
+            } else {
+                s.filter_cmp();
+            }
+        });
+    }
+    fn regex(&mut self) {
+        self.node(REGEX, |s| s.eat_token_type(TokenType::Regex));
     }
     fn filter_cmp(&mut self) {
-        self.start_node(FILTER_CMP);
-        self.ident();
+        self.node(FILTER_CMP, |s| {
+            s.ident();
 
-        let tkn = self.peek();
-        match tkn.tpe() {
-            tt @ (TokenType::EqualEqual
-            | TokenType::NotEqual
-            | TokenType::LessThan
-            | TokenType::GreaterThan
-            | TokenType::LessThanEqual
-            | TokenType::GreaterThanEqual) => self.structural(tt),
-            TokenType::Ident if tkn.text() == "is" => self.keyword("is"),
-            TokenType::Ident if tkn.text() == "in" => self.keyword("in"),
-            _ => self.error_token(tkn, "expected comparison operator"),
-        }
+            let tkn = s.peek();
+            match tkn.tpe() {
+                tt @ (TokenType::EqualEqual | TokenType::NotEqual) => {
+                    s.structural(tt);
+                    let tkn = s.peek();
+                    if tkn.tpe() == TokenType::Regex {
+                        s.regex();
+                    } else {
+                        s.expr();
+                    }
+                }
 
-        self.constant();
-        self.finish_node();
+                tt @ (TokenType::LessThan
+                | TokenType::GreaterThan
+                | TokenType::LessThanEqual
+                | TokenType::GreaterThanEqual) => {
+                    s.structural(tt);
+                    s.expr();
+                }
+                TokenType::Ident if tkn.text() == "is" => {
+                    s.keyword("is");
+                    s.type_ident();
+                }
+                TokenType::Ident if tkn.text() == "in" => {
+                    s.keyword("in");
+                    if !s.try_variable() {
+                        s.array();
+                    }
+                }
+                _ => {
+                    s.error_token(tkn, "expected comparison operator");
+                }
+            }
+        });
     }
 
     fn sample_rule(&mut self) {
-        self.start_node(SAMPLE);
-        self.keyword("sample");
-        self.constant(); // TODO: this should be float?
-        self.finish_node();
+        self.node(SAMPLE, |s| {
+            s.keyword("sample");
+            s.float();
+        });
     }
 
     fn map_rule(&mut self) {
-        self.start_node(MAP);
-        self.keyword("map");
-        self.ident();
-        if self.is_structural(TokenType::LParen) {
-            self.eat_token();
-            self.constant();
-            self.structural(TokenType::RParen);
-        }
-        self.finish_node();
+        self.node(MAP, |s| {
+            s.keyword("map");
+            let tkn = s.peek();
+            match tkn.tpe() {
+                TokenType::Mul | TokenType::Div | TokenType::Plus | TokenType::Minus => {
+                    s.node(MAP_MATH, |s| {
+                        s.eat_token();
+                        s.expr();
+                    });
+                }
+                _ => {
+                    s.funcion_path();
+                    if s.try_structural(TokenType::LParen) {
+                        s.constant();
+                        s.structural(TokenType::RParen);
+                    }
+                }
+            }
+        });
     }
 
     fn align_rule(&mut self) {
-        self.start_node(ALIGN);
-        self.keyword("align");
-        if self.try_keyword("to") {
-            self.duration();
-        }
-        self.keyword("using");
-        self.funcion_path();
-        self.finish_node();
+        self.node(ALIGN, |s| {
+            s.keyword("align");
+            // note: this will eat "to $..." with the && as try_variable() is only
+            // called when try_to is also true
+            if s.try_keyword("to") && !s.try_variable() {
+                s.duration();
+            }
+            s.keyword("using");
+            s.funcion_path();
+        });
     }
 
     fn duration(&mut self) {
-        self.start_node(DURATION);
+        self.node(DURATION, |s| {
+            let tkn = s.next();
+            if tkn.tpe() != TokenType::Integer {
+                s.error_token(tkn, "expected integer duration");
+            }
+            s.token(tkn);
 
-        let tkn = self.next();
-        if tkn.tpe() != TokenType::Integer {
-            self.error_token(tkn, "expected integer duration");
-        }
-        self.token(tkn);
-
-        let tkn = self.peek();
-        if tkn.tpe() == TokenType::Ident
-            && matches!(tkn.text(), "ms" | "s" | "m" | "h" | "d" | "w" | "M" | "y")
-        {
-            self.start_node(TIME_UNIT);
-            self.eat_token();
-            self.finish_node();
-        }
-        self.token(tkn);
-
-        self.finish_node();
+            let tkn = s.peek();
+            if tkn.tpe() == TokenType::Ident
+                && matches!(tkn.text(), "ms" | "s" | "m" | "h" | "d" | "w" | "M" | "y")
+            {
+                s.node(TIME_UNIT, Parser::eat_token);
+            }
+        });
     }
 
     fn funcion_path(&mut self) {
-        self.start_node(FUNCION_PATH);
-        self.ident();
-        while self.is_structural(TokenType::DoubleColon) {
-            self.eat_token();
-            self.ident();
-        }
+        self.node(FUNCION_PATH, |s| {
+            s.ident();
+            while s.try_structural(TokenType::DoubleColon) {
+                s.ident();
+            }
+        });
     }
 
-    fn group_rule(&self) {
-        todo!()
+    fn group_rule(&mut self) {
+        self.node(GROUP, |s| {
+            s.keyword("group");
+            if s.try_keyword("by") {
+                s.tag_list();
+            }
+            s.keyword("using");
+            s.funcion_path();
+        });
     }
 
-    fn bucket_rule(&self) {
-        todo!()
+    fn bucket_rule(&mut self) {
+        self.node(BUCKET, |s| {
+            s.keyword("bucket");
+            if s.try_keyword("by") {
+                s.tag_list();
+            }
+            if s.try_keyword("to") && !s.try_variable() {
+                s.duration();
+            }
+            s.keyword("using");
+            s.funcion_path();
+            s.structural(TokenType::LParen);
+            if !s.is_structural(TokenType::RParen) {
+                s.bucket_args();
+            }
+            s.structural(TokenType::RParen);
+        });
     }
 
-    fn ifdef_rule(&self) {
-        todo!()
+    fn bucket_arg(&mut self) {
+        self.node(BUCKET_ARG, |s| {
+            let tkn = s.peek();
+            match tkn.tpe() {
+                TokenType::Ident | TokenType::EscapedIdent => {
+                    s.ident();
+                }
+                TokenType::Float => {
+                    s.float();
+                }
+                _ => {
+                    s.error_token(tkn, "expected ident or float in bucket arg");
+                }
+            }
+        });
     }
 
-    fn extend_rule(&self) {
-        todo!()
+    fn bucket_args(&mut self) {
+        self.node(BUCKET_ARGS, |s| {
+            s.bucket_arg();
+            while s.try_structural(TokenType::Comma) {
+                s.bucket_arg();
+            }
+        });
+    }
+
+    fn ifdef_rule(&mut self) {
+        self.node(IFDEF, |s| {
+            s.keyword("ifdef");
+            s.structural(TokenType::LParen);
+            s.variable();
+            s.structural(TokenType::RParen);
+            s.structural(TokenType::LBrace);
+            s.filter_rule();
+            s.structural(TokenType::RBrace);
+            if s.try_keyword("else") {
+                s.structural(TokenType::LBrace);
+                s.filter_rule();
+                s.structural(TokenType::RBrace);
+            }
+        });
+    }
+
+    fn extend_part(&mut self) {
+        self.node(EXTEND_PART, |s| {
+            s.ident();
+            s.structural(TokenType::Equal);
+            s.expr();
+        });
+    }
+
+    fn extend_rule(&mut self) {
+        self.node(EXTEND, |s| {
+            s.keyword("extend");
+            s.extend_part();
+            while s.try_structural(TokenType::Comma) {
+                s.extend_part();
+            }
+        });
+    }
+
+    fn tag_list(&mut self) {
+        self.node(TAG_LIST, |s| {
+            s.ident();
+            while s.try_structural(TokenType::Comma) {
+                s.ident();
+            }
+        });
+    }
+
+    fn type_ident(&mut self) {
+        self.node(OTEL_TYPE, |s| {
+            let tkn = s.peek();
+            if tkn.tpe() == TokenType::Ident
+                && matches!(tkn.text(), "string" | "int" | "float" | "bool" | "array")
+            {
+                s.ident();
+            } else {
+                s.error_token(tkn, "expected otel type ident");
+            }
+        });
     }
 }
 
