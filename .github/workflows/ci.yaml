@@ -38,7 +38,16 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy
-      - run: cargo clippy --locked --tests
+      # --all-targets: mplc/mplstdlib are behind `required-features = ["cli"]`.
+      # --all-features: `examples`
+      - run: cargo clippy --locked --workspace --all-targets --all-features
+  # tests pass with bincode/clock feature off.
+  test-rust-no-default:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo test --locked --workspace --no-default-features
   test-rust:
     runs-on: ubuntu-latest
     steps:
