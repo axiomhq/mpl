@@ -312,6 +312,8 @@ pub struct Parser<'input> {
     builder: GreenNodeBuilder<'static>,
     errors: Vec<SyntaxError>,
     eof: Token<'static>,
+    max_tree_depth: usize,
+    depth: usize,
 }
 
 // Helper
@@ -324,7 +326,16 @@ impl<'input> Parser<'input> {
             builder: GreenNodeBuilder::default(),
             errors: Vec::new(),
             eof: Token::new(TokenType::Eof, "", input.len()),
+            max_tree_depth: 250,
+            depth: 0,
         }
+    }
+    /// Limits the tree depth of the parser. (and in effect the recursion)
+    /// default is 250
+    #[must_use]
+    pub fn with_tree_depth(mut self, depth: usize) -> Self {
+        self.max_tree_depth = depth;
+        self
     }
 
     fn eat_trivia(&mut self) {
@@ -468,6 +479,15 @@ impl<'input> Parser<'input> {
         self.eat_trivia();
         self.builder.finish_node();
     }
+    fn rnode(&mut self, kind: SyntaxKind, f: impl FnOnce(&mut Self)) {
+        self.depth += 1;
+        if self.depth > self.max_tree_depth {
+            self.error("recursion depth exceeded");
+        } else {
+            self.node(kind, f);
+        }
+        self.depth = self.depth.saturating_sub(1);
+    }
 }
 
 /// Grammar
@@ -509,7 +529,7 @@ impl Parser<'_> {
     }
 
     fn query(&mut self) {
-        self.node(QUERY, |s| {
+        self.rnode(QUERY, |s| {
             let token = s.peek();
             match token.tpe() {
                 TokenType::Ident
@@ -648,7 +668,7 @@ impl Parser<'_> {
     }
 
     fn string(&mut self) {
-        self.node(STRING, |s| {
+        self.rnode(STRING, |s| {
             let mut tkn = s.next();
             while tkn.tpe() == TokenType::StringSegment {
                 s.token(tkn);
@@ -664,7 +684,7 @@ impl Parser<'_> {
     }
 
     fn array(&mut self) {
-        self.node(ARRAY, |s| {
+        self.rnode(ARRAY, |s| {
             s.structural(TokenType::LBracket);
             if s.try_structural(TokenType::RBracket) {
                 return;
@@ -752,7 +772,7 @@ impl Parser<'_> {
     }
 
     fn variable_type(&mut self) {
-        self.node(TYPE, |s| {
+        self.rnode(TYPE, |s| {
             let token = s.next();
             if token.tpe() != TokenType::Ident {
                 s.error_token(
@@ -824,7 +844,7 @@ impl Parser<'_> {
         });
     }
     fn filter_or(&mut self) {
-        self.node(FILTER_OR, |s| {
+        self.rnode(FILTER_OR, |s| {
             s.filter_and();
             while s.try_keyword("or") {
                 s.filter_and();
@@ -833,7 +853,7 @@ impl Parser<'_> {
     }
 
     fn filter_and(&mut self) {
-        self.node(FILTER_AND, |s| {
+        self.rnode(FILTER_AND, |s| {
             s.filter_not();
             while s.try_keyword("and") {
                 s.filter_not();
@@ -842,13 +862,13 @@ impl Parser<'_> {
     }
 
     fn filter_not(&mut self) {
-        self.node(FILTER_NOT, |s| {
+        self.rnode(FILTER_NOT, |s| {
             s.try_keyword("not");
             s.filter_paren();
         });
     }
     fn filter_paren(&mut self) {
-        self.node(FILTER_PAREN, |s| {
+        self.rnode(FILTER_PAREN, |s| {
             if s.try_structural(TokenType::LParen) {
                 s.filter_or();
                 s.structural(TokenType::RParen);
@@ -861,7 +881,7 @@ impl Parser<'_> {
         self.node(REGEX, |s| s.eat_token_type(TokenType::Regex));
     }
     fn filter_cmp(&mut self) {
-        self.node(FILTER_CMP, |s| {
+        self.rnode(FILTER_CMP, |s| {
             s.ident();
 
             let tkn = s.peek();
