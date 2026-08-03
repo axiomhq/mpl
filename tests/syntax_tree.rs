@@ -680,8 +680,8 @@ fn trivia_at_the_edges_is_kept(src: &str) {
 // message.
 //
 // `Eof` appears once per lookahead past the end of input, so a truncated query reports
-// several. That is not obviously desirable — see the note on `errors_are_bounded` — but it
-// is pinned here so a change to the recovery strategy is a deliberate one.
+// several. That is not obviously desirable — see the note on `assert_errors_are_bounded` —
+// but it is pinned here so a change to the recovery strategy is a deliberate one.
 //
 // `TokenAfterEoq` names the first token of the unparsed tail and spans that tail to the end
 // of input, because all of it is what the parser failed to place and what an editor should
@@ -691,7 +691,8 @@ fn trivia_at_the_edges_is_kept(src: &str) {
 // `error` consumes, so `misspelled rule name` partitions the input: `@6+6` names the rule,
 // `@13+6` covers what followed it. The `error_token` call sites that report a token they
 // only peeked do not consume, so `not an operator` and `unknown otel type` still report the
-// same text under two errors — see the note on `error_recovery_is_lossless`.
+// same text under two errors — and, because `error_token` also emits what it reports, put
+// that text into the tree twice. See the note on `error_recovery_is_lossless`.
 // ---------------------------------------------------------------------------------------
 
 #[test_case(
@@ -754,10 +755,10 @@ fn error_reporting(src: &str) -> String {
     errors(src)
 }
 
-/// A time range is part of MPL — `time_range`, mpl.pest:71, reachable from `source` at :82 —
-/// but this parser has no production for it, so the `[` is reported as a token after the end
-/// of the query. Skipped rather than asserting that error, which would make the missing
-/// feature look intended.
+/// A time range is part of MPL — `time_range`, mpl.pest:71, reachable from `source` at :82.
+/// `Parser::time_range` covers the `time_relative` and `time_timestamp` forms; `mpl.pest`
+/// also admits `time_rfc_3339` and `time_modifier`, which the lexer does not yet tokenise
+/// separately, so `d:m[2025-03-01T13:00:00Z..]` is still out of reach.
 #[test]
 fn time_ranges_parse() {
     for src in ["d:m[5m..]", "d:m[1..2] | group using sum"] {
@@ -930,8 +931,10 @@ fn parse_error_examples() {
 /// positions by walking token lengths. It also underwrites every table above, since a
 /// dropped token leaves a shape that still looks well-formed.
 ///
-/// It is stated for clean parses only because error recovery drops the offending token; see
-/// `error_recovery_is_lossless`, which is skipped until that changes.
+/// It is stated for clean parses only because recovery does not hold it: the `error_token`
+/// call sites that report a token they only peeked emit it into the tree *and* leave it in
+/// the lexer, so the next production emits it a second time. `d:m | where a ~ 1` renders as
+/// `d:m | where a ~~ 1`. See `error_recovery_is_lossless` for the sites and the cases.
 fn assert_lossless(src: &str) {
     let (tree, errors) = Parser::new(src).parse();
     if errors.is_empty() {
@@ -1004,8 +1007,12 @@ fn assert_kind_discipline(src: &str) {
     }
 }
 
-/// Kinds that stand for a lexer token. `EOF` is one of them by position in the enum, but it
-/// is never built into the tree — the end-of-input token is consumed by `parse` and dropped.
+/// Kinds that stand for a lexer token. `EOF` is one of them by position in the enum. A clean
+/// parse never builds it — `parse` consumes the end-of-input token and drops it — but a
+/// failing one does: `Parser::error` at end of input reports the synthetic `Eof` token, and
+/// `error_token` wraps whatever it reports in an `INVALID` node. Parsing `""` gives
+/// `ROOT → QUERY → INVALID → EOF@0..0 ""`. Its text is empty, so it costs the round trip
+/// nothing, but it is a token kind that reaches consumers.
 fn is_lexer_kind(kind: SyntaxKind) -> bool {
     (SyntaxKind::EOF as u16..=SyntaxKind::LX_INF as u16).contains(&(kind as u16))
 }
@@ -1104,6 +1111,13 @@ fn every_prefix_of_every_example_parses() {
 // ---------------------------------------------------------------------------------------
 
 /// Property: every discriminant up to `ROOT` survives the round trip through `rowan`.
+///
+/// `kind_from_raw` indexes `ALL_KINDS`, whose length is written as `ROOT as usize + 1`, so a
+/// variant added before `ROOT` and left out of the table is a compile error. What the type
+/// system cannot catch is the table listing the right number of kinds in the wrong order, or
+/// a variant added *after* `ROOT` — both leave the length correct. This walks every
+/// discriminant to catch the first; `kinds_in_real_trees_round_trip` catches the second for
+/// any kind the parser actually emits.
 #[test]
 fn every_kind_round_trips_through_raw() {
     for raw in 0..=(SyntaxKind::ROOT as u16) {
@@ -1562,23 +1576,27 @@ fn random_input_does_not_break_the_parser() {
 // ---------------------------------------------------------------------------------------
 // Known gaps
 //
-// Each test below states the behaviour that should hold and is skipped until it does, so the
-// gap lives in the suite instead of in someone's head. None of them asserts the current,
-// broken behaviour: a test that did would report green for as long as the defect survived and
-// red the moment it was fixed, which is backwards. `cargo test -- --include-ignored` runs
-// them and shows exactly what is missing.
+// Each test below states the behaviour that should hold, so the gap lives in the suite
+// instead of in someone's head. None of them asserts the current behaviour where that
+// behaviour is a defect: a test that did would report green for as long as the defect
+// survived and red the moment it was fixed, which is backwards.
 //
-// The exception is the compute-query ambiguity, which is a property of the language rather
-// than a defect, and so is asserted normally.
+// All three pass today, for three different reasons, and the notes say which. Arrays in
+// constant position was a real gap and closed; its note records what fixed it. The
+// compute-query ambiguity is a property of the language rather than a defect, so it is
+// asserted normally and will stay here. `error_recovery_is_lossless` is green only over the
+// call sites that consume the token they report — the three that merely peek still duplicate
+// it, and its note carries those cases until they can be asserted.
 // ---------------------------------------------------------------------------------------
 
-/// `Parser::constant` dispatches an array on `LBrace` (`{`) while `Parser::array` consumes
-/// `LBracket` (`[`), so no array literal is reachable through a constant: not in `set`, not
-/// in `extend`, not as a `map` argument, not inside an interpolation, and not nested inside
-/// another array. `where … in [ … ]` is the only array that parses, and only because
-/// `filter_cmp` calls `array` directly instead of going through `constant`.
+/// Arrays are reachable from every constant position: `set`, `extend`, a `map` argument, an
+/// interpolation body, and nested inside another array. That was not always true —
+/// `Parser::constant` used to dispatch an array on `LBrace` (`{`) while `Parser::array`
+/// consumes `LBracket` (`[`), which left `where … in [ … ]` the only array that parsed, and
+/// only because `filter_cmp` calls `array` directly instead of going through `constant`.
 ///
-/// The assertions below are the ones that should hold.
+/// The five cases below are one per position, so a future rearrangement of `constant` cannot
+/// quietly strand a position again.
 #[test]
 fn arrays_parse_in_constant_position() {
     for src in [
@@ -1620,16 +1638,26 @@ fn extend_swallows_the_comma_of_a_compute_query() {
     }
 }
 
-/// Error recovery drops the token it could not place: `ident`, `keyword`, `variable_type`
-/// and `string` consume the offending token and return without handing it to the builder, so
-/// the tree no longer reproduces the input. A CST that is lossless only on success cannot
-/// back a formatter or an incremental reparse, both of which have to work on broken input —
-/// that is the whole reason for keeping trivia in the tree.
+/// Recovery keeps the token it could not place: `ident`, `keyword`, `variable_type` and
+/// `string` route it through `error_token`, which wraps it in an `INVALID` node instead of
+/// discarding it, so the tree still reproduces the input. That is what the cases below pin.
 ///
-/// Skipped rather than inverted, for the same reason as the array case: asserting that the
-/// tree loses text would turn the deficiency into the contract. When the recovery paths keep
-/// their tokens, delete the `ignore` here and the `errors.is_empty()` guard in
-/// `assert_lossless`, which is the same property stated for clean parses only.
+/// It does not hold everywhere yet. Three `error_token` call sites report a token they only
+/// *peeked* and never consumed — `filter_cmp` (`src/syntax_tree.rs:897`), `bucket_arg`
+/// (`:1022`) and `type_ident` (`:1089`) — so the token is emitted once by `error_token` and
+/// again by whatever consumes it next, and the tree comes out longer than the input:
+///
+/// ```text
+/// d:m | where a ~ 1               ->  d:m | where a ~~ 1
+/// d:m | bucket using histogram(1) ->  d:m | bucket using histogram(11)
+/// d:m | where a is nonsense       ->  d:m | where a is nonsensenonsense
+/// ```
+///
+/// Those three are deliberately *not* added below: a CST that is lossless only on success
+/// cannot back a formatter or an incremental reparse, both of which have to work on broken
+/// input, and asserting the duplication would turn the defect into the contract. When those
+/// sites consume what they report, add the three cases here and drop the `errors.is_empty()`
+/// guard in `assert_lossless`, which is the same property stated for clean parses only.
 #[test]
 fn error_recovery_is_lossless() {
     for src in ["d:m | fflter a == 1", "param $p: nonsense; d:m"] {
