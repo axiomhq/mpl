@@ -757,7 +757,7 @@ fn error_reporting(src: &str) -> String {
 /// A time range is part of MPL — `time_range`, mpl.pest:71, reachable from `source` at :82 —
 /// but this parser has no production for it, so the `[` is reported as a token after the end
 /// of the query. Skipped rather than asserting that error, which would make the missing
-/// feature look intended. Delete the `ignore` when ranges land.
+/// feature look intended.
 #[test]
 fn time_ranges_parse() {
     for src in ["d:m[5m..]", "d:m[1..2] | group using sum"] {
@@ -874,7 +874,7 @@ fn parse_examples() {
 /// extension `mpl-todo`, which no file has, so it ran over an empty set and passed. Pinning
 /// means that when a feature lands the test fails and the file gets moved to
 /// `tests/examples/*.mpl`, instead of the example sitting there unread forever.
-#[test_case("enrich.mpl.unimplemented"          => false ; "enrich needs a join rule")]
+#[test_case("enrich.mpl.unimplemented"         => false ; "enrich needs a join rule")]
 #[test_case("nested-enrich.mpl.unimplemented"  => false ; "nested enrich needs a join rule")]
 #[test_case("replace_labels.mpl.unimplemented" => true  ; "replace labels already parses")]
 fn unimplemented_examples_parse(name: &str) -> bool {
@@ -1104,11 +1104,6 @@ fn every_prefix_of_every_example_parses() {
 // ---------------------------------------------------------------------------------------
 
 /// Property: every discriminant up to `ROOT` survives the round trip through `rowan`.
-///
-/// If a variant were added after `ROOT`, its discriminant would exceed the guard and
-/// `kind_from_raw` would panic on a kind the parser can legitimately produce. If one were
-/// added before `ROOT` without keeping the enum contiguous, the transmute would produce a
-/// kind nobody wrote.
 #[test]
 fn every_kind_round_trips_through_raw() {
     for raw in 0..=(SyntaxKind::ROOT as u16) {
@@ -1583,10 +1578,7 @@ fn random_input_does_not_break_the_parser() {
 /// another array. `where … in [ … ]` is the only array that parses, and only because
 /// `filter_cmp` calls `array` directly instead of going through `constant`.
 ///
-/// The assertions below are the ones that should hold. They are skipped rather than inverted
-/// because a test that asserts the defect would make the bug the specification: the suite
-/// would go green, stay green while arrays stay broken, and go red on the day someone fixed
-/// it. Delete the `ignore` when `constant` dispatches on `LBracket`.
+/// The assertions below are the ones that should hold.
 #[test]
 fn arrays_parse_in_constant_position() {
     for src in [
