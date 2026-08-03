@@ -1,11 +1,13 @@
 // Alpine.js store — glues editor, pipeline, and UI together.
 
-import wasmInitLanguageServer from "@axiomhq/mpl";
+import wasmInitLanguageServer, { declared_params } from "@axiomhq/mpl";
 import wasmInitPlayground, { Interpreter, RunOutput } from "@axiomhq/mpl-playground";
 import Alpine from "alpinejs";
 import { renderCharts, type ChartEntry } from "./charts";
 import { datasets } from "./datasets";
 import { createEditor, substituteSystemParams, type EditorInstance } from "./editor";
+import { MplSystemParam } from "@axiomhq/mpl-codemirror";
+import { substituteParams } from "./params";
 
 const exampleModules = import.meta.glob("./examples/*.mpl", {
   query: "?raw",
@@ -44,6 +46,8 @@ function resolveTheme(theme: Theme): "dark" | "light" {
 await Promise.all([wasmInitLanguageServer(), wasmInitPlayground()]);
 const interpreter = new Interpreter(datasets);
 
+let paramValues: Record<string, string> = {};
+
 function onEditorChange() {
   const panel = document.getElementById("charts-panel");
   if (!panel) return;
@@ -54,7 +58,9 @@ function onEditorChange() {
   // otherwise bail on every `Parameterized::Param` node; the editor still
   // sees the original text (with the param reference) for linting and
   // hover, courtesy of the `mplSystemParams` facet.
-  const resolved = substituteSystemParams(doc);
+  const decls: MplSystemParam[] = declared_params(doc);
+  syncParams(decls);
+  const resolved = substituteParams(substituteSystemParams(doc), decls, paramValues);
   let steps: RunOutput;
 
   try {
@@ -78,6 +84,8 @@ const playgroundStore = {
   resolvedTheme: "light" as "dark" | "light",
   selectedExampleIndex: 0,
   examples,
+  params: [] as MplSystemParam[],
+  datasetNames: datasets.map((dataset) => dataset.name),
 
   init() {
     this.resolvedTheme = resolveTheme(this.theme);
@@ -131,6 +139,11 @@ const playgroundStore = {
     });
   },
 
+  onParamInput(name: string, value: string) {
+    paramValues[name] = value;
+    onEditorChange();
+  },
+
   initCodeEditor(el: HTMLElement) {
     editor = createEditor(el, this.resolvedTheme, this.editorMode === "vim", onEditorChange);
     loadSelectedExample(this.selectedExampleIndex);
@@ -165,6 +178,16 @@ const playgroundStore = {
     loadSelectedExample(this.selectedExampleIndex);
   },
 };
+
+function syncParams(decls: MplSystemParam[]) {
+  const live = new Set(decls.map(p => p.name));
+  for (const name of Object.keys(paramValues)) {
+    if (!live.has(name)) delete paramValues[name];
+  }
+
+  const store = Alpine.store("playground") as typeof playgroundStore;
+  store.params = decls;
+}
 
 Alpine.store("playground", playgroundStore);
 Alpine.start();

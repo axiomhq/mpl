@@ -143,7 +143,55 @@
           </svg>
         </div>
         <div id="divider"></div>
-        <div id="charts-panel"></div>
+        <div class="results-wrapper">
+          <!-- Parameter form-->
+          <div id="params-panel" x-show="$store.playground.params.length > 0">
+            <div class="params-title">Parameters</div>
+            <template x-for="param in $store.playground.params" :key="param.name">
+              <label class="param-row">
+                <span class="param-name" x-text="param.name"></span>
+                <span class="param-type" x-text="param.type + (param.optional ? '?' : '')"></span>
+                <!-- Optional params are resolved by `ifdef`  -->
+                <template x-if="param.optional">
+                  <span class="param-note">set via ifdef only</span>
+                </template>
+                <template x-if="!param.optional && param.type === 'bool'">
+                  <select
+                    class="param-input"
+                    x-on:change="$store.playground.onParamInput(param.name, $event.target.value)"
+                  >
+                    <option value="">—</option>
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                </template>
+                <!-- Dataset select -->
+                <template x-if="!param.optional && param.type === 'Dataset'">
+                  <select
+                    class="param-input"
+                    x-on:change="$store.playground.onParamInput(param.name, $event.target.value)"
+                  >
+                    <option value="">—</option>
+                    <template x-for="dataset in $store.playground.datasetNames" :key="dataset">
+                      <option :value="dataset" x-text="dataset"></option>
+                    </template>
+                  </select>
+                </template>
+                <template
+                  x-if="!param.optional && param.type !== 'bool' && param.type !== 'Dataset'"
+                >
+                  <input
+                    class="param-input"
+                    type="text"
+                    :placeholder="param.type === 'Duration' ? '5m' : param.type === 'Regex' ? 'e.g. .*api.*' : param.type === 'string' ? 'e.g. GET' : param.type"
+                    x-on:input.debounce.150ms="$store.playground.onParamInput(param.name, $event.target.value)"
+                  />
+                </template>
+              </label>
+            </template>
+          </div>
+          <div id="charts-panel"></div>
+        </div>
       </div>
     </div>
   </body>

@@ -20,6 +20,27 @@ export type MplParamType =
   | "bool"
   | "array";
 
+
+const MPL_PARAM_TYPES: readonly MplParamType[] = [
+  "Dataset",
+  "Duration",
+  "Regex",
+  "string",
+  "int",
+  "float",
+  "bool",
+];
+
+/**
+ * Narrows a raw source-level type string to an `MplParamType`.
+ * Legacy alias `duration` is supported.
+ */
+export function parseParamType(raw: string): MplParamType | undefined {
+  const t = raw.trim();
+  if (t === "duration") return "Duration";
+  return MPL_PARAM_TYPES.find((known) => known === t);
+}
+
 /**
  * A host-supplied parameter the language server should treat as already
  * declared. Used for query-service variables like `$__interval` that are

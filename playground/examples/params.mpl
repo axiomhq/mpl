@@ -1,7 +1,7 @@
-param $dataset: dataset;
-param $duration: duration;
-param $__tag: string;
+param $dataset: Dataset;
+param $duration: Duration;
+param $code: int;
 
-$dataset:metric
-| where __tag == $__tag
+$dataset:http_requests_total
+| where code == $code
 | align to $duration using avg

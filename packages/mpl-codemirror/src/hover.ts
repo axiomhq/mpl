@@ -4,7 +4,12 @@ import {
   formatArgType,
   getFunctionInfo,
 } from "./wasm-types";
-import { mplSystemParams, type MplSystemParam } from "./system-params";
+import {
+  MplParamType,
+  mplSystemParams,
+  parseParamType,
+  type MplSystemParam,
+} from "./system-params";
 
 interface KeywordDoc {
   description: string;
@@ -94,7 +99,7 @@ export interface ParamDecl {
    * For optional params this is the *unwrapped* inner type: `Option<string>`
    * yields `{ type: "string", optional: true }`.
    */
-  type: string;
+  type: MplParamType;
   optional: boolean;
 }
 
@@ -120,11 +125,9 @@ export function parseParamDeclarations(doc: string): Map<string, ParamDecl> {
     const [, name, rawType] = m;
     const trimmed = rawType.trim();
     const optMatch = OPTION_RE.exec(trimmed);
-    if (optMatch) {
-      result.set(name, { type: optMatch[1].trim(), optional: true });
-    } else {
-      result.set(name, { type: trimmed, optional: false });
-    }
+    const type = parseParamType(optMatch ? optMatch[1] : trimmed);
+    if (type === undefined) continue; // unknown type — diagnostics handle the error path
+    result.set(name, { type, optional: optMatch !== null });
   }
   return result;
 }
