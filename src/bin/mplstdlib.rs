@@ -1,4 +1,11 @@
 //! MPL Parser
+#![deny(
+    warnings,
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::large_futures,
+    missing_docs
+)]
 
 use clap::Parser;
 use mpl_lang::STDLIB;

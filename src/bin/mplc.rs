@@ -3,6 +3,13 @@
 //! The Metrics Processing Language Command Line Interface, MPL CLI, or
 //! `mplc` is a command-line tool for working with mpl-lang, the Axion Metrics
 //! Processing Language or MPL for short
+#![deny(
+    warnings,
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::large_futures,
+    missing_docs
+)]
 
 use std::{collections::HashMap, fs};
 
@@ -59,15 +66,17 @@ enum Command {
 }
 
 fn read_corpus(file: &str) -> Result<Vec<String>> {
-    let content = fs::read_to_string(&file)
+    let content = fs::read_to_string(file)
         .into_diagnostic()
         .map_err(|e| e.context(format!("Failed to read file '{file}'")))?;
     content
         .lines()
-        .map(|l| serde_json::from_str::<serde_json::Value>(l))
+        .map(serde_json::from_str::<serde_json::Value>)
         .filter_map(|l| {
             l.map(|l| -> Option<String> {
-                l.get("mpl").and_then(|v| v.as_str()).map(|s| s.to_string())
+                l.get("mpl")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string)
             })
             .transpose()
         })
@@ -160,29 +169,26 @@ fn main() -> Result<()> {
                 Format::Debug => format!("{parsed_query:?}"),
             };
 
-            match output {
-                Some(path) => {
-                    fs::write(&path, &output_str)
-                        .into_diagnostic()
-                        .map_err(|e| e.context(format!("Failed to write to '{path}'")))?;
-                }
-                None => {
-                    let lang = match format {
-                        Format::Json => "json",
-                        Format::Ron => "ron",
-                        Format::Debug => {
-                            println!("{output_str}");
-                            return Ok(());
-                        }
-                    };
-
-                    let theme = arborium::theme::builtin::catppuccin_mocha();
-                    let mut hl = arborium::AnsiHighlighter::new(theme);
-
-                    match hl.highlight(lang, &output_str) {
-                        Ok(colored) => println!("{colored}"),
-                        Err(_) => println!("{output_str}"),
+            if let Some(path) = output {
+                fs::write(&path, &output_str)
+                    .into_diagnostic()
+                    .map_err(|e| e.context(format!("Failed to write to '{path}'")))?;
+            } else {
+                let lang = match format {
+                    Format::Json => "json",
+                    Format::Ron => "ron",
+                    Format::Debug => {
+                        println!("{output_str}");
+                        return Ok(());
                     }
+                };
+
+                let theme = arborium::theme::builtin::catppuccin_mocha();
+                let mut hl = arborium::AnsiHighlighter::new(theme);
+
+                match hl.highlight(lang, &output_str) {
+                    Ok(colored) => println!("{colored}"),
+                    Err(_) => println!("{output_str}"),
                 }
             }
         }
