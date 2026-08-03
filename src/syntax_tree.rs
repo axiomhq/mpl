@@ -105,6 +105,7 @@ pub enum SyntaxKind {
     IDENT_OR_VARIABLE,
     KEYWORD,
     DIRECTIVE,
+    PARAM,
     VARIABLE,
     TYPE,
     QUERY,
@@ -115,7 +116,7 @@ pub enum SyntaxKind {
     FILTER_NOT,
     FILTER_PAREN,
     FILTER_CMP,
-    FUNCION_PATH,
+    FUNCTION_PATH,
     DURATION,
     TIME_UNIT,
     OTEL_TYPE,
@@ -221,8 +222,6 @@ pub struct Parser<'input> {
 
 // Helper
 impl<'input> Parser<'input> {
-    // const ERROR: SyntaxKind = SyntaxKind(6666);
-
     /// Creates a new parser for the given input.
     #[must_use]
     pub fn new(input: &'input str) -> Self {
@@ -304,6 +303,7 @@ impl<'input> Parser<'input> {
     }
 
     fn is_keyword(&mut self, text: &str) -> bool {
+        self.eat_trivia();
         let Some(token) = self.lexer.peek() else {
             return false;
         };
@@ -376,11 +376,9 @@ impl<'input> Parser<'input> {
     }
 }
 
-/// Grammer
+/// Grammar
 impl Parser<'_> {
     /// Parses the input and returns the syntax tree.
-    /// # Panics
-    /// Panics because it's not done yet
     #[must_use]
     pub fn parse(mut self) -> (SyntaxNode, Vec<SyntaxError>) {
         self.node(ROOT, |s| {
@@ -449,7 +447,7 @@ impl Parser<'_> {
             s.keyword("using");
             let tkn = s.peek();
             match tkn.tpe() {
-                TokenType::Ident | TokenType::EscapedIdent => s.funcion_path(),
+                TokenType::Ident | TokenType::EscapedIdent => s.function_path(),
                 TokenType::Plus => s.eat_token_type(TokenType::Plus),
                 TokenType::Minus => s.eat_token_type(TokenType::Minus),
                 TokenType::Mul => s.eat_token_type(TokenType::Mul),
@@ -503,7 +501,7 @@ impl Parser<'_> {
     }
 
     fn param(&mut self) {
-        self.node(DIRECTIVE, |s| {
+        self.node(PARAM, |s| {
             s.keyword("param");
             s.variable();
             s.structural(TokenType::Colon);
@@ -827,7 +825,7 @@ impl Parser<'_> {
                     });
                 }
                 _ => {
-                    s.funcion_path();
+                    s.function_path();
                     if s.try_structural(TokenType::LParen) {
                         s.constant();
                         s.structural(TokenType::RParen);
@@ -855,7 +853,7 @@ impl Parser<'_> {
                 s.duration();
             }
             s.keyword("using");
-            s.funcion_path();
+            s.function_path();
         });
     }
 
@@ -877,8 +875,8 @@ impl Parser<'_> {
         });
     }
 
-    fn funcion_path(&mut self) {
-        self.node(FUNCION_PATH, |s| {
+    fn function_path(&mut self) {
+        self.node(FUNCTION_PATH, |s| {
             s.ident();
             while s.try_structural(TokenType::DoubleColon) {
                 s.ident();
@@ -893,7 +891,7 @@ impl Parser<'_> {
                 s.tag_list();
             }
             s.keyword("using");
-            s.funcion_path();
+            s.function_path();
         });
     }
 
@@ -907,7 +905,7 @@ impl Parser<'_> {
                 s.duration();
             }
             s.keyword("using");
-            s.funcion_path();
+            s.function_path();
             s.structural(TokenType::LParen);
             if !s.is_structural(TokenType::RParen) {
                 s.bucket_args();

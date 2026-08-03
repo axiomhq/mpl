@@ -650,8 +650,6 @@ impl<'input> Iterator for Lexer<'input> {
         }
         if let Some(tkn) = self.next_token() {
             Some(tkn)
-        } else if self.eof {
-            None
         } else {
             self.eof = true;
             Some(Token {

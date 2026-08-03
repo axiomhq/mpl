@@ -247,14 +247,14 @@ fn simple_queries(src: &str) -> String {
     "(a:b, c:d,) | compute x using sum"
     => "COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b))) , \
         QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) , ) | KEYWORD(compute) \
-        IDENT(x) KEYWORD(using) FUNCION_PATH(IDENT(sum)))"
+        IDENT(x) KEYWORD(using) FUNCTION_PATH(IDENT(sum)))"
     ; "trailing comma is allowed"
 )]
 #[test_case(
     "(a:b, c:d) | compute x using a::b"
     => "COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b))) , \
         QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | KEYWORD(compute) \
-        IDENT(x) KEYWORD(using) FUNCION_PATH(IDENT(a) :: IDENT(b)))"
+        IDENT(x) KEYWORD(using) FUNCTION_PATH(IDENT(a) :: IDENT(b)))"
     ; "module path as the compute function"
 )]
 fn compute_queries(src: &str) -> String {
@@ -285,11 +285,15 @@ fn compute_queries_nest() {
 
 #[test_case("set a;"                   => "DIRECTIVE(KEYWORD(set) IDENT(a) ;)"                                  ; "flag without a value")]
 #[test_case("set a = 42;"              => "DIRECTIVE(KEYWORD(set) IDENT(a) = CONST(INTEGER(42)) ;)"             ; "with a value")]
-#[test_case("param $p: string;"        => "DIRECTIVE(KEYWORD(param) VARIABLE($p) : TYPE(string) ;)"             ; "declared parameter")]
-#[test_case("param $p: Dataset;"       => "DIRECTIVE(KEYWORD(param) VARIABLE($p) : TYPE(Dataset) ;)"            ; "custom type")]
-#[test_case("param $p: Option<int>;"   => "DIRECTIVE(KEYWORD(param) VARIABLE($p) : TYPE(Option < TYPE(int) >) ;)" ; "option nests a type")]
 fn directives(src: &str) -> String {
     first(&format!("{src} d:m"), SyntaxKind::DIRECTIVE)
+}
+
+#[test_case("param $p: string;"        => "PARAM(KEYWORD(param) VARIABLE($p) : TYPE(string) ;)"             ; "declared parameter")]
+#[test_case("param $p: Dataset;"       => "PARAM(KEYWORD(param) VARIABLE($p) : TYPE(Dataset) ;)"            ; "custom type")]
+#[test_case("param $p: Option<int>;"   => "PARAM(KEYWORD(param) VARIABLE($p) : TYPE(Option < TYPE(int) >) ;)" ; "option nests a type")]
+fn params(src: &str) -> String {
+    first(&format!("{src} d:m"), SyntaxKind::PARAM)
 }
 
 /// Directives are a flat sequence of siblings under `ROOT`, ahead of the query — not
@@ -299,7 +303,7 @@ fn directives_precede_the_query_as_siblings() {
     assert_eq!(
         tree("set a = 1; param $p: bool; d:m"),
         "ROOT(DIRECTIVE(KEYWORD(set) IDENT(a) = CONST(INTEGER(1)) ;) \
-         DIRECTIVE(KEYWORD(param) VARIABLE($p) : TYPE(bool) ;) \
+         PARAM(KEYWORD(param) VARIABLE($p) : TYPE(bool) ;) \
          QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(d)) : IDENT(m))))"
     );
 }
@@ -407,10 +411,10 @@ fn arrays(src: &str) -> String {
 )]
 #[test_case("as x"       => "RULE(AS(KEYWORD(as) IDENT(x)))"                            ; "as rule")]
 #[test_case("sample 0.5" => "RULE(SAMPLE(KEYWORD(sample) FLOAT(0.5)))"                  ; "sample")]
-#[test_case("map rate"   => "RULE(MAP(KEYWORD(map) FUNCION_PATH(IDENT(rate))))"         ; "map without arguments")]
+#[test_case("map rate"   => "RULE(MAP(KEYWORD(map) FUNCTION_PATH(IDENT(rate))))"         ; "map without arguments")]
 #[test_case(
     "map filter::gt(1)"
-    => "RULE(MAP(KEYWORD(map) FUNCION_PATH(IDENT(filter) :: IDENT(gt)) ( CONST(INTEGER(1)) )))"
+    => "RULE(MAP(KEYWORD(map) FUNCTION_PATH(IDENT(filter) :: IDENT(gt)) ( CONST(INTEGER(1)) )))"
     ; "map with a module path and an argument"
 )]
 #[test_case(
@@ -425,46 +429,46 @@ fn arrays(src: &str) -> String {
 )]
 #[test_case(
     "align using avg"
-    => "RULE(ALIGN(KEYWORD(align) KEYWORD(using) FUNCION_PATH(IDENT(avg))))"
+    => "RULE(ALIGN(KEYWORD(align) KEYWORD(using) FUNCTION_PATH(IDENT(avg))))"
     ; "align without a target"
 )]
 #[test_case(
     "align to 7d using avg"
     => "RULE(ALIGN(KEYWORD(align) KEYWORD(to) DURATION(7 TIME_UNIT(d)) KEYWORD(using) \
-        FUNCION_PATH(IDENT(avg))))"
+        FUNCTION_PATH(IDENT(avg))))"
     ; "align to a duration"
 )]
 #[test_case(
     "align to $d using avg"
-    => "RULE(ALIGN(KEYWORD(align) KEYWORD(to) VARIABLE($d) KEYWORD(using) FUNCION_PATH(IDENT(avg))))"
+    => "RULE(ALIGN(KEYWORD(align) KEYWORD(to) VARIABLE($d) KEYWORD(using) FUNCTION_PATH(IDENT(avg))))"
     ; "align to a parameter takes the variable branch"
 )]
 #[test_case(
     "group using max"
-    => "RULE(GROUP(KEYWORD(group) KEYWORD(using) FUNCION_PATH(IDENT(max))))"
+    => "RULE(GROUP(KEYWORD(group) KEYWORD(using) FUNCTION_PATH(IDENT(max))))"
     ; "group without tags"
 )]
 #[test_case(
     "group by a, b using sum"
     => "RULE(GROUP(KEYWORD(group) KEYWORD(by) TAG_LIST(IDENT(a) , IDENT(b)) KEYWORD(using) \
-        FUNCION_PATH(IDENT(sum))))"
+        FUNCTION_PATH(IDENT(sum))))"
     ; "group by a tag list"
 )]
 #[test_case(
     "bucket using histogram()"
-    => "RULE(BUCKET(KEYWORD(bucket) KEYWORD(using) FUNCION_PATH(IDENT(histogram)) ( )))"
+    => "RULE(BUCKET(KEYWORD(bucket) KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( )))"
     ; "bucket with empty argument list emits no BUCKET_ARGS"
 )]
 #[test_case(
     "bucket by a to 5m using histogram(1.0, 2.0)"
     => "RULE(BUCKET(KEYWORD(bucket) KEYWORD(by) TAG_LIST(IDENT(a)) KEYWORD(to) \
-        DURATION(5 TIME_UNIT(m)) KEYWORD(using) FUNCION_PATH(IDENT(histogram)) ( \
+        DURATION(5 TIME_UNIT(m)) KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( \
         BUCKET_ARGS(BUCKET_ARG(FLOAT(1.0)) , BUCKET_ARG(FLOAT(2.0))) )))"
     ; "bucket with every clause"
 )]
 #[test_case(
     "bucket using histogram(le)"
-    => "RULE(BUCKET(KEYWORD(bucket) KEYWORD(using) FUNCION_PATH(IDENT(histogram)) ( \
+    => "RULE(BUCKET(KEYWORD(bucket) KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( \
         BUCKET_ARGS(BUCKET_ARG(IDENT(le))) )))"
     ; "bucket argument may be an ident"
 )]
@@ -1508,7 +1512,7 @@ fn generated_queries_parse_cleanly() {
         SyntaxKind::EXTEND_PART,
         SyntaxKind::DURATION,
         SyntaxKind::TIME_UNIT,
-        SyntaxKind::FUNCION_PATH,
+        SyntaxKind::FUNCTION_PATH,
         SyntaxKind::EXPR,
         SyntaxKind::CONST,
         SyntaxKind::INTEGER,
