@@ -22,4 +22,4 @@
 )
 | compute error_rate using /
 | map is::lt(0.2)
-// | align to 1h over 7d using avg not implemented
+// | align to 1h over 7d using avg // rolling averages are currently not supported

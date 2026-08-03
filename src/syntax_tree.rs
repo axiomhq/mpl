@@ -875,7 +875,6 @@ impl Parser<'_> {
                         s.expr();
                     }
                 }
-
                 tt @ (TokenType::LessThan
                 | TokenType::GreaterThan
                 | TokenType::LessThanEqual
@@ -894,7 +893,7 @@ impl Parser<'_> {
                     }
                 }
                 _ => {
-                    s.error_token(tkn, "expected comparison operator");
+                    s.error("expected comparison operator");
                 }
             }
         });
@@ -1019,7 +1018,7 @@ impl Parser<'_> {
                     s.float();
                 }
                 _ => {
-                    s.error_token(tkn, "expected ident or float in bucket arg");
+                    s.error("expected ident or float in bucket arg");
                 }
             }
         });
@@ -1086,7 +1085,7 @@ impl Parser<'_> {
             {
                 s.ident();
             } else {
-                s.error_token(tkn, "expected otel type ident");
+                s.error("expected otel type ident");
             }
         });
     }

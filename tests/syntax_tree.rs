@@ -718,12 +718,12 @@ fn trivia_at_the_edges_is_kept(src: &str) {
 )]
 #[test_case(
     "d:m | where a ~ 1"
-    => "\"expected comparison operator\"@14+1 TokenAfterEoq(Invalid)@14+3"
+    => "\"expected comparison operator\"@14+1 TokenAfterEoq(Integer)@16+1"
     ; "not an operator"
 )]
 #[test_case(
     "d:m | where a is nonsense"
-    => "\"expected otel type ident\"@17+8 TokenAfterEoq(Ident)@17+8"
+    => "\"expected otel type ident\"@17+8"
     ; "unknown otel type"
 )]
 #[test_case(
@@ -738,8 +738,7 @@ fn trivia_at_the_edges_is_kept(src: &str) {
 )]
 #[test_case(
     "d:m | bucket using histogram(1)"
-    => "\"expected ident or float in bucket arg\"@29+1 \
-        \"expected structural RParen, got Integer\"@29+1 TokenAfterEoq(RParen)@30+1"
+    => "\"expected ident or float in bucket arg\"@29+1"
     ; "bucket argument may not be an integer"
 )]
 #[test_case(
@@ -1726,23 +1725,17 @@ fn error_recovery_is_lossless() {
 fn error_recovery_does_not_duplicate() {
     // Second column is what the tree renders today, so a failure reads as a diff rather than
     // as a bare inequality.
-    for (src, today) in [
-        ("d:m | where a ~ 1", "d:m | where a ~~ 1"),
-        (
-            "d:m | bucket using histogram(1)",
-            "d:m | bucket using histogram(11)",
-        ),
-        (
-            "d:m | where a is nonsense",
-            "d:m | where a is nonsensenonsense",
-        ),
+    for src in [
+        "d:m | where a ~ 1",
+        "d:m | bucket using histogram(1)",
+        "d:m | where a is nonsense",
     ] {
         let (tree, errors) = Parser::new(src).parse();
         assert!(!errors.is_empty(), "{src:?} was expected to fail");
         assert_eq!(
             tree.to_string(),
             src,
-            "{src:?} duplicated a token during recovery (renders as {today:?})"
+            "{src:?} duplicated a token during recovery (renders as {src:?})"
         );
     }
 }
