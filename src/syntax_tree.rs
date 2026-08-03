@@ -135,6 +135,7 @@ pub enum SyntaxKind {
     MAP,
     MAP_MATH,
     ALIGN,
+    AS,
     GROUP,
     BUCKET,
     BUCKET_ARG,
@@ -234,9 +235,6 @@ impl<'input> Parser<'input> {
             self.token(token);
         }
     }
-    fn current<'a>(&'a mut self) -> Option<&'a Token<'input>> {
-        self.lexer.peek()
-    }
 
     fn token(&mut self, token: Token<'input>) {
         self.builder.token(token.kind().into(), token.text());
@@ -277,11 +275,9 @@ impl<'input> Parser<'input> {
     }
 
     fn is_structural(&mut self, token_type: TokenType) -> bool {
-        let Some(token) = self.current() else {
-            return false;
-        };
-        token.tpe() == token_type
+        self.peek().tpe() == token_type
     }
+
     fn try_structural(&mut self, token_type: TokenType) -> bool {
         if !self.is_structural(token_type) {
             return false;
@@ -308,6 +304,7 @@ impl<'input> Parser<'input> {
     }
 
     fn peek(&mut self) -> Token<'input> {
+        self.eat_trivia();
         if let Some(token) = self.lexer.peek() {
             *token
         } else {
@@ -392,10 +389,26 @@ impl Parser<'_> {
     fn compute_query(&mut self) {
         self.node(COMPUTE_QUERY, |s| {
             s.structural(TokenType::LParen);
-            s.simple_query();
+            s.query();
             s.structural(TokenType::Comma);
-            s.simple_query();
+            s.query();
+            // this is optional
+            s.try_structural(TokenType::Comma);
             s.structural(TokenType::RParen);
+            s.structural(TokenType::Pipe);
+            s.keyword("compute");
+            s.ident();
+            s.keyword("using");
+            let tkn = s.peek();
+            match tkn.tpe() {
+                TokenType::Ident | TokenType::EscapedIdent => s.funcion_path(),
+                TokenType::Plus => s.eat_token_type(TokenType::Plus),
+                TokenType::Minus => s.eat_token_type(TokenType::Minus),
+                TokenType::Mul => s.eat_token_type(TokenType::Mul),
+                TokenType::Div => s.eat_token_type(TokenType::Div),
+                _ => s.error("expected comput efunction"),
+            }
+            s.rules();
         });
     }
 
@@ -404,6 +417,9 @@ impl Parser<'_> {
             s.ident_or_variable();
             s.structural(TokenType::Colon);
             s.ident();
+            if s.try_keyword("as") {
+                s.ident();
+            }
             s.rules();
         });
     }
@@ -631,6 +647,7 @@ impl Parser<'_> {
                     "bucket" => s.bucket_rule(),
                     "ifdef" => s.ifdef_rule(),
                     "extend" => s.extend_rule(),
+                    "as" => s.as_rule(),
                     _ => s.error(format!("unknown rule: {txt}")),
                 }
             });
@@ -750,6 +767,15 @@ impl Parser<'_> {
                     }
                 }
             }
+        });
+    }
+    fn as_rule(&mut self) {
+        self.node(AS, |s| {
+            if !s.try_keyword("as") {
+                s.error("expected filter or where");
+                return;
+            }
+            s.ident();
         });
     }
 
