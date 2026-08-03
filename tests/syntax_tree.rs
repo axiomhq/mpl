@@ -1748,3 +1748,190 @@ fn error_recovery_does_not_duplicate() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------------------
+// Tree depth
+//
+// `Parser::rnode` caps how deep the tree may nest. Without it a recursive-descent parser
+// walks the stack off the end on input that is nothing but nesting, and an editor reparsing
+// on every keystroke will meet that input the moment someone holds down `(`.
+//
+// Two claims, and they need separate tests. The cap has to cover *every* production that can
+// re-enter itself — one missed production is a crash, not a slow parse — and hitting it has
+// to leave the properties above intact, because a cap that bails out mid-production strands
+// whatever the caller already consumed.
+// ---------------------------------------------------------------------------------------
+
+/// The nesting shapes that reach each `rnode` site, `n` levels deep.
+///
+/// One per production rather than one per syntax kind: `filter` enters `FILTER_OR`,
+/// `FILTER_AND`, `FILTER_NOT` and `FILTER_PAREN` on every level, which is exactly why its
+/// budget runs out first — see `depth_is_counted_in_nodes_not_nesting`.
+fn nest(shape: &str, n: usize) -> String {
+    match shape {
+        "filter" => format!("d:m | where {}a == 1{}", "(".repeat(n), ")".repeat(n)),
+        "array" => format!("set a = {}1{}; d:m", "[".repeat(n), "]".repeat(n)),
+        "type" => format!("param $p: {}int{}; d:m", "Option<".repeat(n), ">".repeat(n)),
+        "string" => format!("set a = {}\"x\"{}; d:m", "\"${".repeat(n), "}\"".repeat(n)),
+        "query" => {
+            let mut src = "a:b".to_string();
+            for _ in 0..n {
+                src = format!("({src}, c:d) | compute x using +");
+            }
+            src
+        }
+        other => panic!("unknown nesting shape {other:?}"),
+    }
+}
+
+/// Whether `shape` nested `n` deep is rejected under `cap` (or the default when `None`).
+fn is_rejected(shape: &str, cap: Option<usize>, n: usize) -> bool {
+    let src = nest(shape, n);
+    let parser = Parser::new(&src);
+    let (_tree, errors) = match cap {
+        Some(cap) => parser.with_tree_depth(cap),
+        None => parser,
+    }
+    .parse();
+    !errors.is_empty()
+}
+
+/// Shallowest nesting depth rejected under `cap`, or `None` if every depth up to `limit` is
+/// accepted.
+///
+/// Binary search rather than a scan: the predicate is monotonic, since nesting one level
+/// deeper only ever adds nodes, and a linear walk to 250 costs a quadratic number of parses
+/// once the `query` shape's builder is counted. That was 50s of the coverage run on its own.
+fn first_rejected_depth(shape: &str, cap: Option<usize>, limit: usize) -> Option<usize> {
+    if !is_rejected(shape, cap, limit) {
+        return None;
+    }
+    let (mut lo, mut hi) = (1usize, limit);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if is_rejected(shape, cap, mid) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    Some(lo)
+}
+
+/// Property: every production that can re-enter itself is capped.
+///
+/// A production left out of the cap is not a missing feature, it is a stack overflow on
+/// input a user can type, so this is stated as "rejected at *some* depth" for every shape
+/// rather than trusted to a reading of the source. `variable_type` and `string` were both
+/// missed on the first pass at capping, and neither had a test that would have said so.
+#[test_case("filter" ; "filter_or / and / not / paren")]
+#[test_case("array"  ; "array")]
+#[test_case("type"   ; "variable_type, via Option")]
+#[test_case("string" ; "string, via interpolation")]
+#[test_case("query"  ; "query, via compute")]
+fn every_recursive_production_is_capped(shape: &str) {
+    assert!(
+        first_rejected_depth(shape, None, 400).is_some(),
+        "{shape} nests to 400 levels without hitting the cap"
+    );
+}
+
+/// The cap is counted in tree nodes, not in nesting levels, and the two differ by whatever
+/// wrapper chain a production carries. `filter` spends four nodes per parenthesis, so the
+/// same budget buys it a quarter of the nesting the flat productions get.
+///
+/// Pinned because the ratio is the surprising part of the public knob: `with_tree_depth(250)`
+/// reads like 250 levels and is 62 of them for a filter. A wrapper node added to or removed
+/// from the filter chain moves this, which is worth a failing test rather than a silent
+/// change in what the default protects.
+#[test_case("filter" =>  62 ; "filter spends four nodes per parenthesis")]
+#[test_case("array"  => 251 ; "array spends one node per level")]
+#[test_case("type"   => 250 ; "variable_type spends one node per level")]
+#[test_case("string" => 250 ; "string spends one node per level")]
+#[test_case("query"  => 250 ; "query spends one node per level")]
+fn depth_is_counted_in_nodes_not_nesting(shape: &str) -> usize {
+    first_rejected_depth(shape, None, 400).expect("cap is reached")
+}
+
+/// The knob moves the cap, in both directions.
+#[test]
+fn with_tree_depth_moves_the_cap() {
+    let default = first_rejected_depth("array", None, 400).expect("cap is reached");
+    let tighter = first_rejected_depth("array", Some(10), 400).expect("cap is reached");
+    let looser = first_rejected_depth("array", Some(320), 400).expect("cap is reached");
+    assert!(
+        tighter < default && default < looser,
+        "with_tree_depth did not move the cap: 10 => {tighter}, default => {default}, 320 => {looser}"
+    );
+}
+
+/// Property: hitting the cap satisfies every property a normal parse does.
+///
+/// This is the test that matters most, and the one whose absence let a real bug through.
+/// `rnode` reports the overflow *instead of* running the production body, so any token the
+/// caller consumed before entering is never handed to the builder. `variable_type` read its
+/// ident with `next()` and emitted it inside the body, so a query that tripped the cap lost
+/// one `Option` — `assert_lossless` says exactly that, and said nothing at the time because
+/// no input in the file nested deeply enough to reach a cap of 250.
+///
+/// Run at `cap + 40` so the overflow happens well inside the nesting rather than on the last
+/// level, and with a small explicit cap so the inputs stay short enough to read in a failure.
+#[test_case("filter" ; "filter")]
+#[test_case("array"  ; "array")]
+#[test_case("type"   ; "variable_type")]
+#[test_case("string" ; "string")]
+#[test_case("query"  ; "query")]
+fn tripping_the_cap_keeps_every_property(shape: &str) {
+    let src = nest(shape, 60);
+    let (tree, errors) = Parser::new(&src).with_tree_depth(20).parse();
+    assert!(
+        !errors.is_empty(),
+        "{shape} at 60 levels did not trip a cap of 20"
+    );
+    assert_eq!(
+        tree.to_string(),
+        src,
+        "{shape} lost or duplicated text when the cap tripped"
+    );
+    assert_ranges_match_the_input(&src);
+    assert_no_token_is_dropped(&src);
+    assert_kind_discipline(&src);
+    assert_spans_are_in_bounds(&src);
+    assert_errors_are_bounded(&src);
+}
+
+/// Property: input far past the cap returns rather than aborting the process.
+///
+/// Every shape here overflowed the stack before the cap existed. A test that reaches the old
+/// crash is worth more than one that only reaches the cap, because the cap could be present
+/// and still be applied one production too late.
+#[test_case("filter" ; "filter")]
+#[test_case("array"  ; "array")]
+#[test_case("type"   ; "variable_type")]
+#[test_case("string" ; "string")]
+fn nesting_that_used_to_overflow_the_stack_now_returns(shape: &str) {
+    let src = nest(shape, 5000);
+    let (tree, errors) = Parser::new(&src).parse();
+    assert!(!errors.is_empty(), "{shape} at 5000 levels parsed clean");
+    assert_eq!(tree.to_string(), src, "{shape} lost text at 5000 levels");
+}
+
+/// The default has to leave room for `rowan`'s destructor, which recurses too.
+///
+/// Measured on a 2 MiB thread: a tree 1000 nodes deep parses, walks and drops; one 2000 deep
+/// parses and walks and then overflows inside `drop`. That failure mode is nasty to find,
+/// because everything the author tests — parsing the input, printing it back — succeeds, and
+/// the crash lands wherever the tree goes out of scope. The wasm builds get LLVM's 1 MiB
+/// default stack, so their ceiling is lower still.
+///
+/// Stated as a bound on the default rather than a search for the real ceiling: finding it
+/// means overflowing on purpose, which aborts the whole test binary rather than failing one
+/// case.
+#[test]
+fn the_default_cap_leaves_room_for_the_destructor() {
+    let default = first_rejected_depth("array", None, 1001).expect("cap is reached");
+    assert!(
+        default <= 1000,
+        "default cap is {default} nodes; trees deeper than ~1000 overflow the stack when dropped"
+    );
+}
