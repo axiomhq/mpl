@@ -11,7 +11,11 @@ pub enum SyntaxError {
     /// Unexpected end of file.
     #[error("unexpected end of file")]
     #[diagnostic(code(mpl_lang::unexpected_eof))]
-    Eof,
+    Eof {
+        /// The range of the EOF token.
+        #[label("unexpected end of file")]
+        range: SourceSpan,
+    },
     /// Token found after the end of query.
     #[error("unexpected {kind:?} after end of query")]
     #[diagnostic(code(mpl_lang::generic_syntax_error))]
@@ -125,6 +129,8 @@ pub enum SyntaxKind {
     STRING,
     ARRAY,
     TAG_LIST,
+    TIME_RANGE,
+    TIME,
 
     RULE,
     EXTEND,
@@ -141,6 +147,10 @@ pub enum SyntaxKind {
     BUCKET_ARG,
     BUCKET_ARGS,
 
+    /// invalid in the syntax tree but valid as a token
+    INVALID,
+    /// garbage after the parser has finished
+    GARBAGE,
     // IMPORTANT! THIS NEEDS TO BE LAST!!!
     ROOT,
 }
@@ -220,7 +230,7 @@ impl<'input> Parser<'input> {
             lexer: Lexer::new(input).peekable(),
             builder: GreenNodeBuilder::default(),
             errors: Vec::new(),
-            eof: Token::new(TokenType::Invalid, "", input.len()),
+            eof: Token::new(TokenType::Eof, "", input.len()),
         }
     }
 
@@ -240,16 +250,22 @@ impl<'input> Parser<'input> {
         self.builder.token(token.kind().into(), token.text());
     }
 
+    fn invalid(&mut self, token: Token<'input>) {
+        self.builder.start_node(INVALID.into());
+        self.token(token);
+        self.builder.finish_node();
+    }
+
     fn eat_token_type(&mut self, token_type: TokenType) {
-        let tkn = self.peek();
-        if tkn.tpe() != token_type {
+        let tkn = self.next();
+        if tkn.tpe() == token_type {
+            self.token(tkn);
+        } else {
             self.error_token(
                 tkn,
                 format!("expected {:?}, got {:?}", token_type, tkn.tpe()),
             );
         }
-        let tkn = self.next();
-        self.token(tkn);
     }
 
     fn eat_token(&mut self) {
@@ -260,7 +276,9 @@ impl<'input> Parser<'input> {
     fn structural(&mut self, token_type: TokenType) {
         self.eat_trivia();
         let token = self.next();
-        if token.tpe() != token_type {
+        if token.tpe() == token_type {
+            self.token(token);
+        } else {
             self.error_token(
                 token,
                 format!(
@@ -270,7 +288,6 @@ impl<'input> Parser<'input> {
                 ),
             );
         }
-        self.token(token);
         self.eat_trivia();
     }
 
@@ -308,7 +325,7 @@ impl<'input> Parser<'input> {
         if let Some(token) = self.lexer.peek() {
             *token
         } else {
-            self.errors.push(SyntaxError::Eof);
+            self.next();
             self.eof
         }
     }
@@ -316,15 +333,34 @@ impl<'input> Parser<'input> {
         if let Some(token) = self.lexer.next() {
             token
         } else {
-            self.errors.push(SyntaxError::Eof);
+            self.eof();
             self.eof
         }
     }
     fn error(&mut self, message: impl Display) {
-        let tkn = self.peek();
-        self.error_token(tkn, message);
+        // can't use peek as it would consume trivia
+        if let Some(token) = self.lexer.peek()
+            && token.tpe() != TokenType::Eof
+        {
+            let tkn = self.next();
+            self.error_token(tkn, message);
+        } else {
+            self.error_token(self.eof, message);
+        }
     }
+    fn eof(&mut self) {
+        if let Some(last) = self.errors.last()
+            && matches!(last, SyntaxError::Eof { .. })
+        {
+            return;
+        }
+        self.errors.push(SyntaxError::Eof {
+            range: SourceSpan::new(self.eof.pos().into(), 0),
+        });
+    }
+
     fn error_token(&mut self, token: Token<'input>, message: impl Display) {
+        self.invalid(token);
         self.errors.push(SyntaxError::Generic {
             message: message.to_string(),
             range: SourceSpan::new(token.pos().into(), token.text().len()),
@@ -357,11 +393,23 @@ impl Parser<'_> {
             }
 
             s.query();
-            let rest = s.next();
+            let rest = s.peek();
             if rest.tpe() != TokenType::Eof {
+                let mut last = rest;
+                s.node(GARBAGE, |s| {
+                    while let t = s.next()
+                        && t.tpe() != TokenType::Eof
+                    {
+                        s.token(t);
+                        last = t;
+                    }
+                });
+                let start = rest.pos();
+                let end = last.pos() + last.text().len();
+                let len = end - start;
                 s.errors.push(SyntaxError::TokenAfterEoq {
                     kind: rest.tpe(),
-                    range: SourceSpan::new(rest.pos().into(), rest.text().len()),
+                    range: SourceSpan::new(start.into(), len),
                 });
             }
         });
@@ -406,7 +454,7 @@ impl Parser<'_> {
                 TokenType::Minus => s.eat_token_type(TokenType::Minus),
                 TokenType::Mul => s.eat_token_type(TokenType::Mul),
                 TokenType::Div => s.eat_token_type(TokenType::Div),
-                _ => s.error("expected comput efunction"),
+                _ => s.error("expected compute function"),
             }
             s.rules();
         });
@@ -417,10 +465,29 @@ impl Parser<'_> {
             s.ident_or_variable();
             s.structural(TokenType::Colon);
             s.ident();
+            if s.peek().tpe() == TokenType::LBracket {
+                s.time_range();
+            }
             if s.try_keyword("as") {
                 s.ident();
             }
             s.rules();
+        });
+    }
+
+    fn time(&mut self) {
+        self.node(TIME, Self::duration);
+    }
+
+    fn time_range(&mut self) {
+        self.node(TIME_RANGE, |s| {
+            s.structural(TokenType::LBracket);
+            s.time();
+            s.structural(TokenType::DotDot);
+            if !s.try_structural(TokenType::RBracket) {
+                s.time();
+                s.structural(TokenType::RBracket);
+            }
         });
     }
 
@@ -470,7 +537,7 @@ impl Parser<'_> {
                 TokenType::Integer => s.integer(),
                 TokenType::Bool => s.bool(),
                 TokenType::String | TokenType::StringSegment => s.string(),
-                TokenType::LBrace => s.array(),
+                TokenType::LBracket => s.array(),
                 _ => s.error("expected constant"),
             }
         });
@@ -557,7 +624,9 @@ impl Parser<'_> {
     fn ident(&mut self) {
         self.node(IDENT, |s| {
             let token = s.next();
-            if token.tpe() != TokenType::Ident && token.tpe() != TokenType::EscapedIdent {
+            if token.tpe() == TokenType::Ident || token.tpe() == TokenType::EscapedIdent {
+                s.token(token);
+            } else {
                 s.error_token(
                     token,
                     format!(
@@ -566,9 +635,7 @@ impl Parser<'_> {
                         token.tpe()
                     ),
                 );
-                return;
             }
-            s.token(token);
         });
     }
 
@@ -772,7 +839,7 @@ impl Parser<'_> {
     fn as_rule(&mut self) {
         self.node(AS, |s| {
             if !s.try_keyword("as") {
-                s.error("expected filter or where");
+                s.error("expected as");
                 return;
             }
             s.ident();
@@ -797,6 +864,7 @@ impl Parser<'_> {
             let tkn = s.next();
             if tkn.tpe() != TokenType::Integer {
                 s.error_token(tkn, "expected integer duration");
+                return;
             }
             s.token(tkn);
 
