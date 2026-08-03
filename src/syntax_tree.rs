@@ -43,8 +43,9 @@ pub enum Lang {}
 impl rowan::Language for Lang {
     type Kind = SyntaxKind;
     fn kind_from_raw(raw: rowan::SyntaxKind) -> Self::Kind {
-        assert!(raw.0 <= ROOT as u16, "invalid syntax kind: {}", raw.0);
-        unsafe { std::mem::transmute::<u16, SyntaxKind>(raw.0) }
+        *ALL_KINDS
+            .get(raw.0 as usize)
+            .unwrap_or(&SyntaxKind::THIS_SHOULD_NEVER_BE_EMITTED_GOD_DAMN_IT)
     }
     fn kind_to_raw(kind: Self::Kind) -> rowan::SyntaxKind {
         kind.into()
@@ -53,6 +54,97 @@ impl rowan::Language for Lang {
 
 /// A syntax node in the MPL language syntax tree.
 pub type SyntaxNode = rowan::SyntaxNode<Lang>;
+
+const ALL_KINDS: [SyntaxKind; ROOT as usize + 1] = [
+    EOF,
+    LX_INVALID,
+    LX_COMMENT,
+    LX_WHITESPACE,
+    LX_IDENT,
+    LX_ESCAPED_IDENT,
+    LX_DIV,
+    LX_MUL,
+    LX_PLUS,
+    LX_MINUS,
+    LX_PIPE,
+    LX_DOUBLE_COLON,
+    LX_COLON,
+    LX_INTEGER,
+    LX_FLOAT,
+    LX_EQUAL_EQUAL,
+    LX_EQUAL,
+    LX_VARIABLE,
+    LX_ESCAPED_VARIABLE,
+    LX_REGEX,
+    LX_COMMA,
+    LX_L_PAREN,
+    LX_R_PAREN,
+    LX_L_BRACKET,
+    LX_R_BRACKET,
+    LX_L_BRACE,
+    LX_R_BRACE,
+    LX_QUESTION_MARK,
+    LX_BANG,
+    LX_SEMI_COLON,
+    LX_LESS_THAN_EQUAL,
+    LX_GREATER_THAN_EQUAL,
+    LX_LESS_THAN,
+    LX_GREATER_THAN,
+    LX_NOT_EQUAL,
+    LX_DOT_DOT,
+    LX_STRING,
+    LX_STRING_SEGMENT,
+    LX_BOOL,
+    LX_INF,
+    IDENT,
+    IDENT_OR_VARIABLE,
+    KEYWORD,
+    DIRECTIVE,
+    PARAM,
+    VARIABLE,
+    TYPE,
+    QUERY,
+    SIMPLE_QUERY,
+    COMPUTE_QUERY,
+    FILTER_OR,
+    FILTER_AND,
+    FILTER_NOT,
+    FILTER_PAREN,
+    FILTER_CMP,
+    FUNCTION_PATH,
+    DURATION,
+    TIME_UNIT,
+    OTEL_TYPE,
+    EXPR,
+    REGEX,
+    CONST,
+    INTEGER,
+    FLOAT,
+    BOOL,
+    STRING,
+    ARRAY,
+    TAG_LIST,
+    TIME_RANGE,
+    TIME,
+    RULE,
+    EXTEND,
+    EXTEND_PART,
+    IFDEF,
+    FILTER,
+    SAMPLE,
+    MAP,
+    MAP_MATH,
+    ALIGN,
+    AS,
+    GROUP,
+    BUCKET,
+    BUCKET_ARG,
+    BUCKET_ARGS,
+    INVALID,
+    GARBAGE,
+    THIS_SHOULD_NEVER_BE_EMITTED_GOD_DAMN_IT,
+    ROOT,
+];
 
 /// The syntax kind of a node in the MPL language syntax tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -152,6 +244,8 @@ pub enum SyntaxKind {
     INVALID,
     /// garbage after the parser has finished
     GARBAGE,
+    /// Returned when a raw kind falls outside the enum; the parser never builds this
+    THIS_SHOULD_NEVER_BE_EMITTED_GOD_DAMN_IT,
     // IMPORTANT! THIS NEEDS TO BE LAST!!!
     ROOT,
 }
@@ -1015,5 +1109,12 @@ mod tests {
         assert_eq!(input, tree.to_string());
 
         assert!(errors.is_empty());
+    }
+    #[test]
+    fn syntax_type_array() {
+        assert_eq!(ALL_KINDS.len(), ROOT as usize + 1);
+        for (i, kind) in ALL_KINDS.iter().enumerate() {
+            assert_eq!(*kind as usize, i);
+        }
     }
 }

@@ -874,7 +874,7 @@ fn parse_examples() {
 /// extension `mpl-todo`, which no file has, so it ran over an empty set and passed. Pinning
 /// means that when a feature lands the test fails and the file gets moved to
 /// `tests/examples/*.mpl`, instead of the example sitting there unread forever.
-#[test_case("enrich.mp.unimplemented"          => false ; "enrich needs a join rule")]
+#[test_case("enrich.mpl.unimplemented"          => false ; "enrich needs a join rule")]
 #[test_case("nested-enrich.mpl.unimplemented"  => false ; "nested enrich needs a join rule")]
 #[test_case("replace_labels.mpl.unimplemented" => true  ; "replace labels already parses")]
 fn unimplemented_examples_parse(name: &str) -> bool {
@@ -1101,10 +1101,6 @@ fn every_prefix_of_every_example_parses() {
 
 // ---------------------------------------------------------------------------------------
 // Syntax kinds
-//
-// `Lang::kind_from_raw` transmutes a `u16` into a `SyntaxKind`, guarded only by an assert
-// that the value is at most `ROOT`. That makes "ROOT is the last variant" a soundness
-// requirement rather than a style rule, and nothing in the type system enforces it.
 // ---------------------------------------------------------------------------------------
 
 /// Property: every discriminant up to `ROOT` survives the round trip through `rowan`.
@@ -1125,12 +1121,13 @@ fn every_kind_round_trips_through_raw() {
     }
 }
 
-/// The guard on the transmute holds: a raw kind past `ROOT` is rejected rather than turned
-/// into an undefined enum value.
 #[test]
-#[should_panic(expected = "invalid syntax kind")]
 fn kind_from_raw_rejects_values_past_root() {
-    let _ = Lang::kind_from_raw(rowan::SyntaxKind(SyntaxKind::ROOT as u16 + 1));
+    assert_eq!(
+        Lang::kind_from_raw(rowan::SyntaxKind(SyntaxKind::ROOT as u16 + 1)),
+        SyntaxKind::THIS_SHOULD_NEVER_BE_EMITTED_GOD_DAMN_IT,
+        "kind past `ROOT` should be rejected"
+    );
 }
 
 /// Every kind the parser actually builds round-trips, which is the same check made against

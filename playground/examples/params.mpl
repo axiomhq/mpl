@@ -1,5 +1,5 @@
-param $dataset: dataset;
-param $duration: duration;
+param $dataset: Dataset;
+param $duration: Duration;
 param $__tag: string;
 
 $dataset:metric
