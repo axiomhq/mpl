@@ -14,13 +14,14 @@
 //!
 //! The **properties** at the bottom run over the shipped examples, an adversarial corpus and
 //! randomly generated valid queries. They check the relationships a table cannot state:
-//! losslessness, that every node's text really is the input at its range, that node and
-//! token kinds never mix, and that no input — truncated, malformed or random — panics or
-//! hangs the parser.
+//! losslessness, that no lexer token goes missing even when the parse fails, that every
+//! node's text really is the input at its range, that node and token kinds never mix, and
+//! that no input — truncated, malformed or random — panics or hangs the parser.
 
 use std::fs;
 
 use miette::{GraphicalReportHandler, GraphicalTheme, NamedSource, Report};
+use mpl_lang::lexer::Lexer;
 use mpl_lang::syntax_tree::{Lang, Parser, SyntaxError, SyntaxKind, SyntaxNode};
 use rowan::{Language, NodeOrToken};
 use test_case::test_case;
@@ -803,7 +804,11 @@ const CORPUS: &[&str] = &[
     "d:m[5m..]",
     "set a = [1, 2]; d:m",
     "d:m | where a == \"unterminated",
+    // The three inputs that reach an `error_token` call site reporting a token it only
+    // peeked — see `error_recovery_does_not_duplicate`.
     "d:m | where a ~ 1",
+    "d:m | bucket using histogram(1)",
+    "d:m | where a is nonsense",
     "param $p: nonsense; d:m",
     "((((",
     "))))",
@@ -942,6 +947,39 @@ fn assert_lossless(src: &str) {
     }
 }
 
+/// Property: every token the lexer produced reaches the tree, in source order.
+///
+/// This is the half of losslessness that survives error recovery, and it needs its own
+/// statement because `assert_lossless` gives up the moment there is an error — which leaves
+/// broken input, the case a CST exists to handle, checked by nothing at all.
+///
+/// Deliberately a subsequence and not an equality. Recovery is allowed to emit a token twice
+/// today, so an equality would fail; what must never happen is a token going missing, since
+/// a formatter that silently drops one corrupts the file it is formatting, which is worse
+/// than one that prints a stray character. Stating it this way also makes the test useful in
+/// exactly the case that matters: if the duplication in `error_recovery_does_not_duplicate`
+/// is ever "fixed" by discarding the token rather than consuming it, this goes red.
+fn assert_no_token_is_dropped(src: &str) {
+    let (tree, _errors) = Parser::new(src).parse();
+    // `any` advances the iterator, so consecutive calls match the tree's tokens in order —
+    // extra tokens between two matches are skipped, which is what makes this a subsequence.
+    let mut in_tree = tree
+        .descendants_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .map(|token| token.text().to_string())
+        // The synthetic end-of-input token carries no text and has no lexer counterpart.
+        .filter(|text| !text.is_empty());
+
+    for token in Lexer::new(src).filter(|token| !token.is_eof()) {
+        assert!(
+            in_tree.any(|text| text == token.text()),
+            "lexer token {:?} at byte {} never reached the tree for {src:?}",
+            token.text(),
+            token.pos()
+        );
+    }
+}
+
 /// Property: a node's text is exactly the input at its own range.
 ///
 /// Ranges are what a language server resolves a cursor position against, and they are
@@ -1064,6 +1102,7 @@ fn assert_errors_are_bounded(src: &str) {
 fn corpus_properties() {
     for src in CORPUS {
         assert_lossless(src);
+        assert_no_token_is_dropped(src);
         assert_ranges_match_the_input(src);
         assert_kind_discipline(src);
         assert_spans_are_in_bounds(src);
@@ -1075,6 +1114,7 @@ fn corpus_properties() {
 fn example_properties() {
     for (_name, content) in files("./tests/examples", "mpl") {
         assert_lossless(&content);
+        assert_no_token_is_dropped(&content);
         assert_ranges_match_the_input(&content);
         assert_kind_discipline(&content);
         assert_spans_are_in_bounds(&content);
@@ -1100,6 +1140,7 @@ fn every_prefix_of_every_example_parses() {
             assert_errors_are_bounded(prefix);
             assert_kind_discipline(prefix);
             assert_lossless(prefix);
+            assert_no_token_is_dropped(prefix);
             checked += 1;
         }
     }
@@ -1570,6 +1611,7 @@ fn random_input_does_not_break_the_parser() {
         assert_errors_are_bounded(&src);
         assert_kind_discipline(&src);
         assert_lossless(&src);
+        assert_no_token_is_dropped(&src);
     }
 }
 
@@ -1581,12 +1623,13 @@ fn random_input_does_not_break_the_parser() {
 // behaviour is a defect: a test that did would report green for as long as the defect
 // survived and red the moment it was fixed, which is backwards.
 //
-// All three pass today, for three different reasons, and the notes say which. Arrays in
-// constant position was a real gap and closed; its note records what fixed it. The
-// compute-query ambiguity is a property of the language rather than a defect, so it is
-// asserted normally and will stay here. `error_recovery_is_lossless` is green only over the
-// call sites that consume the token they report — the three that merely peek still duplicate
-// it, and its note carries those cases until they can be asserted.
+// `error_recovery_does_not_duplicate` is the one still open, and it is the one test in this
+// file that fails: it is left running rather than `#[ignore]`d so the gap is visible on every
+// build instead of only under `--include-ignored`. The other three pass, for three different
+// reasons the notes give: arrays in constant position was a real gap and closed, the
+// compute-query ambiguity is a property of the language rather than a defect and so is
+// asserted normally, and `error_recovery_is_lossless` is green over the call sites that
+// consume the token they report.
 // ---------------------------------------------------------------------------------------
 
 /// Arrays are reachable from every constant position: `set`, `extend`, a `map` argument, an
@@ -1642,22 +1685,8 @@ fn extend_swallows_the_comma_of_a_compute_query() {
 /// `string` route it through `error_token`, which wraps it in an `INVALID` node instead of
 /// discarding it, so the tree still reproduces the input. That is what the cases below pin.
 ///
-/// It does not hold everywhere yet. Three `error_token` call sites report a token they only
-/// *peeked* and never consumed — `filter_cmp` (`src/syntax_tree.rs:897`), `bucket_arg`
-/// (`:1022`) and `type_ident` (`:1089`) — so the token is emitted once by `error_token` and
-/// again by whatever consumes it next, and the tree comes out longer than the input:
-///
-/// ```text
-/// d:m | where a ~ 1               ->  d:m | where a ~~ 1
-/// d:m | bucket using histogram(1) ->  d:m | bucket using histogram(11)
-/// d:m | where a is nonsense       ->  d:m | where a is nonsensenonsense
-/// ```
-///
-/// Those three are deliberately *not* added below: a CST that is lossless only on success
-/// cannot back a formatter or an incremental reparse, both of which have to work on broken
-/// input, and asserting the duplication would turn the defect into the contract. When those
-/// sites consume what they report, add the three cases here and drop the `errors.is_empty()`
-/// guard in `assert_lossless`, which is the same property stated for clean parses only.
+/// It does not hold at every call site — see `error_recovery_does_not_duplicate` — so the
+/// cases here are the ones whose error path consumes the token it reports.
 #[test]
 fn error_recovery_is_lossless() {
     for src in ["d:m | fflter a == 1", "param $p: nonsense; d:m"] {
@@ -1667,6 +1696,53 @@ fn error_recovery_is_lossless() {
             tree.to_string(),
             src,
             "{src:?} lost text during error recovery"
+        );
+    }
+}
+
+/// Three `error_token` call sites report a token they only *peeked*: `filter_cmp`
+/// (`src/syntax_tree.rs:897`), `bucket_arg` (`:1022`) and `type_ident` (`:1089`). Each hands
+/// the token to `error_token`, which wraps it in an `INVALID` node and emits it — but leaves
+/// it in the lexer, so the next production consumes and emits it a second time and the tree
+/// comes out longer than the input.
+///
+/// Ranges are why this matters more than the stray character suggests. Every offset after
+/// the duplicate is shifted, so a language server resolving a cursor position against the
+/// tree lands in the wrong place, and a formatter printing it emits text the user never
+/// wrote. Neither `assert_lossless` nor `assert_ranges_match_the_input` can catch it: both
+/// bail out on any input that produced an error, which is every input that reaches these
+/// sites. The half that does hold — that no token goes *missing* — is checked on every
+/// input by `assert_no_token_is_dropped`.
+///
+/// Left failing rather than inverted or ignored. Asserting that `d:m | where a ~ 1` renders
+/// as `d:m | where a ~~ 1` would make the defect the contract and go red the day it is
+/// fixed; `#[ignore]` would hide it from every build that does not pass
+/// `--include-ignored`. A red test names the gap on every run, which is the point.
+///
+/// The fix is for those three sites to consume what they report. When they do, this goes
+/// green and the `errors.is_empty()` guard in `assert_lossless` can go with it — it is the
+/// same property stated for clean parses only.
+#[test]
+fn error_recovery_does_not_duplicate() {
+    // Second column is what the tree renders today, so a failure reads as a diff rather than
+    // as a bare inequality.
+    for (src, today) in [
+        ("d:m | where a ~ 1", "d:m | where a ~~ 1"),
+        (
+            "d:m | bucket using histogram(1)",
+            "d:m | bucket using histogram(11)",
+        ),
+        (
+            "d:m | where a is nonsense",
+            "d:m | where a is nonsensenonsense",
+        ),
+    ] {
+        let (tree, errors) = Parser::new(src).parse();
+        assert!(!errors.is_empty(), "{src:?} was expected to fail");
+        assert_eq!(
+            tree.to_string(),
+            src,
+            "{src:?} duplicated a token during recovery (renders as {today:?})"
         );
     }
 }
