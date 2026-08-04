@@ -662,8 +662,8 @@ version = "0.6.0"
 dependencies = [
  "miette",
  "mpl-lang",
- "pest",
  "regex",
+ "rowan",
  "serde",
  "serde_json",
  "strsim",

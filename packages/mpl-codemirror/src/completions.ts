@@ -344,34 +344,21 @@ export function createMplCompletion(config: MplCompletionConfig) {
   ];
 }
 
-const PLAIN_IDENT_RE = /^[A-Za-z][A-Za-z0-9_]*$/;
-
 export function needsEscape(name: string): boolean {
-  return !PLAIN_IDENT_RE.test(name);
+  return mpl.needs_escape(name);
 }
 
 export function escapeIdent(name: string): string {
-  if (!needsEscape(name)) {
-    return name;
-  }
-  return "`" + name.replace(/\\/g, "\\\\").replace(/`/g, "\\`") + "`";
+  return mpl.escape_ident(name);
 }
 
 /**
  * Builds the `apply` text for a dataset/metric/tag completion.
  *
- * When the user has already typed an opening backtick (detected by checking
- * the character before `from` in the document), the apply text must NOT
- * include a second opening backtick — it only appends the name + closing
- * backtick. Otherwise a double-backtick is inserted.
+ * `inBacktick` says the opening backtick is already in the document and the
+ * replacement starts after it, detected by checking the character before
+ * `from`.
  */
 export function applyTextForIdent(name: string, inBacktick: boolean): string {
-  const escaped = name.replace(/\\/g, "\\\\").replace(/`/g, "\\`");
-  if (inBacktick) {
-    return escaped + "`";
-  }
-  if (needsEscape(name)) {
-    return "`" + escaped + "`";
-  }
-  return name;
+  return mpl.apply_text_for_ident(name, inBacktick);
 }

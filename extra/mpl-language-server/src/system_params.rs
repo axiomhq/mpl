@@ -46,7 +46,7 @@ impl SystemParamSpec {
     /// Maps the spec to the completion-side `ParamItem` used to render
     /// the `$param` autocomplete list.
     fn to_completion_item(&self) -> Option<ParamItem> {
-        let typ = parse_completion_type(&self.type_name)?;
+        let typ = CompletionParamType::from_spelling(&self.type_name)?;
         Some(ParamItem {
             label: ensure_dollar_prefix(&self.name),
             typ,
@@ -55,35 +55,21 @@ impl SystemParamSpec {
     }
 }
 
+/// The query-level type a registration names, reached through the completion
+/// type so both sides read the same spellings. `Metric` has no query-level
+/// counterpart, so it cannot be registered as a system param.
 fn parse_terminal(s: &str) -> Option<TerminalParamType> {
-    match s {
-        "Dataset" => Some(TerminalParamType::Dataset),
-        // `duration` is the legacy lowercase form; accept it for symmetry
-        // with the in-source param syntax even though it triggers an
-        // OldDuration warning when written in a query.
-        "Duration" | "duration" => Some(TerminalParamType::Duration),
-        "Regex" => Some(TerminalParamType::Regex),
-        "string" => Some(TerminalParamType::Tag(TagType::String)),
-        "int" => Some(TerminalParamType::Tag(TagType::Int)),
-        "float" => Some(TerminalParamType::Tag(TagType::Float)),
-        "bool" => Some(TerminalParamType::Tag(TagType::Bool)),
-        "array" => Some(TerminalParamType::Tag(TagType::Array)),
-        _ => None,
-    }
-}
-
-fn parse_completion_type(s: &str) -> Option<CompletionParamType> {
-    match s {
-        "Dataset" => Some(CompletionParamType::Dataset),
-        "Duration" | "duration" => Some(CompletionParamType::Duration),
-        "Regex" => Some(CompletionParamType::Regex),
-        "string" => Some(CompletionParamType::String),
-        "int" => Some(CompletionParamType::Int),
-        "float" => Some(CompletionParamType::Float),
-        "bool" => Some(CompletionParamType::Bool),
-        "array" => Some(CompletionParamType::Array),
-        _ => None,
-    }
+    Some(match CompletionParamType::from_spelling(s)? {
+        CompletionParamType::Dataset => TerminalParamType::Dataset,
+        CompletionParamType::Duration => TerminalParamType::Duration,
+        CompletionParamType::Regex => TerminalParamType::Regex,
+        CompletionParamType::String => TerminalParamType::Tag(TagType::String),
+        CompletionParamType::Int => TerminalParamType::Tag(TagType::Int),
+        CompletionParamType::Float => TerminalParamType::Tag(TagType::Float),
+        CompletionParamType::Bool => TerminalParamType::Tag(TagType::Bool),
+        CompletionParamType::Array => TerminalParamType::Tag(TagType::Array),
+        CompletionParamType::Metric => return None,
+    })
 }
 
 /// Param labels in completion results are dollar-prefixed (`$__interval`);

@@ -1,10 +1,15 @@
 //! Syntax highlighting tokenization for `MPL` queries.
-use mpl_lang::{MPLParser, Rule};
-use pest::Parser as _;
+//!
+//! Built on the error-tolerant syntax tree rather than on a full parse, so a
+//! query that is half-typed still highlights. Anything the parser could not
+//! make sense of lands in an error node, whose tokens are still coloured by
+//! their lexical kind — the file never loses its colours mid-edit.
+
+use mpl_lang::syntax_tree::{Parser, SyntaxKind, SyntaxNode};
+use rowan::{NodeOrToken, TextRange, TextSize, TokenAtOffset, WalkEvent};
 use serde::Serialize;
 
-use crate::Span;
-use crate::visit::{Node, PairVisitor, VisitAction};
+use crate::{Span, SyntaxToken};
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -18,6 +23,7 @@ pub enum TokenType {
     Punctuation,
     Keyword,
     Type,
+    Comment,
 }
 
 #[derive(Debug, Serialize)]
@@ -28,181 +34,185 @@ pub struct Token {
     pub kind: TokenType,
 }
 
-/// Returns `true` when the string literal `text` (including its surrounding
-/// quotes) contains at least one `${` interpolation whose `$` is *not*
-/// escaped. A `$` is escaped when preceded by an odd number of backslashes,
-/// so `"\${x}"` is literal text while `"\\${x}"` interpolates.
-fn has_interpolation(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    let mut escaped = false;
-    let mut i = 0;
-    while i < bytes.len() {
-        if escaped {
-            escaped = false;
-            i += 1;
-            continue;
-        }
-        match bytes[i] {
-            b'\\' => escaped = true,
-            b'$' if i + 1 < bytes.len() && bytes[i + 1] == b'{' => return true,
-            _ => {}
-        }
-        i += 1;
-    }
-    false
-}
+/// The words the parser dispatches on. Consulted only inside error nodes, where
+/// there is no structure left to ask.
+const RULE_KEYWORDS: &[&str] = &[
+    "align", "and", "as", "bucket", "by", "compute", "else", "extend", "filter", "ifdef", "in",
+    "is", "map", "not", "or", "param", "sample", "set", "to", "using", "where",
+];
 
-/// Returns `Option` rather than adding a `None` variant to `TokenType` because
-/// the absence drives control flow in the visitor (recurse into children)
-/// and `TokenType` is serialized directly to the JS consumer.
-fn token_type(rule: Rule) -> Option<TokenType> {
-    match rule {
-        Rule::plain_ident | Rule::escaped_ident | Rule::param_ident => Some(TokenType::Variable),
-        Rule::string => Some(TokenType::String),
-        Rule::float
-        | Rule::int
-        | Rule::time_relative
-        | Rule::time_rfc_3339
-        | Rule::time_timestamp
-        | Rule::time_modifier => Some(TokenType::Number),
-        Rule::bool => Some(TokenType::Bool),
-        Rule::regex | Rule::regex_replace => Some(TokenType::Regexp),
-        Rule::cmp | Rule::cmp_re | Rule::map_calc_op | Rule::compute_op => {
-            Some(TokenType::Operator)
-        }
-        Rule::pipe_keyword => Some(TokenType::Punctuation),
-        Rule::kw_not
-        | Rule::kw_filter
-        | Rule::kw_where
-        | Rule::kw_sample
-        | Rule::kw_ifdef
-        | Rule::kw_else
-        | Rule::kw_extend
-        | Rule::kw_is
-        | Rule::bucket_conversion
-        | Rule::bucket_by_fn
-        | Rule::bucket_by_with_conversion_fn => Some(TokenType::Keyword),
-        Rule::param_native_type | Rule::tag_type => Some(TokenType::Type),
-        _ => None,
-    }
-}
-
-struct TokenCollector<'a> {
-    tokens: Vec<Token>,
-    source: &'a str,
-}
-
-impl PairVisitor for TokenCollector<'_> {
-    fn enter(&mut self, node: Node) -> VisitAction {
-        // Interpolated strings need special handling: highlight the literal
-        // text (`string_chars`) and quotes as `String`, but descend into the
-        // `${ … }` expressions so embedded params/numbers get their own tokens
-        // (the `${`/`}` delimiters are left as gaps). Recursion handles
-        // nesting. Plain strings fall through to the generic `token_type` path
-        // below, which emits a single `String` token for the whole literal.
-        if node.rule == Rule::string
-            && has_interpolation(&self.source[node.span.from..node.span.to])
-        {
-            self.tokens.push(Token {
-                span: Span::new(node.span.from, node.span.from + 1),
-                kind: TokenType::String,
-            });
-            return VisitAction::Walk;
-        }
-        if node.rule == Rule::string_chars {
-            self.tokens.push(Token {
-                span: node.span,
-                kind: TokenType::String,
-            });
-            return VisitAction::Skip;
-        }
-
-        // `time_relative_parameterized` can be either `1m` (Number) or `$dur`
-        // (Variable). Inspect the source text to decide.
-        if node.rule == Rule::time_relative_parameterized {
-            let text = &self.source[node.span.from..node.span.to];
-            let kind = if text.starts_with('$') {
-                TokenType::Variable
-            } else {
-                TokenType::Number
-            };
-            self.tokens.push(Token {
-                span: node.span,
-                kind,
-            });
-            return VisitAction::Skip;
-        }
-
-        // `param` is a compound rule (`"param" ~ param_ident ~ ":" ~ param_type ~ ";"`).
-        // The literal "param" keyword is not a named child, so emit a keyword
-        // token for it and let the walker descend into the named children.
-        if node.rule == Rule::param {
-            let kw_start = node.span.from;
-            self.tokens.push(Token {
-                span: Span::new(kw_start, kw_start + "param".len()),
-                kind: TokenType::Keyword,
-            });
-            return VisitAction::Walk;
-        }
-
-        // `optional_type` matches `Option<…>`; the literal "Option" is not a
-        // named child, so emit a Type token for it and walk into the inner
-        // type rule for its own token.
-        if node.rule == Rule::optional_type {
-            let start = node.span.from;
-            self.tokens.push(Token {
-                span: Span::new(start, start + "Option".len()),
-                kind: TokenType::Type,
-            });
-            return VisitAction::Walk;
-        }
-
-        // `in` is a word-shaped comparison operator; style it as a keyword to
-        // match `is` rather than the symbolic operators sharing `Rule::cmp`.
-        if node.rule == Rule::cmp && &self.source[node.span.from..node.span.to] == "in" {
-            self.tokens.push(Token {
-                span: node.span,
-                kind: TokenType::Keyword,
-            });
-            return VisitAction::Skip;
-        }
-
-        if let Some(kind) = token_type(node.rule) {
-            self.tokens.push(Token {
-                span: node.span,
-                kind,
-            });
-            VisitAction::Skip
-        } else {
-            VisitAction::Walk
+/// What an identifier means is decided by the node that encloses it, not by the
+/// identifier itself: `duration` is a type in a `param` declaration, a keyword
+/// after `is`, and a tag name anywhere else. Walk out until a node decides,
+/// passing through the wrappers that only restate "this is an identifier".
+fn ident_token_type(token: &SyntaxToken) -> TokenType {
+    for node in token.parent_ancestors() {
+        match node.kind() {
+            SyntaxKind::KEYWORD | SyntaxKind::BUCKET_ARG => return TokenType::Keyword,
+            // The parser gave up here, so there is no enclosing construct to
+            // consult — fall back to the word itself. Confined to error nodes
+            // on purpose, so a tag legitimately named `where` in a query that
+            // parses keeps its variable colour.
+            SyntaxKind::GARBAGE | SyntaxKind::INVALID => {
+                return if RULE_KEYWORDS.contains(&token.text()) {
+                    TokenType::Keyword
+                } else {
+                    TokenType::Variable
+                };
+            }
+            SyntaxKind::TYPE | SyntaxKind::OTEL_TYPE => return TokenType::Type,
+            // The `m` of `1m` is an identifier to the lexer but part of the
+            // number to a reader. Reached by point queries; `collect_tokens`
+            // claims the whole duration before it gets here.
+            SyntaxKind::TIME_UNIT => return TokenType::Number,
+            // Bucket function names are a closed vocabulary in the grammar
+            // (`histogram`, `interpolate_cumulative_histogram`), so they read as
+            // keywords. Every other function path is a free name.
+            SyntaxKind::FUNCTION_PATH => {
+                return if node
+                    .parent()
+                    .is_some_and(|p| p.kind() == SyntaxKind::BUCKET)
+                {
+                    TokenType::Keyword
+                } else {
+                    TokenType::Variable
+                };
+            }
+            SyntaxKind::IDENT
+            | SyntaxKind::IDENT_OR_VARIABLE
+            | SyntaxKind::VARIABLE
+            | SyntaxKind::EXPR
+            | SyntaxKind::CONST => {}
+            _ => break,
         }
     }
-
-    fn leave(&mut self, node: Node) {
-        // Closing quote of an interpolated string. Emitted in `leave` so it is
-        // pushed after the string's inner tokens, preserving sorted order.
-        if node.rule == Rule::string
-            && has_interpolation(&self.source[node.span.from..node.span.to])
-        {
-            self.tokens.push(Token {
-                span: Span::new(node.span.to - 1, node.span.to),
-                kind: TokenType::String,
-            });
-        }
-    }
+    TokenType::Variable
 }
 
-/// Tokenises `query` for syntax highlighting. Returns `None` when the query
-/// fails to parse (the host should treat that as "no tokens to show").
-#[must_use]
-pub fn collect_tokens(query: &str) -> Option<Vec<Token>> {
-    let pairs = MPLParser::parse(Rule::file, query).ok()?;
-    let mut collector = TokenCollector {
-        tokens: Vec::new(),
-        source: query,
+/// The kind a single token is painted with.
+fn token_token_type(token: &SyntaxToken) -> Option<TokenType> {
+    use SyntaxKind::{
+        LX_BOOL, LX_COMMENT, LX_DIV, LX_EQUAL_EQUAL, LX_ESCAPED_IDENT, LX_ESCAPED_VARIABLE,
+        LX_FLOAT, LX_GREATER_THAN, LX_GREATER_THAN_EQUAL, LX_IDENT, LX_INF, LX_INTEGER,
+        LX_LESS_THAN, LX_LESS_THAN_EQUAL, LX_MINUS, LX_MUL, LX_NOT_EQUAL, LX_PIPE, LX_PLUS,
+        LX_REGEX, LX_STRING, LX_STRING_SEGMENT, LX_VARIABLE, TYPE,
     };
-    collector.walk_pairs(pairs);
-    Some(collector.tokens)
+
+    Some(match token.kind() {
+        LX_IDENT | LX_ESCAPED_IDENT | LX_VARIABLE | LX_ESCAPED_VARIABLE => ident_token_type(token),
+        // An interpolated literal is several tokens: each run of literal text
+        // carries its own `${` or `}` delimiter, and the expressions between
+        // them are coloured on their own.
+        LX_STRING | LX_STRING_SEGMENT => TokenType::String,
+        LX_INTEGER | LX_FLOAT | LX_INF => TokenType::Number,
+        LX_BOOL => TokenType::Bool,
+        LX_REGEX => TokenType::Regexp,
+        LX_COMMENT => TokenType::Comment,
+        LX_PIPE => TokenType::Punctuation,
+        LX_EQUAL_EQUAL | LX_NOT_EQUAL | LX_PLUS | LX_MINUS | LX_MUL | LX_DIV => TokenType::Operator,
+        // In `Option<...>` the angle brackets delimit a type; everywhere else
+        // they compare.
+        LX_LESS_THAN | LX_LESS_THAN_EQUAL | LX_GREATER_THAN | LX_GREATER_THAN_EQUAL
+            if !token.parent().is_some_and(|p| p.kind() == TYPE) =>
+        {
+            TokenType::Operator
+        }
+        _ => return None,
+    })
+}
+
+/// A node's range covers the trivia the parser ate on the way in and out, so
+/// using it verbatim would colour the whitespace around the construct. Narrow
+/// to the span of the tokens that carry text.
+fn content_range(node: &SyntaxNode) -> Option<TextRange> {
+    let mut tokens = node
+        .descendants_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .filter(|t| !matches!(t.kind(), SyntaxKind::LX_WHITESPACE | SyntaxKind::LX_COMMENT))
+        .map(|t| t.text_range());
+    let first = tokens.next()?;
+    Some(tokens.last().map_or(first, |last| first.cover(last)))
+}
+
+/// Tokenises `query` for syntax highlighting.
+///
+/// Always succeeds: an unparseable query yields the tokens it does have rather
+/// than nothing at all. Tokens come out sorted by start offset and never
+/// overlap, which is what CodeMirror's decoration builder requires.
+#[must_use]
+pub fn collect_tokens(query: &str) -> Vec<Token> {
+    let (tree, _errors) = Parser::new(query).parse();
+    let mut tokens = Vec::new();
+    let mut walk = tree.preorder_with_tokens();
+    while let Some(event) = walk.next() {
+        let WalkEvent::Enter(element) = event else {
+            continue;
+        };
+        match element {
+            // A duration is a digit and a unit to the lexer but one number to a
+            // reader, so it is the one construct claimed whole.
+            NodeOrToken::Node(node) if node.kind() == SyntaxKind::DURATION => {
+                if let Some(range) = content_range(&node) {
+                    tokens.push(Token {
+                        span: Span::from_text_range(range),
+                        kind: TokenType::Number,
+                    });
+                }
+                walk.skip_subtree();
+            }
+            NodeOrToken::Node(_) => {}
+            NodeOrToken::Token(token) => {
+                if let Some(kind) = token_token_type(&token) {
+                    tokens.push(Token {
+                        span: Span::from_text_range(token.text_range()),
+                        kind,
+                    });
+                }
+            }
+        }
+    }
+    tokens
+}
+
+/// The token at byte `offset`, for point queries like hover.
+///
+/// A `::`-qualified function name is reported whole rather than as the segment
+/// under the cursor, because that is the name the stdlib is keyed by — hovering
+/// `rate` in `prom::rate` has to look up `prom::rate`.
+///
+/// Returns `None` where there is nothing to say: whitespace, punctuation, or an
+/// offset past the end of the query. Callers read the name out of their own copy
+/// of the text with the returned span.
+#[must_use]
+pub fn token_at(query: &str, offset: usize) -> Option<Token> {
+    let offset = TextSize::new(u32::try_from(offset).ok()?);
+    let (tree, _errors) = Parser::new(query).parse();
+    if !tree.text_range().contains_inclusive(offset) {
+        return None;
+    }
+
+    let token = match tree.token_at_offset(offset) {
+        TokenAtOffset::None => return None,
+        TokenAtOffset::Single(token) => token,
+        // On a boundary, take the token the offset points *into*. Hover asks
+        // about the character under the pointer, and that is the right one.
+        TokenAtOffset::Between(_, right) => right,
+    };
+
+    let kind = token_token_type(&token)?;
+    // Report the same spans `collect_tokens` paints, so a caller holding both
+    // never sees one construct two ways: a qualified path is one name, and a
+    // duration is one number.
+    let range = token
+        .parent_ancestors()
+        .find(|n| matches!(n.kind(), SyntaxKind::FUNCTION_PATH | SyntaxKind::DURATION))
+        .and_then(|node| content_range(&node))
+        .unwrap_or_else(|| token.text_range());
+
+    Some(Token {
+        span: Span::from_text_range(range),
+        kind,
+    })
 }
 
 #[cfg(test)]

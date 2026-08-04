@@ -11,7 +11,7 @@
 
 use serde::Serialize;
 
-use crate::completions::{ParamItem, ParamType, extract_declared_params};
+use crate::completions::{ParamItem, extract_declared_params};
 
 /// A single parameter declared in a query, in a JS-friendly shape.
 ///
@@ -32,25 +32,9 @@ impl From<&ParamItem> for DeclaredParam {
     fn from(item: &ParamItem) -> DeclaredParam {
         DeclaredParam {
             name: item.label.trim_start_matches('$').to_string(),
-            type_name: type_spelling(item.typ).to_string(),
+            type_name: item.typ.spelling().to_string(),
             optional: item.optional,
         }
-    }
-}
-
-/// Maps the completion-internal `ParamType` back to the source-level spelling
-/// users write in `param` declarations.
-fn type_spelling(typ: ParamType) -> &'static str {
-    match typ {
-        ParamType::Dataset => "Dataset",
-        ParamType::Metric => "Metric",
-        ParamType::Duration => "Duration",
-        ParamType::Regex => "Regex",
-        ParamType::String => "string",
-        ParamType::Int => "int",
-        ParamType::Float => "float",
-        ParamType::Bool => "bool",
-        ParamType::Array => "array",
     }
 }
 

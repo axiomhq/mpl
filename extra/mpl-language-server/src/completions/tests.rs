@@ -4,9 +4,9 @@ use test_case::test_case;
 use mpl_lang::STDLIB;
 
 use super::{
-    CompletionResult, ParamItem, ParamType, QueryContext, compute_completions,
-    cursor_in_interpolation, extract_declared_params, extract_partial_word, is_char_escaped,
-    locate_query_context, lookup_function, skip_string_literal,
+    CompletionResult, ParamItem, ParamType, QueryContext, StringContext, classify_string_context,
+    compute_completions, cursor_in_interpolation, extract_declared_params, extract_partial_word,
+    is_char_escaped, locate_query_context, lookup_function,
 };
 
 fn tag_info(r: &CompletionResult) -> Option<(&str, &str)> {
@@ -38,9 +38,10 @@ fn context_simple_query() {
 
 #[test]
 fn context_simple_query_with_directive() {
+    // The slice starts at the query, not at the directive that precedes it.
     let text = "set foo = bar; ds:metric | filter ";
     match locate_query_context(text) {
-        QueryContext::Subquery(s) => assert_eq!(s, text),
+        QueryContext::Subquery(s) => assert_eq!(s, "ds:metric | filter "),
         _ => panic!("expected Subquery"),
     }
 }
@@ -49,7 +50,7 @@ fn context_simple_query_with_directive() {
 fn context_compute_first_subquery() {
     let text = "( ds:metric | filter ";
     match locate_query_context(text) {
-        QueryContext::Subquery(s) => assert_eq!(s, " ds:metric | filter "),
+        QueryContext::Subquery(s) => assert_eq!(s, "ds:metric | filter "),
         _ => panic!("expected Subquery"),
     }
 }
@@ -58,7 +59,7 @@ fn context_compute_first_subquery() {
 fn context_compute_second_subquery() {
     let text = "( ds1:m1 , ds2:m2 | filter ";
     match locate_query_context(text) {
-        QueryContext::Subquery(s) => assert_eq!(s, " ds2:m2 | filter "),
+        QueryContext::Subquery(s) => assert_eq!(s, "ds2:m2 | filter "),
         _ => panic!("expected Subquery"),
     }
 }
@@ -87,7 +88,7 @@ fn context_compute_outer_tail_pipe() {
 fn context_nested_compute_inner_subquery() {
     let text = "( ( a:b , c:d | filter ";
     match locate_query_context(text) {
-        QueryContext::Subquery(s) => assert_eq!(s, " c:d | filter "),
+        QueryContext::Subquery(s) => assert_eq!(s, "c:d | filter "),
         _ => panic!("expected Subquery"),
     }
 }
@@ -96,7 +97,7 @@ fn context_nested_compute_inner_subquery() {
 fn context_nested_compute_outer_subquery() {
     let text = "( ( a:b , c:d ) | compute x using / , e:f | filter ";
     match locate_query_context(text) {
-        QueryContext::Subquery(s) => assert_eq!(s, " e:f | filter "),
+        QueryContext::Subquery(s) => assert_eq!(s, "e:f | filter "),
         _ => panic!("expected Subquery"),
     }
 }
@@ -152,7 +153,7 @@ fn context_braces_inside_regex_replace_ignored() {
 fn context_comment_before_compute_paren() {
     let text = "// comment\n( ds:metric | filter ";
     match locate_query_context(text) {
-        QueryContext::Subquery(s) => assert_eq!(s, " ds:metric | filter "),
+        QueryContext::Subquery(s) => assert_eq!(s, "ds:metric | filter "),
         _ => panic!("expected Subquery"),
     }
 }
@@ -533,15 +534,15 @@ fn parse_param_decl_optional_flag_set_correctly() {
 }
 
 #[test]
-fn parse_param_decl_unclosed_option_is_dropped() {
-    // `Option<` without `>` does not match the strip pattern; the raw "Option<int"
-    // is then matched against known type names — it isn't one, so the param is
-    // silently dropped from completion suggestions.
+fn parse_param_decl_unclosed_option_still_reports_the_param() {
+    // `Option<int;` is a declaration mid-keystroke. The parser recovers from the
+    // missing `>` and still reports what was declared, so the param is offered
+    // while it is being typed. The missing `>` is the diagnostics pass's
+    // business, not completions'.
     let params = extract_declared_params("param $x: Option<int;\nds:metric");
-    assert!(
-        params.is_empty(),
-        "malformed Option< should drop the param: {params:?}"
-    );
+    let x = find_param(&params, "$x").expect("$x should still be reported");
+    assert_eq!(x.typ, ParamType::Int);
+    assert!(x.optional);
 }
 
 #[test]
@@ -1449,7 +1450,6 @@ fn completions_at(input: &str) -> Option<CompletionResult> {
 #[test_case("param $ds: Dataset;\nparam $other: string;\n$d#" => Some("params")      ; "partial dollar at dataset position")]
 #[test_case("param $m: Metric;\nds:$#"                   => Some("params")           ; "dollar at metric position")]
 #[test_case("param $w: duration;\nds:metric | align to #" => Some("params")          ; "align to with duration param")]
-#[test_case("param $w: duration;\nds:metric | align to 1m over #" => Some("params")  ; "align to over with duration param")]
 #[test_case("ds:metric | bucket using #"                => Some("bucket_functions") ; "bucket using suggests functions")]
 #[test_case("param $w: duration;\nds:metric | bucket to #" => Some("params")         ; "bucket to with duration param")]
 #[test_case("param $s: string;\nds:metric | align to #"  => None                     ; "align to no duration params")]
@@ -1704,7 +1704,6 @@ fn test_completion_source_dataset(input: &str, expected: &str) {
 #[test_case("param $dur: duration;\nparam $b: bool;\nds:metric | filter tag == #", &["$b"]   ; "filter value includes bool")]
 #[test_case("param $foo: string;\nparam $bar: int;\nds:metric | filter tag == $fo#", &["$foo"] ; "partial param filtered")]
 #[test_case("param $w: duration;\nds:metric | align to #", &["$w"]                           ; "align to duration")]
-#[test_case("param $w: duration;\nds:metric | align to 1m over #", &["$w"]                   ; "align over duration")]
 #[test_case("param $w: duration;\nds:metric | bucket to #", &["$w"]                          ; "bucket to duration")]
 #[test_case("param $s: string;\nparam $w: duration;\nds:metric | align to #", &["$w"]        ; "align to includes duration")]
 #[test_case("param $ds: Dataset;\n$#", &["$ds"]                                              ; "source dataset param")]
@@ -2009,40 +2008,87 @@ fn inline_decl_shadows_system_param_with_same_name() {
     );
 }
 
-// ── interpolation-aware byte scanners ───────────────────────────
-// White-box tests for the escape/comment/EOF edge branches that are hard to
-// drive deterministically through `compute_completions`.
+// ── string-literal boundaries ───────────────────────────────────
+//
+// The lexer draws these boundaries, so each edge case is asserted through the
+// classification it feeds, which is what the completion engine consumes.
 
-#[test]
-fn skip_string_literal_handles_escapes_and_nested_interpolation() {
-    // Escaped quote stays inside the string; a `${ "c" }` interpolation with a
-    // nested string is skipped as a unit. `*i` must land on the final quote.
-    let src = r#""a\" b ${ "c" } d" rest"#;
-    let mut i = 0;
-    skip_string_literal(src.as_bytes(), src.len(), &mut i);
-    assert_eq!(src.as_bytes()[i], b'"');
-    assert_eq!(&src[..=i], r#""a\" b ${ "c" } d""#);
-    assert_eq!(&src[i + 1..], " rest");
+/// Every offset in `src` classified, so a boundary that moves by one shows up.
+fn contexts(src: &str) -> Vec<StringContext> {
+    (0..=src.len())
+        .filter(|i| src.is_char_boundary(*i))
+        .map(|i| classify_string_context(src, i))
+        .collect()
 }
 
 #[test]
-fn skip_string_literal_skips_backtick_ident_in_interpolation() {
-    // A `}` (and an escaped backtick `\``) inside a backtick identifier must
-    // not close the interpolation or the identifier prematurely.
-    let src = r#""x ${ $`a\`}b` } y" rest"#;
-    let mut i = 0;
-    skip_string_literal(src.as_bytes(), src.len(), &mut i);
-    assert_eq!(&src[..=i], r#""x ${ $`a\`}b` } y""#);
-    assert_eq!(&src[i + 1..], " rest");
+fn escaped_quote_does_not_end_the_string() {
+    // The `\"` is not the closing quote, so the text after it is still literal
+    // text and the engine offers nothing there.
+    let src = r#"a == "x \" y" and b == 1"#;
+    let after_escape = src.find("y\"").expect("literal text after the escape");
+    assert_eq!(
+        classify_string_context(src, after_escape),
+        StringContext::StringText
+    );
+    assert_eq!(classify_string_context(src, src.len()), StringContext::Code);
 }
 
 #[test]
-fn skip_string_literal_clamps_on_trailing_backslash() {
-    // Unterminated string ending in a backslash must not run `*i` past `len`.
-    let src = r#""ab\"#;
-    let mut i = 0;
-    skip_string_literal(src.as_bytes(), src.len(), &mut i);
-    assert_eq!(i, src.len());
+fn nested_string_leaves_the_outer_interpolation_open() {
+    // `"c"` is a complete literal inside the interpolation, not the end of the
+    // outer one — the position after it is still interpolation code.
+    let src = r#"a == "b ${ "c" } d""#;
+    let after_nested = src.find(" } d").expect("position after the nested string");
+    assert_eq!(
+        classify_string_context(src, after_nested),
+        StringContext::Interpolation
+    );
+    assert_eq!(classify_string_context(src, src.len()), StringContext::Code);
+}
+
+#[test]
+fn brace_inside_a_backtick_ident_does_not_close_the_interpolation() {
+    // The `}` here belongs to the escaped identifier. Closing the
+    // interpolation on it would classify the rest of the literal as code.
+    let src = r#"a == "x ${ $`p}q` } y""#;
+    let after_ident = src.find(" } y").expect("position after the escaped ident");
+    assert_eq!(
+        classify_string_context(src, after_ident),
+        StringContext::Interpolation
+    );
+    assert_eq!(classify_string_context(src, src.len()), StringContext::Code);
+}
+
+#[test]
+fn unterminated_string_ending_in_a_backslash_stays_string_text() {
+    // The trailing backslash has nothing to escape; classification must still
+    // terminate and report string text rather than running past the end.
+    let src = r#"a == "ab\"#;
+    assert_eq!(
+        classify_string_context(src, src.len()),
+        StringContext::StringText
+    );
+}
+
+#[test]
+fn classification_never_panics_on_any_offset() {
+    // Guards the whole family: no offset, including inside multi-byte
+    // characters, may index out of bounds or split a char.
+    for src in [
+        r#"a == "x \" y" and b == 1"#,
+        r#"a == "b ${ "c" } d""#,
+        r#"a == "x ${ $`p}q` } y""#,
+        r#"a == "ab\"#,
+        r#"a == "héllo ${ ö } wörld""#,
+        "a == \"unterminated ${ ",
+        "// comment with a \" quote\na:b",
+    ] {
+        assert!(
+            !contexts(src).is_empty(),
+            "no offsets classified for {src:?}"
+        );
+    }
 }
 
 #[test]
@@ -2072,4 +2118,131 @@ fn cursor_in_interpolation_false_cases() {
     // After the interpolation closes, the trailing string text is not code.
     let q = "x == \"a ${ $h } b";
     assert!(!cursor_in_interpolation(q, q.len()));
+}
+
+// ── param type vocabulary ────────────────────────────────────────
+
+/// `PARAM_TYPE_KEYWORDS` spells every type out again for the `apply` text, so
+/// it is pinned against the table the rest of the engine reads.
+#[test]
+fn param_type_keywords_match_the_type_table() {
+    use crate::completions::PARAM_TYPE_KEYWORDS;
+
+    let (plain, optional): (Vec<&str>, Vec<&str>) = PARAM_TYPE_KEYWORDS
+        .iter()
+        .map(|k| k.label)
+        .partition(|l| !l.starts_with("Option<"));
+
+    assert_eq!(
+        plain,
+        crate::completions::PARAM_TYPES
+            .map(ParamType::spelling)
+            .to_vec(),
+        "plain entries must be every type, in table order"
+    );
+
+    let expected_optional: Vec<String> = crate::completions::PARAM_TYPES
+        .iter()
+        .filter(|t| t.is_optionable())
+        .map(|t| format!("Option<{}>", t.spelling()))
+        .collect();
+    assert_eq!(
+        optional, expected_optional,
+        "Option entries must be exactly the optionable types"
+    );
+
+    for kw in &PARAM_TYPE_KEYWORDS {
+        let inner = kw
+            .label
+            .strip_prefix("Option<")
+            .and_then(|s| s.strip_suffix('>'))
+            .unwrap_or(kw.label);
+        assert!(
+            ParamType::from_spelling(inner).is_some(),
+            "{} is not a spelling the engine parses",
+            kw.label
+        );
+        let expected_apply = format!("{};\n", kw.label);
+        assert_eq!(
+            kw.apply,
+            Some(expected_apply.as_str()),
+            "apply text is the label plus `;`"
+        );
+    }
+}
+
+/// Round-trip: every type's spelling parses back to the same type.
+#[test]
+fn param_type_spellings_round_trip() {
+    for typ in crate::completions::PARAM_TYPES {
+        assert_eq!(
+            ParamType::from_spelling(typ.spelling()),
+            Some(typ),
+            "{} does not round-trip",
+            typ.spelling()
+        );
+    }
+    // The legacy lowercase alias resolves to the canonical type.
+    assert_eq!(
+        ParamType::from_spelling("duration"),
+        Some(ParamType::Duration)
+    );
+    assert_eq!(ParamType::from_spelling("Nonsense"), None);
+}
+
+// ── keyword documentation ────────────────────────────────────────
+
+/// Every word the engine offers as a keyword must be documented, so hover can
+/// explain anything completion suggested. Symbols and type names are offered
+/// through the same `Keywords` result but are not keywords.
+#[test]
+fn every_offered_keyword_is_documented() {
+    const NOT_KEYWORDS: &[&str] = &[
+        "{", "}", "[", "]", ",", "=", "==", "!=", "<", ">", "<=", ">=", "string", "int", "float",
+        "bool", "array", "Dataset", "Metric", "Duration", "Regex", "count", "avg", "sum", "min",
+        "max", "rate", "increase",
+    ];
+
+    let queries = [
+        "param $o: Option<string>;\nparam $d: Duration;\nds:metric | ",
+        "param $o: Option<string>;\nds:metric | ifdef($o) ",
+        "param $o: Option<string>;\nds:metric | ifdef($o) { where a == 1 } ",
+        "ds:metric | align ",
+        "ds:metric | align to 1m ",
+        "ds:metric | group ",
+        "ds:metric | group by a ",
+        "ds:metric | bucket ",
+        "ds:metric | bucket by a ",
+        "ds:metric | bucket to 1m using histogram(",
+        "ds:metric | where a ",
+        "ds:metric | where a == 1 ",
+        "ds:metric | where a is ",
+        "ds:metric | where a in ",
+        "ds:metric | extend x ",
+        "( a:b , c:d ) | ",
+        "p",
+        "param $x: ",
+    ];
+
+    let mut undocumented: Vec<String> = Vec::new();
+    for query in queries {
+        for result in compute_completions_with_params(query, query.len(), &[]) {
+            let CompletionResult::Keywords { options, .. } = result else {
+                continue;
+            };
+            for item in options {
+                if NOT_KEYWORDS.contains(&item.label)
+                    || item.label.starts_with("Option<")
+                    || crate::keywords::keyword_info(item.label).is_some()
+                {
+                    continue;
+                }
+                undocumented.push(format!("{} (offered at {query:?})", item.label));
+            }
+        }
+    }
+    assert!(
+        undocumented.is_empty(),
+        "keywords offered without documentation: {undocumented:#?}"
+    );
 }

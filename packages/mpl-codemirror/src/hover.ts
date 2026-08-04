@@ -1,4 +1,5 @@
 import { hoverTooltip, type EditorView, type Tooltip } from "@codemirror/view";
+import * as mpl from "@axiomhq/mpl";
 import {
   type WasmFunctionInfo,
   formatArgType,
@@ -6,86 +7,34 @@ import {
 } from "./wasm-types";
 import { mplSystemParams, type MplSystemParam } from "./system-params";
 
-interface KeywordDoc {
+/** One entry of the `declared_params` wasm result. */
+interface WasmDeclaredParam {
+  name: string;
+  type: string;
+  optional: boolean;
+}
+
+/** The `token_at` wasm result: a span plus what the token is. */
+interface WasmToken {
+  from: number;
+  to: number;
+  type: string;
+}
+
+/** The `keyword_info` wasm result. */
+interface WasmKeywordInfo {
+  label: string;
   description: string;
   syntax?: string;
 }
 
-const KEYWORD_DOCS: Record<string, KeywordDoc> = {
-  filter: {
-    description: "Filter time series by tag values",
-    syntax: "| filter <tag> == <value>",
-  },
-  where: {
-    description: "Filter time series by tag values (alias for filter)",
-    syntax: "| where <tag> == <value>",
-  },
-  map: {
-    description: "Apply a function to each data point",
-    syntax: "| map <function>",
-  },
-  group: {
-    description: "Group time series by tags and aggregate",
-    syntax: "| group by <tags> using <function>",
-  },
-  align: {
-    description: "Align time series to a regular time grid",
-    syntax: "| align to <interval> using <function>",
-  },
-  bucket: {
-    description: "Bucket time series into histogram buckets",
-    syntax: "| bucket by <tags> to <interval> using <function>(<specs>)",
-  },
-  compute: {
-    description: "Compute a new metric from two sources",
-    syntax: "| compute <metric> using <function>",
-  },
-  replace: {
-    description: "Replace tag values using string operations",
-    syntax: "| replace <tag> ~ #s/pattern/replacement/",
-  },
-  join: {
-    description: "Join two metric sources by tags",
-    syntax: "| join <tags> from <metric_id> by <tags>",
-  },
-  as: { description: "Rename the output metric", syntax: "| as <name>" },
-  extend: {
-    description:
-      "Add new constant-valued tags to every series after aggregation. Each tag must be net-new for the query — a series that already carries the tag causes the query to fail. Only constant values (strings, numbers, booleans, or scalar params) are supported.",
-    syntax: "| extend <tag> = <value>, ...",
-  },
-  set: {
-    description: "Set query directives (time range, resolution)",
-    syntax: "set <directive> = <value>;",
-  },
-  by: { description: "Specify tags for grouping, bucketing, or joining" },
-  using: { description: "Specify the function to apply" },
-  to: { description: "Specify target time interval for align or bucket" },
-  over: {
-    description: "Specify the window duration for alignment",
-    syntax: "| align to <interval> over <window> using <function>",
-  },
-  from: { description: "Specify the source metric for join" },
-  and: { description: "Logical AND in filter expressions" },
-  or: { description: "Logical OR in filter expressions" },
-  not: { description: "Logical NOT in filter expressions" },
-  ifdef: {
-    description:
-      "Conditionally apply a filter when an optional param is supplied. The body is dropped when the param is omitted; an optional `else` branch applies a different filter in that case.",
-    syntax:
-      "| ifdef($param) { where <filter-expr> } [else { where <else-filter-expr> }]",
-  },
-  else: {
-    description:
-      "Optional companion to `ifdef`: applies a filter when the gating optional param is *not* supplied. Only valid immediately after an `ifdef(...) { ... }` block.",
-    syntax: "| ifdef($param) { ... } else { where <filter-expr> }",
-  },
-  Option: {
-    description:
-      "Wraps a param type to mark it optional. Optional params can only be referenced inside an ifdef gating on them.",
-    syntax: "param $name: Option<T>;",
-  },
-};
+function keywordInfo(label: string): WasmKeywordInfo | null {
+  try {
+    return (mpl.keyword_info(label) as WasmKeywordInfo | null) ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /** A declared MPL parameter, as resolved from the document text. */
 export interface ParamDecl {
@@ -98,108 +47,39 @@ export interface ParamDecl {
   optional: boolean;
 }
 
-// Multi-line: matches each `param $name: type;` declaration in the document.
-// Lazy on the type body to stop at the first `;` (single-line declarations).
-const PARAM_LINE_RE = /^[ \t]*param[ \t]+(\$[A-Za-z_][A-Za-z0-9_]*)[ \t]*:[ \t]*([^;]+);/gm;
-const OPTION_RE = /^Option[ \t]*<[ \t]*(.+?)[ \t]*>$/;
-
 /**
- * Scans the document for `param $name: type;` declarations and returns a map
- * keyed by the dollar-prefixed name (e.g. `"$container"`).
+ * Reads the `param $name: type;` declarations out of the document, keyed by the
+ * dollar-prefixed name (e.g. `"$container"`).
  *
- * Intentionally TS-side rather than a wasm round-trip: the grammar for param
- * declarations is dead simple and stable, and a hover hint is non-critical
- * enough that drift risk is acceptable. If the param fails to compile, the
- * hover simply won't resolve — diagnostics handle the error path.
+ * Delegates to the language server rather than re-deriving the declaration
+ * grammar here, so hover, completion and diagnostics cannot disagree about what
+ * a query declares. Tolerates an unfinished query body.
  */
 export function parseParamDeclarations(doc: string): Map<string, ParamDecl> {
   const result = new Map<string, ParamDecl>();
-  const re = new RegExp(PARAM_LINE_RE.source, PARAM_LINE_RE.flags);
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(doc)) !== null) {
-    const [, name, rawType] = m;
-    const trimmed = rawType.trim();
-    const optMatch = OPTION_RE.exec(trimmed);
-    if (optMatch) {
-      result.set(name, { type: optMatch[1].trim(), optional: true });
-    } else {
-      result.set(name, { type: trimmed, optional: false });
-    }
+  let declared: WasmDeclaredParam[] | null = null;
+  try {
+    declared = (mpl.declared_params(doc) as WasmDeclaredParam[] | null) ?? null;
+  } catch {
+    // WASM not ready; no declarations to report yet.
+  }
+  for (const p of declared ?? []) {
+    result.set(`$${p.name}`, { type: p.type, optional: p.optional });
   }
   return result;
 }
 
 /**
- * Locates a `$ident` token at `pos`. The cursor may sit on the `$` itself or
- * on any character of the name. Returns the dollar-prefixed name and the
- * span covering it, or `null` when there is no param reference at the cursor.
+ * The token at `pos`, as the language server's lexer sees it. A `::`-qualified
+ * function name comes back whole, which is the name the stdlib is keyed by.
  */
-export function extractParamAt(
-  doc: string,
-  pos: number,
-): { name: string; from: number; to: number } | null {
-  if (pos < 0 || pos >= doc.length) return null;
-  const isIdChar = (c: string) => /[A-Za-z0-9_]/.test(c);
-
-  let from = pos;
-  if (doc[from] !== "$") {
-    if (!isIdChar(doc[from])) return null;
-    while (from > 0 && isIdChar(doc[from - 1])) from--;
-    if (from === 0 || doc[from - 1] !== "$") return null;
-    from--;
+function tokenAt(doc: string, pos: number): WasmToken | null {
+  try {
+    return (mpl.token_at(doc, pos) as WasmToken | null) ?? null;
+  } catch {
+    // WASM not ready.
+    return null;
   }
-
-  let to = from + 1;
-  while (to < doc.length && isIdChar(doc[to])) to++;
-
-  if (to === from + 1) return null; // bare `$` without an identifier
-  return { name: doc.slice(from, to), from, to };
-}
-
-function extractWordAt(
-  doc: string,
-  pos: number,
-): { text: string; from: number; to: number } | null {
-  if (pos < 0 || pos >= doc.length) return null;
-
-  const isIdChar = (i: number) =>
-    i >= 0 && i < doc.length && /[\w]/.test(doc[i]);
-
-  if (!isIdChar(pos)) return null;
-
-  let from = pos;
-  let to = pos + 1;
-
-  while (from > 0 && isIdChar(from - 1)) from--;
-  while (to < doc.length && isIdChar(to)) to++;
-
-  // Extend left across :: separators for qualified names (e.g. prom::rate)
-  while (from >= 2 && doc[from - 1] === ":" && doc[from - 2] === ":") {
-    let newFrom = from - 2;
-    if (newFrom > 0 && isIdChar(newFrom - 1)) {
-      newFrom--;
-      while (newFrom > 0 && isIdChar(newFrom - 1)) newFrom--;
-      from = newFrom;
-    } else {
-      break;
-    }
-  }
-
-  // Extend right across :: separators
-  while (to + 1 < doc.length && doc[to] === ":" && doc[to + 1] === ":") {
-    const newTo = to + 2;
-    if (newTo < doc.length && isIdChar(newTo)) {
-      to = newTo + 1;
-      while (to < doc.length && isIdChar(to)) to++;
-    } else {
-      break;
-    }
-  }
-
-  const text = doc.slice(from, to);
-  if (text.length === 0 || !/[a-zA-Z]/.test(text)) return null;
-
-  return { text, from, to };
 }
 
 function renderFunctionTooltip(info: WasmFunctionInfo): HTMLElement {
@@ -270,14 +150,14 @@ function renderParamTooltip(name: string, decl: ParamDecl): HTMLElement {
   return dom;
 }
 
-function renderKeywordTooltip(keyword: string, doc: KeywordDoc): HTMLElement {
+function renderKeywordTooltip(doc: WasmKeywordInfo): HTMLElement {
   const dom = document.createElement("div");
   dom.className = "mpl-hover-tooltip";
 
   const header = document.createElement("div");
   const kw = document.createElement("span");
   kw.className = "mpl-hover-keyword";
-  kw.textContent = keyword;
+  kw.textContent = doc.label;
   header.appendChild(kw);
   dom.appendChild(header);
 
@@ -303,25 +183,26 @@ function hoverSource(
 ): Tooltip | null {
   const doc = view.state.doc.toString();
 
-  // Param references take priority over the generic word path. `$ident`
-  // tokens are not picked up by `extractWordAt` (the leading `$` short-
-  // circuits its `[a-zA-Z]` guard at the end), so without this branch
-  // hovering a `$container` reference would render no tooltip at all.
-  const param = extractParamAt(doc, pos);
-  if (param) {
+  const token = tokenAt(doc, pos);
+  if (!token) return null;
+  const text = doc.slice(token.from, token.to);
+
+  // Param references take priority over the generic word path. Both lex as
+  // variables; the leading `$` is what tells a param from a tag.
+  if (text.startsWith("$")) {
     // Inline declarations override host-supplied system params on name
     // collision — same precedence the completion source enforces.
     const decls = parseParamDeclarations(doc);
     const systemParams = view.state.facet(mplSystemParams);
     mergeSystemParamsInto(decls, systemParams);
-    const decl = decls.get(param.name);
+    const decl = decls.get(text);
     if (decl) {
       return {
-        pos: param.from,
-        end: param.to,
+        pos: token.from,
+        end: token.to,
         above: true,
         create() {
-          return { dom: renderParamTooltip(param.name, decl) };
+          return { dom: renderParamTooltip(text, decl) };
         },
       };
     }
@@ -331,14 +212,11 @@ function hoverSource(
     return null;
   }
 
-  const word = extractWordAt(doc, pos);
-  if (!word) return null;
-
-  const fnInfo = getFunctionInfo(word.text);
+  const fnInfo = getFunctionInfo(text);
   if (fnInfo) {
     return {
-      pos: word.from,
-      end: word.to,
+      pos: token.from,
+      end: token.to,
       above: true,
       create() {
         return { dom: renderFunctionTooltip(fnInfo) };
@@ -346,14 +224,14 @@ function hoverSource(
     };
   }
 
-  const kwDoc = KEYWORD_DOCS[word.text];
+  const kwDoc = keywordInfo(text);
   if (kwDoc) {
     return {
-      pos: word.from,
-      end: word.to,
+      pos: token.from,
+      end: token.to,
       above: true,
       create() {
-        return { dom: renderKeywordTooltip(word.text, kwDoc) };
+        return { dom: renderKeywordTooltip(kwDoc) };
       },
     };
   }
@@ -367,7 +245,7 @@ export const mplHover = hoverTooltip(hoverSource, { hideOnChange: true });
  * Splices host-supplied system params into a declaration map produced by
  * `parseParamDeclarations`, without overwriting inline declarations that
  * share a name. Names supplied without the leading `$` are normalised so
- * the map key matches what `extractParamAt` returns from the document.
+ * the map key matches the `$name` form the token lookup returns.
  *
  * Exported for unit tests; production consumers go through `mplHover` and
  * the `mplSystemParams` facet.
