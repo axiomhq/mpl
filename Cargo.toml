@@ -42,6 +42,7 @@ panic = "abort"
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }
 clap = { version = "4", optional = true, features = ["derive"] }
+strum = { version = "0.28", features = ["derive"] }
 regex =  "1"
 thiserror = "2"
 serde_json = "1"
@@ -55,10 +56,12 @@ pest = "2.8.6"
 pest_derive = "2.8.6"
 serde_regex = "1"
 strsim = "0.11.1"
-miette = { version = "7.6.0", features = ["serde"] }
+miette = { version = "7.6", features = ["serde"] }
+rowan = "0.16"
 
 [dev-dependencies]
 test-case = "3"
+miette = { version = "7.6", features = ["fancy"] }
 
 [features]
 default = ["bincode", "clock"]

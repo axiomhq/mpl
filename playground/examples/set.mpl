@@ -1,6 +1,7 @@
 set no_arg;
 set `escaped no_arg`;
-set ident_arg = ident;
+// should we really do that? It feels wrong in the grand sceme of things
+// set ident_arg = ident;
 set bool_arg = true;
 set string_arg="Hello, World!";
 set int_arg=123;

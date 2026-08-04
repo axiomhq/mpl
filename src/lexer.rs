@@ -19,16 +19,18 @@ pub struct Token<'input> {
 /// Represents the type of a token.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum TokenType {
+    /// End of file.
+    Eof,
     /// An invalid token.
     Invalid,
+    /// A comment.
+    Comment,
     /// Whitespace.
     Whitespace,
     /// An identifier.
     Ident,
     /// An escaped identifier.
     EscapedIdent,
-    /// A comment.
-    Comment,
     /// A division operator.
     Div,
     /// A multiplication operator.
@@ -60,17 +62,17 @@ pub enum TokenType {
     /// A comma character.
     Comma,
     /// A open parenthesis `(`.
-    ParenOpen,
+    LParen,
     /// A close parenthesis `)`.
-    ParenClose,
+    RParen,
     /// A open bracket `[`.
-    BracketOpen,
+    LBracket,
     /// A close bracket `]`.
-    BracketClose,
+    RBracket,
     /// A open brace `{`.
-    BraceOpen,
+    LBrace,
     /// A close brace `}`.
-    BraceClose,
+    RBrace,
     /// A question mark `?`.
     QuestionMark,
     /// A bang `!`.
@@ -91,12 +93,25 @@ pub enum TokenType {
     DotDot,
     /// A string literal.
     String,
+    /// A string literal segment.
+    StringSegment,
     /// A bool literal value.
     Bool,
     /// A inf literal value.
     Inf,
 }
 
+impl<'input> Token<'input> {
+    #[must_use]
+    pub(crate) fn new(tpe: TokenType, text: &'input str, pos: usize) -> Self {
+        Self { tpe, text, pos }
+    }
+    /// Returns the text  of the token.
+    #[must_use]
+    pub fn text(&self) -> &'input str {
+        self.text
+    }
+}
 impl Token<'_> {
     /// Returns the start position of the token.
     #[must_use]
@@ -116,16 +131,17 @@ impl Token<'_> {
         self.pos() + self.len()
     }
 
-    /// Returns the text  of the token.
-    #[must_use]
-    pub fn text(&self) -> &str {
-        self.text
-    }
     /// Returns the type of the token.
     #[must_use]
     pub fn tpe(&self) -> TokenType {
         self.tpe
     }
+    /// returns if a token is an Eof
+    #[must_use]
+    pub fn is_eof(&self) -> bool {
+        self.tpe == TokenType::Eof
+    }
+
     /// returns if the token is invalid
     #[must_use]
     pub fn is_invalid(&self) -> bool {
@@ -135,6 +151,10 @@ impl Token<'_> {
     #[must_use]
     pub fn is_valid(&self) -> bool {
         self.tpe != TokenType::Invalid
+    }
+
+    pub(crate) fn is_trivia(&self) -> bool {
+        self.tpe == TokenType::Whitespace || self.tpe == TokenType::Comment
     }
 }
 
@@ -152,6 +172,7 @@ pub struct Lexer<'input> {
     /// the current **byte** position in the input. for substring extraction.
     pos: usize,
     state: Vec<State>,
+    eof: bool,
 }
 
 impl<'input> Lexer<'input> {
@@ -163,6 +184,7 @@ impl<'input> Lexer<'input> {
             chars: input.chars().peekable(),
             pos: 0,
             state: Vec::new(),
+            eof: false,
         }
     }
 
@@ -307,7 +329,7 @@ impl<'input> Lexer<'input> {
                 // we don't pop since we enter nested terretorry
                 self.pos += 1;
                 Token {
-                    tpe: TokenType::String,
+                    tpe: TokenType::StringSegment,
                     text: &self.input[start..self.pos],
                     pos: start,
                 }
@@ -421,36 +443,36 @@ impl<'input> Lexer<'input> {
                 pos,
             },
             '(' => Token {
-                tpe: TokenType::ParenOpen,
+                tpe: TokenType::LParen,
                 text: &self.input[pos..self.pos],
                 pos,
             },
             ')' => Token {
-                tpe: TokenType::ParenClose,
+                tpe: TokenType::RParen,
                 text: &self.input[pos..self.pos],
                 pos,
             },
             '[' => Token {
-                tpe: TokenType::BracketOpen,
+                tpe: TokenType::LBracket,
                 text: &self.input[pos..self.pos],
                 pos,
             },
             ']' => Token {
-                tpe: TokenType::BracketClose,
+                tpe: TokenType::RBracket,
                 text: &self.input[pos..self.pos],
                 pos,
             },
             '{' => {
                 self.state.push(State::BraceOpen);
                 Token {
-                    tpe: TokenType::BraceOpen,
+                    tpe: TokenType::LBrace,
                     text: &self.input[pos..self.pos],
                     pos,
                 }
             }
             '}' => match self.state.pop() {
                 Some(State::BraceOpen) | None => Token {
-                    tpe: TokenType::BraceClose,
+                    tpe: TokenType::RBrace,
                     text: &self.input[pos..self.pos],
                     pos,
                 },
@@ -623,6 +645,18 @@ impl<'input> Iterator for Lexer<'input> {
 
     #[allow(clippy::too_many_lines)]
     fn next(&mut self) -> Option<Token<'input>> {
-        self.next_token()
+        if self.eof {
+            return None;
+        }
+        if let Some(tkn) = self.next_token() {
+            Some(tkn)
+        } else {
+            self.eof = true;
+            Some(Token {
+                tpe: TokenType::Eof,
+                text: "",
+                pos: self.pos,
+            })
+        }
     }
 }
