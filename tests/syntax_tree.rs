@@ -27,7 +27,7 @@ use std::fs;
 
 use miette::{GraphicalReportHandler, GraphicalTheme, NamedSource, Report};
 use mpl_lang::lexer::Lexer;
-use mpl_lang::syntax_tree::{Lang, Parser, SyntaxError, SyntaxKind, SyntaxNode};
+use mpl_lang::syntax_tree::{Lang, Parser, SyntaxError, SyntaxKind, SyntaxNode, SyntaxTree};
 use rowan::{Language, NodeOrToken};
 use test_case::test_case;
 
@@ -62,13 +62,13 @@ fn shape(node: &SyntaxNode) -> String {
 /// dropped a token looks perfectly well-formed, so a table row that does not assert
 /// losslessness can pass while the parser is eating input.
 fn parse_clean(src: &str) -> SyntaxNode {
-    let (tree, errors) = Parser::new(src).parse();
+    let SyntaxTree { root, errors } = Parser::new(src).parse();
     assert!(
         errors.is_empty(),
         "unexpected errors for {src:?}: {errors:?}"
     );
-    assert_eq!(tree.to_string(), src, "tree does not reproduce {src:?}");
-    tree
+    assert_eq!(root.to_string(), src, "tree does not reproduce {src:?}");
+    root
 }
 
 /// Shape of the whole tree.
@@ -197,7 +197,7 @@ fn describe_error(error: &SyntaxError) -> String {
 
 /// All errors for an input, in the order the parser reported them.
 fn errors(src: &str) -> String {
-    let (_tree, errors) = Parser::new(src).parse();
+    let SyntaxTree { root: _, errors } = Parser::new(src).parse();
     errors
         .iter()
         .map(describe_error)
@@ -658,8 +658,8 @@ fn trivia_does_not_change_the_shape(src: &str) {
 #[test_case("   "                      ; "whitespace")]
 #[test_case("\n\t "                    ; "mixed whitespace")]
 fn trivia_only_input_is_kept_and_reported(src: &str) {
-    let (tree, errors) = Parser::new(src).parse();
-    assert_eq!(tree.to_string(), src, "trivia was dropped from {src:?}");
+    let SyntaxTree { root, errors } = Parser::new(src).parse();
+    assert_eq!(root.to_string(), src, "trivia was dropped from {src:?}");
     assert!(
         !errors.is_empty(),
         "{src:?} is not a query but parsed clean"
@@ -767,7 +767,7 @@ fn error_reporting(src: &str) -> String {
 #[test]
 fn time_ranges_parse() {
     for src in ["d:m[5m..]", "d:m[1..2] | group using sum"] {
-        let (_tree, errors) = Parser::new(src).parse();
+        let SyntaxTree { root: _, errors } = Parser::new(src).parse();
         assert!(errors.is_empty(), "{src:?} should parse: {errors:?}");
     }
 }
@@ -868,7 +868,7 @@ fn report(name: &str, content: &str, errors: &[SyntaxError]) -> String {
 #[test]
 fn parse_examples() {
     for (name, content) in files("./tests/examples", "mpl") {
-        let (_tree, errors) = Parser::new(&content).parse();
+        let SyntaxTree { root: _, errors } = Parser::new(&content).parse();
         assert!(
             errors.is_empty(),
             "[{name}] {}\n{errors:?}",
@@ -890,7 +890,7 @@ fn parse_examples() {
 fn unimplemented_examples_parse(name: &str) -> bool {
     let content = fs::read_to_string(format!("./tests/examples/{name}"))
         .unwrap_or_else(|e| panic!("{name} is not readable: {e}"));
-    let (_tree, errors) = Parser::new(&content).parse();
+    let SyntaxTree { root: _, errors } = Parser::new(&content).parse();
     errors.is_empty()
 }
 
@@ -913,7 +913,7 @@ fn parse_error_examples() {
     ];
 
     for (name, content) in files("./tests/errors", "mpl") {
-        let (_tree, errors) = Parser::new(&content).parse();
+        let SyntaxTree { root: _, errors } = Parser::new(&content).parse();
         if REJECTED_BY_THE_PARSER.contains(&name.as_str()) {
             assert!(!errors.is_empty(), "[{name}] expected a syntax error");
         } else {
@@ -947,8 +947,8 @@ fn parse_error_examples() {
 /// because three error paths reported a token they had not consumed and it landed in the
 /// tree twice — see `error_recovery_does_not_duplicate`.
 fn assert_lossless(src: &str) {
-    let (tree, _errors) = Parser::new(src).parse();
-    assert_eq!(tree.to_string(), src, "parse of {src:?} did not round trip");
+    let SyntaxTree { root, errors: _ } = Parser::new(src).parse();
+    assert_eq!(root.to_string(), src, "parse of {src:?} did not round trip");
 }
 
 /// Property: every token the lexer produced reaches the tree, in source order.
@@ -966,10 +966,10 @@ fn assert_lossless(src: &str) {
 /// honest — discarding the offending token instead of consuming it would satisfy
 /// `assert_lossless` on some inputs but never this.
 fn assert_no_token_is_dropped(src: &str) {
-    let (tree, _errors) = Parser::new(src).parse();
+    let SyntaxTree { root, errors: _ } = Parser::new(src).parse();
     // `any` advances the iterator, so consecutive calls match the tree's tokens in order —
     // extra tokens between two matches are skipped, which is what makes this a subsequence.
-    let mut in_tree = tree
+    let mut in_tree = root
         .descendants_with_tokens()
         .filter_map(NodeOrToken::into_token)
         .map(|token| token.text().to_string())
@@ -998,13 +998,13 @@ fn assert_no_token_is_dropped(src: &str) {
 /// against that tree has to land in the right place too. It used to return early whenever
 /// there were errors, which meant the case it exists for was the one case it skipped.
 fn assert_ranges_match_the_input(src: &str) {
-    let (tree, _errors) = Parser::new(src).parse();
+    let SyntaxTree { root, errors: _ } = Parser::new(src).parse();
     assert_eq!(
-        usize::from(tree.text_range().end()),
+        usize::from(root.text_range().end()),
         src.len(),
         "root range does not cover {src:?}"
     );
-    for node in tree.descendants() {
+    for node in root.descendants() {
         let range = node.text_range();
         let (start, end) = (usize::from(range.start()), usize::from(range.end()));
         assert!(
@@ -1036,8 +1036,8 @@ fn assert_ranges_match_the_input(src: &str) {
 /// and round-trips, and only breaks whichever consumer matches on kinds — which is all of
 /// them.
 fn assert_kind_discipline(src: &str) {
-    let (tree, _errors) = Parser::new(src).parse();
-    for node in tree.descendants() {
+    let SyntaxTree { root, errors: _ } = Parser::new(src).parse();
+    for node in root.descendants() {
         assert!(
             !is_lexer_kind(node.kind()),
             "node has the token kind {:?} in {src:?}",
@@ -1069,7 +1069,7 @@ fn is_lexer_kind(kind: SyntaxKind) -> bool {
 /// turns a syntax error into a crash in the language server. Truncated input is where the
 /// risk lives, since the end-of-input token is synthesised at `input.len()`.
 fn assert_spans_are_in_bounds(src: &str) {
-    let (_tree, errors) = Parser::new(src).parse();
+    let SyntaxTree { root: _, errors } = Parser::new(src).parse();
     for error in &errors {
         let range = match error {
             SyntaxError::Eof { .. } => continue,
@@ -1097,7 +1097,7 @@ fn assert_spans_are_in_bounds(src: &str) {
 /// end of the query reports one — and the point of the bound is to catch growth that is not
 /// linear at all, not to pin that constant.
 fn assert_errors_are_bounded(src: &str) {
-    let (_tree, errors) = Parser::new(src).parse();
+    let SyntaxTree { root: _, errors } = Parser::new(src).parse();
     assert!(
         errors.len() <= 32 * src.len() + 32,
         "{} errors for {} bytes of input {src:?}",
@@ -1193,8 +1193,8 @@ fn kind_from_raw_rejects_values_past_root() {
 #[test]
 fn kinds_in_real_trees_round_trip() {
     for (_name, content) in files("./tests/examples", "mpl") {
-        let (tree, _errors) = Parser::new(&content).parse();
-        for element in tree.descendants_with_tokens() {
+        let SyntaxTree { root, errors: _ } = Parser::new(&content).parse();
+        for element in root.descendants_with_tokens() {
             let kind = element.kind();
             assert_eq!(
                 Lang::kind_from_raw(Lang::kind_to_raw(kind)),
@@ -1517,15 +1517,15 @@ fn generated_queries_parse_cleanly() {
     let mut seen = Vec::new();
     for _ in 0..2000 {
         let src = gen_program(&mut rng);
-        let (tree, errors) = Parser::new(&src).parse();
+        let SyntaxTree { root, errors } = Parser::new(&src).parse();
         assert!(
             errors.is_empty(),
             "generated query failed: {src:?}\n{errors:?}"
         );
-        assert_eq!(tree.to_string(), src, "generated query did not round trip");
+        assert_eq!(root.to_string(), src, "generated query did not round trip");
         assert_ranges_match_the_input(&src);
         assert_kind_discipline(&src);
-        for element in tree.descendants_with_tokens() {
+        for element in root.descendants_with_tokens() {
             let kind = element.kind();
             if !seen.contains(&kind) {
                 seen.push(kind);
@@ -1655,7 +1655,7 @@ fn arrays_parse_in_constant_position() {
         "d:m | where a in [[1], [2]]",
         "d:m | extend a = \"${ [1] }\"",
     ] {
-        let (_tree, errors) = Parser::new(src).parse();
+        let SyntaxTree { root: _, errors } = Parser::new(src).parse();
         assert!(errors.is_empty(), "{src:?} should parse: {errors:?}");
     }
 }
@@ -1671,7 +1671,7 @@ fn arrays_parse_in_constant_position() {
 #[test]
 fn extend_swallows_the_comma_of_a_compute_query() {
     let ambiguous = "(a:b | extend x = 1, c:d) | compute y using sum";
-    let (_tree, errors) = Parser::new(ambiguous).parse();
+    let SyntaxTree { root: _, errors } = Parser::new(ambiguous).parse();
     assert!(
         !errors.is_empty(),
         "the ambiguity appears to have been resolved"
@@ -1698,10 +1698,10 @@ fn extend_swallows_the_comma_of_a_compute_query() {
 #[test]
 fn error_recovery_is_lossless() {
     for src in ["d:m | fflter a == 1", "param $p: nonsense; d:m"] {
-        let (tree, errors) = Parser::new(src).parse();
+        let SyntaxTree { root, errors } = Parser::new(src).parse();
         assert!(!errors.is_empty(), "{src:?} was expected to fail");
         assert_eq!(
-            tree.to_string(),
+            root.to_string(),
             src,
             "{src:?} lost text during error recovery"
         );
@@ -1739,10 +1739,10 @@ fn error_recovery_does_not_duplicate() {
         "d:m | bucket using histogram(1)",
         "d:m | where a is nonsense",
     ] {
-        let (tree, errors) = Parser::new(src).parse();
+        let SyntaxTree { root, errors } = Parser::new(src).parse();
         assert!(!errors.is_empty(), "{src:?} was expected to fail");
         assert_eq!(
-            tree.to_string(),
+            root.to_string(),
             src,
             "{src:?} duplicated a token during recovery"
         );
@@ -1788,7 +1788,7 @@ fn nest(shape: &str, n: usize) -> String {
 fn is_rejected(shape: &str, cap: Option<usize>, n: usize) -> bool {
     let src = nest(shape, n);
     let parser = Parser::new(&src);
-    let (_tree, errors) = match cap {
+    let SyntaxTree { root: _, errors } = match cap {
         Some(cap) => parser.with_tree_depth(cap),
         None => parser,
     }
@@ -1883,13 +1883,13 @@ fn with_tree_depth_moves_the_cap() {
 #[test_case("query"  ; "query")]
 fn tripping_the_cap_keeps_every_property(shape: &str) {
     let src = nest(shape, 60);
-    let (tree, errors) = Parser::new(&src).with_tree_depth(20).parse();
+    let SyntaxTree { root, errors } = Parser::new(&src).with_tree_depth(20).parse();
     assert!(
         !errors.is_empty(),
         "{shape} at 60 levels did not trip a cap of 20"
     );
     assert_eq!(
-        tree.to_string(),
+        root.to_string(),
         src,
         "{shape} lost or duplicated text when the cap tripped"
     );
@@ -1911,9 +1911,9 @@ fn tripping_the_cap_keeps_every_property(shape: &str) {
 #[test_case("string" ; "string")]
 fn nesting_that_used_to_overflow_the_stack_now_returns(shape: &str) {
     let src = nest(shape, 5000);
-    let (tree, errors) = Parser::new(&src).parse();
+    let SyntaxTree { root, errors } = Parser::new(&src).parse();
     assert!(!errors.is_empty(), "{shape} at 5000 levels parsed clean");
-    assert_eq!(tree.to_string(), src, "{shape} lost text at 5000 levels");
+    assert_eq!(root.to_string(), src, "{shape} lost text at 5000 levels");
 }
 
 /// The default has to leave room for `rowan`'s destructor, which recurses too.

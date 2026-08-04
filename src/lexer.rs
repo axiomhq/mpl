@@ -97,6 +97,8 @@ pub enum TokenType {
     StringSegment,
     /// A bool literal value.
     Bool,
+    /// A null literal value.
+    Null,
     /// A inf literal value.
     Inf,
 }
@@ -408,6 +410,12 @@ impl<'input> Lexer<'input> {
                 text: ident,
                 pos: start,
             },
+            "null" => Token {
+                tpe: TokenType::Null,
+                text: ident,
+                pos: start,
+            },
+
             other => Token {
                 tpe: TokenType::Ident,
                 text: other,

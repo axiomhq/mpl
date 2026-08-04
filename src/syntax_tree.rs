@@ -101,6 +101,7 @@ pub enum SyntaxKind {
     LX_STRING,
     LX_STRING_SEGMENT,
     LX_BOOL,
+    LX_NULL,
     LX_INF,
 
     IDENT,
@@ -129,6 +130,7 @@ pub enum SyntaxKind {
     INTEGER,
     FLOAT,
     BOOL,
+    NULL,
     STRING,
     ARRAY,
     TAG_LIST,
@@ -158,6 +160,26 @@ pub enum SyntaxKind {
     THIS_SHOULD_NEVER_BE_EMITTED_GOD_DAMN_IT,
     // IMPORTANT! THIS NEEDS TO BE LAST!!!
     ROOT,
+}
+#[allow(clippy::enum_glob_use)]
+use SyntaxKind::*;
+
+impl SyntaxKind {
+    /// Returns `true` if the kind is a trivia token (comment, whitespace, or invalid).
+    #[must_use]
+    pub fn is_trivia(self) -> bool {
+        matches!(
+            self,
+            SyntaxKind::LX_COMMENT
+                | SyntaxKind::LX_WHITESPACE
+                | SyntaxKind::LX_INVALID
+                | SyntaxKind::LX_SEMI_COLON
+                | SyntaxKind::INVALID
+                | SyntaxKind::GARBAGE
+                | SyntaxKind::THIS_SHOULD_NEVER_BE_EMITTED_GOD_DAMN_IT
+                | SyntaxKind::ROOT
+        )
+    }
 }
 
 impl Token<'_> {
@@ -202,6 +224,7 @@ impl Token<'_> {
             TokenType::String => LX_STRING,
             TokenType::StringSegment => LX_STRING_SEGMENT,
             TokenType::Bool => LX_BOOL,
+            TokenType::Null => LX_NULL,
             TokenType::Inf => LX_INF,
         }
     }
@@ -212,9 +235,6 @@ impl From<SyntaxKind> for rowan::SyntaxKind {
         Self(kind as u16)
     }
 }
-
-#[allow(clippy::enum_glob_use)]
-use SyntaxKind::*;
 
 /// Parser for the MPL language syntax tree.
 pub struct Parser<'input> {
@@ -400,11 +420,18 @@ impl<'input> Parser<'input> {
     }
 }
 
+/// Represents a parsed syntax tree.
+pub struct SyntaxTree {
+    /// root node
+    pub root: SyntaxNode,
+    /// errors encountered during parsing
+    pub errors: Vec<SyntaxError>,
+}
 /// Grammar
 impl Parser<'_> {
     /// Parses the input and returns the syntax tree.
     #[must_use]
-    pub fn parse(mut self) -> (SyntaxNode, Vec<SyntaxError>) {
+    pub fn parse(mut self) -> SyntaxTree {
         self.node(ROOT, |s| {
             s.eat_trivia();
             while s.is_keyword("set") {
@@ -435,7 +462,10 @@ impl Parser<'_> {
                 });
             }
         });
-        (SyntaxNode::new_root(self.builder.finish()), self.errors)
+        SyntaxTree {
+            root: SyntaxNode::new_root(self.builder.finish()),
+            errors: self.errors,
+        }
     }
 
     fn query(&mut self) {
@@ -545,6 +575,9 @@ impl Parser<'_> {
     fn bool(&mut self) {
         self.node(BOOL, |s| s.eat_token_type(TokenType::Bool));
     }
+    fn null(&mut self) {
+        self.node(NULL, |s| s.eat_token_type(TokenType::Null));
+    }
 
     fn constant(&mut self) {
         self.node(CONST, |s| {
@@ -558,6 +591,7 @@ impl Parser<'_> {
                 TokenType::Float => s.float(),
                 TokenType::Integer => s.integer(),
                 TokenType::Bool => s.bool(),
+                TokenType::Null => s.null(),
                 TokenType::String | TokenType::StringSegment => s.string(),
                 TokenType::LBracket => s.array(),
                 _ => s.error("expected constant"),
@@ -1033,9 +1067,9 @@ mod tests {
             set b;
             a:b
             ";
-        let (tree, errors) = Parser::new(input).parse();
-        dbg!(&tree, &errors);
-        assert_eq!(input, tree.to_string());
+        let SyntaxTree { root, errors } = Parser::new(input).parse();
+        dbg!(&root, &errors);
+        assert_eq!(input, root.to_string());
 
         assert!(errors.is_empty());
     }
