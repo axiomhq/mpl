@@ -72,6 +72,22 @@ pub enum ParserError {
         #[label("invalid integer constant")]
         span: SourceSpan,
     },
+    /// The float constant is not a valid float.
+    #[error("invalid float constant")]
+    #[diagnostic(code(mpl_lang::invalid_float_constant))]
+    InvalidFloatConstant {
+        /// The source span of the invalid float constant.
+        #[label("invalid float constant")]
+        span: SourceSpan,
+    },
+    /// The bool constant is not a valid bool.
+    #[error("invalid bool constant")]
+    #[diagnostic(code(mpl_lang::invalid_bool_constant))]
+    InvalidBoolConstant {
+        /// The source span of the invalid bool constant.
+        #[label("invalid bool constant")]
+        span: SourceSpan,
+    },
 }
 
 // NOTE: This error isn't user facing it's just for internal aborts.
@@ -184,19 +200,6 @@ impl Parser {
         }
     }
 
-    // fn assert_types(&mut self, node: &SyntaxNode, expected: &'static [SyntaxKind]) -> Result<()> {
-    //     let matches = expected.contains(&node.kind());
-    //     if matches {
-    //         Ok(())
-    //     } else {
-    //         self.errors.push(ParserError::UnexpectedSyntaxRule {
-    //             expected,
-    //             found: node.kind(),
-    //             range: range_to_span(node.text_range()),
-    //         });
-    //         Err(Error {})
-    //     }
-    // }
     fn assert_type(&mut self, node: &SyntaxNode, expected: SyntaxKind) -> Result<()> {
         if node.kind() == expected {
             Ok(())
@@ -219,7 +222,7 @@ impl Parser {
     }
     fn parse_query(&mut self, node: &SyntaxNode) -> Result<()> {
         self.assert_type(node, SyntaxKind::QUERY)?;
-        // self.assert_end(children);
+        // todo: self.assert_end(children);
         Ok(())
     }
 
@@ -262,13 +265,20 @@ impl Parser {
 
     fn parse_bool(&mut self, node: &SyntaxNode) -> Result<TagValue> {
         self.assert_type(node, SyntaxKind::BOOL)?;
-        // self.assert_end(children);
-        todo!()
+        let value = self.token_of_type(node, SyntaxKind::LX_BOOL)?;
+        match value.as_str() {
+            "true" => Ok(TagValue::Bool(true)),
+            "false" => Ok(TagValue::Bool(false)),
+            _ => {
+                self.errors
+                    .push(ParserError::InvalidBoolConstant { span: node.span() });
+                Err(Error("unexpected syntax"))
+            }
+        }
     }
 
     fn parse_null(&mut self, node: &SyntaxNode) -> Result<TagValue> {
         self.assert_type(node, SyntaxKind::NULL)?;
-        // self.assert_end(children);
         Ok(TagValue::Null)
     }
 
@@ -299,7 +309,6 @@ impl Parser {
     fn parse_integer(&mut self, node: &SyntaxNode) -> Result<TagValue> {
         self.assert_type(node, SyntaxKind::INTEGER)?;
         let value = self.token_of_type(node, SyntaxKind::LX_INTEGER)?;
-        dbg!(node);
         if let Ok(value) = value.parse::<i64>() {
             Ok(TagValue::Int(value))
         } else {
@@ -311,8 +320,36 @@ impl Parser {
 
     fn parse_float(&mut self, node: &SyntaxNode) -> Result<TagValue> {
         self.assert_type(node, SyntaxKind::FLOAT)?;
-        // self.assert_end(children);
-        todo!()
+        let mut children = node.children_with_tokens();
+        let r = match children.n() {
+            Some(token) if token.kind() == SyntaxKind::LX_FLOAT => {
+                if let Ok(value) = token.token_string().parse::<f64>() {
+                    Ok(TagValue::Float(value))
+                } else {
+                    self.errors
+                        .push(ParserError::InvalidFloatConstant { span: node.span() });
+                    Err(Error("invalid integer"))
+                }
+            }
+            Some(token) if token.kind() == SyntaxKind::LX_INF => Ok(TagValue::Float(f64::INFINITY)),
+            Some(token) => {
+                self.errors.push(ParserError::UnexpectedSyntaxRule {
+                    expected: &[SyntaxKind::LX_FLOAT, SyntaxKind::LX_INF],
+                    found: token.kind(),
+                    span: token.span(),
+                });
+                Err(Error("token of wrong type"))
+            }
+            _ => {
+                self.errors.push(ParserError::MissingToken {
+                    expected: SyntaxKind::LX_FLOAT,
+                    span: node.span(),
+                });
+                Err(Error("missing token"))
+            }
+        };
+        self.assert_end(children);
+        r
     }
 
     fn parse_string(&mut self, node: &SyntaxNode) -> Result<TagValue> {
@@ -469,6 +506,7 @@ mod tests {
             // test
             set a = 43;
             set b;
+            set c = 1.2;
             a:b
             ";
         let mut parser = Parser::new(input);
