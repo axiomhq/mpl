@@ -390,6 +390,8 @@ pub enum TerminalParamType {
     Dataset,
     /// Regex
     Regex,
+    // /// Timestamp
+    // Timestamp,
     /// A tag value type
     Tag(TagType),
 }

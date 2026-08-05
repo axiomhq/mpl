@@ -1,6 +1,6 @@
 use std::{fmt::Display, iter::Peekable};
 
-use miette::{Diagnostic, SourceSpan};
+use miette::{Diagnostic, MietteDiagnostic, SourceSpan};
 use rowan::GreenNodeBuilder;
 use strum::VariantArray;
 
@@ -37,6 +37,19 @@ pub enum SyntaxError {
         #[label("{message}")]
         range: SourceSpan,
     },
+}
+impl SyntaxError {
+    /// Converts this error into a [`MietteDiagnostic`].
+    pub fn to_diagnostic(&self) -> MietteDiagnostic {
+        MietteDiagnostic {
+            message: self.to_string(),
+            code: self.code().map(|code| code.to_string()),
+            severity: self.severity(),
+            help: self.help().map(|help| help.to_string()),
+            url: self.url().map(|url| url.to_string()),
+            labels: self.labels().map(Iterator::collect),
+        }
+    }
 }
 /// The language definition for the MPL language syntax tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -123,6 +136,8 @@ pub enum SyntaxKind {
     DURATION,
     TIME_UNIT,
     OTEL_TYPE,
+    MPL_TYPE,
+    OPTION_TYPE,
 
     EXPR,
     REGEX,
@@ -716,7 +731,7 @@ impl Parser<'_> {
     }
 
     fn variable_type(&mut self) {
-        self.rnode(TYPE, |s| {
+        self.node(TYPE, |s| {
             let token = s.next();
             if token.tpe() != TokenType::Ident {
                 s.error_token(
@@ -730,24 +745,25 @@ impl Parser<'_> {
                 return;
             }
             match token.text() {
-             // built-in type
-            "string" | "int" | "float" | "bool" | "array" |
-            // custom type
-            "Dataset" | "Duration" | "duration" | "Regex" =>
-                s.token(token),
-            "Option" => {
-                s.token(token);
-                s.structural(TokenType::LessThan);
-                s.variable_type();
-                s.structural(TokenType::GreaterThan);
+                // built-in type
+                "string" | "int" | "float" | "bool" | "array" | "null" => {
+                    s.node(OTEL_TYPE, |s| s.token(token));
+                }
+
+                // custom type
+                "Dataset" | "Duration" | "Regex" | "Timestamp" => {
+                    s.node(MPL_TYPE, |s| s.token(token));
+                }
+                "Option" => s.rnode(OPTION_TYPE, |s| {
+                    s.token(token);
+                    s.structural(TokenType::LessThan);
+                    s.variable_type();
+                    s.structural(TokenType::GreaterThan);
+                }),
+                _ => {
+                    s.error_token(token, format!("unknown type {}", token.text()));
+                }
             }
-            _ => {
-                s.error_token(
-                    token,
-                    format!("unknown type {}", token.text()),
-                );
-            }
-        }
         });
     }
 
@@ -1045,7 +1061,10 @@ impl Parser<'_> {
         self.node(OTEL_TYPE, |s| {
             let tkn = s.peek();
             if tkn.tpe() == TokenType::Ident
-                && matches!(tkn.text(), "string" | "int" | "float" | "bool" | "array")
+                && matches!(
+                    tkn.text(),
+                    "string" | "int" | "float" | "bool" | "array" | "null"
+                )
             {
                 s.ident();
             } else {

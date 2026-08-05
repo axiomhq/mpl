@@ -1,11 +1,11 @@
 #![allow(dead_code)]
-use miette::{Diagnostic, SourceSpan};
+use miette::{Diagnostic, MietteDiagnostic, SourceSpan};
 use rowan::{NodeOrToken, SyntaxElementChildren, SyntaxNodeChildren, SyntaxToken};
 
 use crate::{
     Query, STDLIB,
     linker::Module,
-    query::ParamType,
+    query::{ParamType, TagType, TerminalParamType},
     syntax_tree::{self, Lang, SyntaxError, SyntaxKind, SyntaxNode, SyntaxTree},
     tags::TagValue,
 };
@@ -20,7 +20,11 @@ pub enum ParserError {
     /// Not implemented.
     #[error("not implemented")]
     #[diagnostic(code(mpl_lang::not_implemented))]
-    NotImplemented,
+    NotImplemented {
+        /// The range of the not implemented node.
+        #[label("not implemented")]
+        span: SourceSpan,
+    },
     /// Expected a syntax rule but found something else.
     #[error("unexpected syntax rule")]
     #[diagnostic(code(mpl_lang::unexpected_syntax_rule))]
@@ -88,6 +92,53 @@ pub enum ParserError {
         #[label("invalid bool constant")]
         span: SourceSpan,
     },
+    /// The keyword is not the expected keyword.
+    #[error("unexpected keyword")]
+    #[diagnostic(code(mpl_lang::unexpected_keyword))]
+    UnexpectedKeyword {
+        /// The expected keyword.
+        expected: &'static str,
+        /// The found keyword.
+        found: String,
+        /// The source span of the found keyword.
+        #[label("unexpected keyword {found} expected {expected}")]
+        span: SourceSpan,
+    },
+    /// The MPL type is not a valid MPL type.
+    #[error("invalid MPL type")]
+    #[diagnostic(code(mpl_lang::invalid_mpl_type))]
+    InvalidType {
+        /// The source span of the invalid MPL type.
+        #[label("invalid MPL type: {t}")]
+        span: SourceSpan,
+        /// The invalid MPL type.
+        t: String,
+    },
+    /// Nested option types are not supported.
+    #[error("nested option types are not supported")]
+    #[diagnostic(code(mpl_lang::nested_option_types))]
+    NestedOption {
+        /// The source span of the invalid MPL type.
+        #[label("nested option types are not supported")]
+        span: SourceSpan,
+    },
+}
+impl ParserError {
+    /// Converts this error into a [`MietteDiagnostic`].
+    fn to_diagnostic(&self) -> MietteDiagnostic {
+        if let ParserError::InvalidSyntax(error) = self {
+            error.to_diagnostic()
+        } else {
+            MietteDiagnostic {
+                message: self.to_string(),
+                code: self.code().map(|code| code.to_string()),
+                severity: self.severity(),
+                help: self.help().map(|help| help.to_string()),
+                url: self.url().map(|url| url.to_string()),
+                labels: self.labels().map(Iterator::collect),
+            }
+        }
+    }
 }
 
 // NOTE: This error isn't user facing it's just for internal aborts.
@@ -258,6 +309,35 @@ impl Parser {
         self.ident_body(node)
     }
 
+    fn variable(&mut self, node: &SyntaxNode) -> Result<String> {
+        self.assert_type(node, SyntaxKind::VARIABLE)?;
+        let mut children = node.children_with_tokens();
+        let Some(node) = children.n() else {
+            self.errors.push(ParserError::MissingToken {
+                expected: SyntaxKind::LX_VARIABLE,
+                span: node.span(),
+            });
+            return Err(Error("missing token"));
+        };
+        let r = match node.kind() {
+            SyntaxKind::LX_VARIABLE => node.token_string(),
+            SyntaxKind::LX_ESCAPED_VARIABLE => {
+                // FIXME: unescape
+                node.token_string()
+            }
+            _ => {
+                self.errors.push(ParserError::UnexpectedSyntaxRule {
+                    expected: &[SyntaxKind::LX_VARIABLE, SyntaxKind::LX_ESCAPED_VARIABLE],
+                    found: node.kind(),
+                    span: node.span(),
+                });
+                return Err(Error("unexpected syntax"));
+            }
+        };
+        self.assert_end(children);
+        Ok(r)
+    }
+
     fn kw(&mut self, node: &SyntaxNode) -> Result<String> {
         self.assert_type(node, SyntaxKind::KEYWORD)?;
         self.ident_body(node)
@@ -354,12 +434,16 @@ impl Parser {
 
     fn parse_string(&mut self, node: &SyntaxNode) -> Result<TagValue> {
         self.assert_type(node, SyntaxKind::STRING)?;
+        self.errors
+            .push(ParserError::NotImplemented { span: node.span() });
         // self.assert_end(children);
         todo!()
     }
 
     fn parse_array(&mut self, node: &SyntaxNode) -> Result<TagValue> {
         self.assert_type(node, SyntaxKind::ARRAY)?;
+        self.errors
+            .push(ParserError::NotImplemented { span: node.span() });
         // self.assert_end(children);
         todo!()
     }
@@ -396,28 +480,160 @@ impl Parser {
         r
     }
 
-    fn parse_param(&mut self, node: &SyntaxNode) -> Result<Param> {
-        self.assert_type(node, SyntaxKind::PARAM)?;
-        // self.assert_end(children);
-        Err(Error("param not implemented"))
+    fn check_kw(
+        &mut self,
+        n: &SyntaxNode,
+        expected: &'static str,
+        children: &mut SyntaxNodeChildren<Lang>,
+    ) -> Result<()> {
+        if let Some(c) = children.n() {
+            let found = self.kw(&c)?;
+            if found == expected {
+                Ok(())
+            } else {
+                self.errors.push(ParserError::UnexpectedKeyword {
+                    expected,
+                    found,
+                    span: c.span(),
+                });
+                Err(Error("unexpected syntax"))
+            }
+        } else {
+            self.errors.push(ParserError::MissingToken {
+                expected: SyntaxKind::KEYWORD,
+                span: n.span(),
+            });
+            Err(Error("missing token"))
+        }
     }
 
-    fn parse_directive(&mut self, node: &SyntaxNode) -> Result<Directive> {
-        self.assert_type(node, SyntaxKind::DIRECTIVE)?;
-        let mut children = node.children();
+    fn require_ident(
+        &mut self,
+        node: &SyntaxNode,
+        children: &mut SyntaxNodeChildren<Lang>,
+    ) -> Result<String> {
         if let Some(c) = children.n() {
-            let kw = self.kw(&c)?;
-            assert_eq!(kw, "set");
-        }
-        let name = if let Some(c) = children.n() {
-            self.ident(&c)?
+            Ok(self.ident(&c)?)
         } else {
             self.errors.push(ParserError::MissingToken {
                 expected: SyntaxKind::IDENT,
                 span: node.span(),
             });
-            return Err(Error("missing token"));
+            Err(Error("missing token"))
+        }
+    }
+
+    fn require_variable(
+        &mut self,
+        node: &SyntaxNode,
+        children: &mut SyntaxNodeChildren<Lang>,
+    ) -> Result<String> {
+        if let Some(c) = children.n() {
+            Ok(self.variable(&c)?)
+        } else {
+            self.errors.push(ParserError::MissingToken {
+                expected: SyntaxKind::VARIABLE,
+                span: node.span(),
+            });
+            Err(Error("missing token"))
+        }
+    }
+
+    fn parse_type(&mut self, node: &SyntaxNode) -> Result<ParamType> {
+        self.assert_type(node, SyntaxKind::TYPE)?;
+        let mut children = node.children();
+        match children.n() {
+            Some(c) if c.kind() == SyntaxKind::OTEL_TYPE => {
+                let t = c.token_string();
+                match t.as_str() {
+                    "int" => Ok(ParamType::Terminal(TerminalParamType::Tag(TagType::Int))),
+                    "float" => Ok(ParamType::Terminal(TerminalParamType::Tag(TagType::Float))),
+                    "bool" => Ok(ParamType::Terminal(TerminalParamType::Tag(TagType::Bool))),
+                    "string" => Ok(ParamType::Terminal(TerminalParamType::Tag(TagType::String))),
+                    "array" => Ok(ParamType::Terminal(TerminalParamType::Tag(TagType::Array))),
+                    _ => {
+                        self.errors.push(ParserError::InvalidType {
+                            span: node.span(),
+                            t,
+                        });
+                        Err(Error("invalid type"))
+                    }
+                }
+            }
+            Some(c) if c.kind() == SyntaxKind::MPL_TYPE => {
+                let t = c.token_string();
+                match t.as_str() {
+                    "Dataset" => Ok(ParamType::Terminal(TerminalParamType::Dataset)),
+                    "Duration" => Ok(ParamType::Terminal(TerminalParamType::Duration)),
+                    "Regex" => Ok(ParamType::Terminal(TerminalParamType::Regex)),
+                    // "Timestamp" => Ok(ParamType::Terminal(TerminalParamType::Timestamp)),
+                    _ => {
+                        self.errors.push(ParserError::InvalidType {
+                            span: node.span(),
+                            t,
+                        });
+                        Err(Error("invalid type"))
+                    }
+                }
+            }
+            Some(c) if c.kind() == SyntaxKind::OPTION_TYPE => {
+                let mut children = c.children();
+                let Some(inner) = children.n() else {
+                    self.errors.push(ParserError::MissingToken {
+                        expected: SyntaxKind::TYPE,
+                        span: node.span(),
+                    });
+                    return Err(Error("invalid option type"));
+                };
+                let ParamType::Terminal(inner) = self.parse_type(&inner)? else {
+                    self.errors
+                        .push(ParserError::NestedOption { span: inner.span() });
+                    return Err(Error("invalid option type"));
+                };
+                Ok(ParamType::Optional(inner))
+            }
+            Some(c) => {
+                self.errors.push(ParserError::InvalidType {
+                    span: node.span(),
+                    t: c.token_string(),
+                });
+                Err(Error("invalid type"))
+            }
+            None => {
+                self.errors.push(ParserError::MissingToken {
+                    expected: SyntaxKind::TYPE,
+                    span: node.span(),
+                });
+                Err(Error("missing token"))
+            }
+        }
+    }
+
+    fn parse_param(&mut self, node: &SyntaxNode) -> Result<Param> {
+        self.assert_type(node, SyntaxKind::PARAM)?;
+        let mut children = node.children();
+        self.check_kw(node, "param", &mut children)?;
+
+        let name = self.require_variable(node, &mut children)?;
+
+        let ty = if let Some(c) = children.n() {
+            self.parse_type(&c)?
+        } else {
+            self.errors.push(ParserError::MissingToken {
+                expected: SyntaxKind::TYPE,
+                span: node.span(),
+            });
+            return Err(Error("missing type"));
         };
+        // self.assert_end(children);
+        Ok(Param { name, ty })
+    }
+
+    fn parse_directive(&mut self, node: &SyntaxNode) -> Result<Directive> {
+        self.assert_type(node, SyntaxKind::DIRECTIVE)?;
+        let mut children = node.children();
+        self.check_kw(node, "set", &mut children)?;
+        let name = self.require_ident(node, &mut children)?;
 
         let value = if let Some(c) = children.n() {
             Some(self.constant(&c)?)
@@ -466,7 +682,7 @@ impl Parser {
 #[cfg(test)]
 mod tests {
 
-    use miette::{GraphicalReportHandler, GraphicalTheme, MietteDiagnostic, NamedSource, Report};
+    use miette::{GraphicalReportHandler, GraphicalTheme, NamedSource, Report};
 
     use super::*;
 
@@ -476,16 +692,7 @@ mod tests {
         let handler = GraphicalReportHandler::new_themed(GraphicalTheme::unicode());
         let mut out = String::new();
         for error in errors {
-            // `Report` needs to own its diagnostic, so copy the derived spans and codes across;
-            // the labels are what let the handler slice a snippet out of the source.
-            let diagnostic = MietteDiagnostic {
-                message: error.to_string(),
-                code: error.code().map(|code| code.to_string()),
-                severity: error.severity(),
-                help: error.help().map(|help| help.to_string()),
-                url: error.url().map(|url| url.to_string()),
-                labels: error.labels().map(Iterator::collect),
-            };
+            let diagnostic = error.to_diagnostic();
             let report = Report::new(diagnostic)
                 .with_source_code(NamedSource::new(name, content.to_string()));
             let mut rendered = String::new();
@@ -507,6 +714,8 @@ mod tests {
             set a = 43;
             set b;
             set c = 1.2;
+            param $test: string;
+            param $test2: Option<string>;
             a:b
             ";
         let mut parser = Parser::new(input);
