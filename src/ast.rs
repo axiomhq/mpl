@@ -1,12 +1,15 @@
+#![allow(dead_code)]
 use miette::{Diagnostic, SourceSpan};
-use rowan::{SyntaxNodeChildren, TextRange};
+use rowan::{NodeOrToken, SyntaxElementChildren, SyntaxNodeChildren, SyntaxToken};
 
 use crate::{
     Query, STDLIB,
     linker::Module,
+    query::ParamType,
     syntax_tree::{self, Lang, SyntaxError, SyntaxKind, SyntaxNode, SyntaxTree},
     tags::TagValue,
 };
+
 #[derive(thiserror::Error, Debug, Diagnostic)]
 /// Represents a parser error.
 pub enum ParserError {
@@ -28,7 +31,7 @@ pub enum ParserError {
         found: SyntaxKind,
         /// The source span of the unexpected syntax rule.
         #[label("Unexpected syntax rule {found:?}, expected one of {expected:?}")]
-        range: SourceSpan,
+        span: SourceSpan,
     },
     /// Expected a syntax rule but found something else.
     #[error("unexpected syntax rule")]
@@ -40,39 +43,63 @@ pub enum ParserError {
         found: SyntaxKind,
         /// The source span of the unexpected syntax rule.
         #[label("Unexpected syntax rule {found:?}, expected {expected:?}")]
-        range: SourceSpan,
+        span: SourceSpan,
     },
 
-    /// Errors were encountered during parsing.
-    #[error("errors encountered")]
-    #[diagnostic(code(mpl_lang::errors_encountered))]
-    ErrorsEncountered,
     /// Garbage at the end a rule.
     #[error("garbage at end of input")]
     #[diagnostic(code(mpl_lang::garbage_at_end))]
     GarbageAtEndOfRule {
         /// The source span of the garbage.
         #[label("garbage at end of rule")]
-        range: SourceSpan,
+        span: SourceSpan,
     },
     /// Garbage at the end a rule.
-    #[error("garbage at end of input")]
+    #[error("Expected token of kind {expected:?} but it's missing")]
     #[diagnostic(code(mpl_lang::garbage_at_end))]
     MissingToken {
         /// The expected syntax kind
         expected: SyntaxKind,
         /// The source span of the garbage.
         #[label("missing token of kind {expected:?}")]
-        range: SourceSpan,
+        span: SourceSpan,
+    },
+    /// The integer constant is not a valid integer.
+    #[error("invalid integer constant")]
+    #[diagnostic(code(mpl_lang::invalid_integer_constant))]
+    InvalidIntegerConstant {
+        /// The source span of the invalid integer constant.
+        #[label("invalid integer constant")]
+        span: SourceSpan,
     },
 }
 
+// NOTE: This error isn't user facing it's just for internal aborts.
 /// Represents a parser error.
 #[derive(Debug)]
-pub struct Error {}
+pub struct Error(&'static str);
 
 /// AST parser result type.
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug)]
+struct Param {
+    name: String,
+    ty: ParamType,
+}
+
+#[derive(Debug, Clone)]
+struct Directive {
+    name: String,
+    value: Option<TagValue>,
+}
+
+#[derive(Debug)]
+enum Part {
+    Directive(Directive),
+    Param(Param),
+    Query(()),
+}
 
 /// AST parser.
 #[allow(dead_code)] // FIXME: delete this
@@ -80,16 +107,69 @@ pub struct Parser {
     root: SyntaxNode,
     stdlib: &'static Module,
     errors: Vec<ParserError>,
+    parts: Vec<Part>,
 }
 
-fn skip_trivia(c: &mut SyntaxNodeChildren<Lang>) -> Option<SyntaxNode> {
-    for node in c {
-        if node.kind().is_trivia() {
-            continue;
-        }
-        return Some(node);
+trait NonTrivalItem {
+    fn span(&self) -> SourceSpan;
+    // FIXME: showd this be a cow?
+    fn token_string(&self) -> String;
+}
+
+impl NonTrivalItem for SyntaxNode {
+    fn span(&self) -> SourceSpan {
+        let s: usize = self.text_range().start().into();
+        let e: usize = self.text_range().end().into();
+        SourceSpan::new(s.into(), e - s)
     }
-    None
+
+    fn token_string(&self) -> String {
+        self.text().to_string()
+    }
+}
+impl NonTrivalItem for NodeOrToken<SyntaxNode, SyntaxToken<Lang>> {
+    fn span(&self) -> SourceSpan {
+        let s: usize = self.text_range().start().into();
+        let e: usize = self.text_range().end().into();
+        SourceSpan::new(s.into(), e - s)
+    }
+
+    fn token_string(&self) -> String {
+        self.to_string()
+    }
+}
+
+trait Nontrivial {
+    type Item: NonTrivalItem;
+
+    fn n(&mut self) -> Option<Self::Item>;
+}
+
+impl Nontrivial for SyntaxNodeChildren<Lang> {
+    type Item = SyntaxNode;
+    fn n(&mut self) -> Option<Self::Item> {
+        for node in self {
+            if node.kind().is_trivia() {
+                continue;
+            }
+            return Some(node);
+        }
+        None
+    }
+}
+
+impl Nontrivial for SyntaxElementChildren<Lang> {
+    type Item = NodeOrToken<SyntaxNode, SyntaxToken<Lang>>;
+
+    fn n(&mut self) -> Option<Self::Item> {
+        for node in self {
+            if node.kind().is_trivia() {
+                continue;
+            }
+            return Some(node);
+        }
+        None
+    }
 }
 
 impl Parser {
@@ -100,6 +180,7 @@ impl Parser {
             stdlib: &STDLIB,
             root,
             errors: errors.into_iter().map(ParserError::InvalidSyntax).collect(),
+            parts: Vec::new(),
         }
     }
 
@@ -123,65 +204,60 @@ impl Parser {
             self.errors.push(ParserError::UnexpectedSyntaxRuleOne {
                 expected,
                 found: node.kind(),
-                range: range_to_span(node.text_range()),
+                span: node.span(),
             });
-            Err(Error {})
+            Err(Error("wrong type"))
         }
     }
 
-    fn assert_end(&mut self, mut children: SyntaxNodeChildren<Lang>) {
-        let Some(node) = skip_trivia(&mut children) else {
+    fn assert_end(&mut self, mut children: impl Nontrivial) {
+        let Some(node) = children.n() else {
             return;
         };
-        self.errors.push(ParserError::GarbageAtEndOfRule {
-            range: range_to_span(node.text_range()),
-        });
+        self.errors
+            .push(ParserError::GarbageAtEndOfRule { span: node.span() });
     }
     fn parse_query(&mut self, node: &SyntaxNode) -> Result<()> {
         self.assert_type(node, SyntaxKind::QUERY)?;
         // self.assert_end(children);
         Ok(())
     }
-    fn parse_param(&mut self, node: &SyntaxNode) -> Result<()> {
-        self.assert_type(node, SyntaxKind::PARAM)?;
-        // self.assert_end(children);
-        Ok(())
-    }
-    fn ident(&mut self, node: &SyntaxNode) -> Result<String> {
-        self.assert_type(node, SyntaxKind::IDENT)?;
-        dbg!(node);
-        // self.assert_end(children);
-        Ok(String::new())
-    }
 
-    fn kw(&mut self, node: &SyntaxNode) -> Result<String> {
-        self.assert_type(node, SyntaxKind::KEYWORD)?;
-        let mut children = node.children();
-        let Some(node) = skip_trivia(&mut children) else {
+    fn ident_body(&mut self, node: &SyntaxNode) -> Result<String> {
+        let mut children = node.children_with_tokens();
+        let Some(node) = children.n() else {
             self.errors.push(ParserError::MissingToken {
                 expected: SyntaxKind::LX_IDENT,
-                range: range_to_span(node.text_range()),
+                span: node.span(),
             });
-            return Err(Error {});
+            return Err(Error("missing token"));
         };
         let r = match node.kind() {
-            SyntaxKind::LX_IDENT => node.text().to_string(),
+            SyntaxKind::LX_IDENT => node.token_string(),
             SyntaxKind::LX_ESCAPED_IDENT => {
                 // FIXME: unescape
-                node.text().to_string()
+                node.token_string()
             }
             _ => {
                 self.errors.push(ParserError::UnexpectedSyntaxRule {
                     expected: &[SyntaxKind::LX_IDENT, SyntaxKind::LX_ESCAPED_IDENT],
                     found: node.kind(),
-                    range: range_to_span(node.text_range()),
+                    span: node.span(),
                 });
-                return Err(Error {});
+                return Err(Error("unexpected syntax"));
             }
         };
-
         self.assert_end(children);
         Ok(r)
+    }
+    fn ident(&mut self, node: &SyntaxNode) -> Result<String> {
+        self.assert_type(node, SyntaxKind::IDENT)?;
+        self.ident_body(node)
+    }
+
+    fn kw(&mut self, node: &SyntaxNode) -> Result<String> {
+        self.assert_type(node, SyntaxKind::KEYWORD)?;
+        self.ident_body(node)
     }
 
     fn parse_bool(&mut self, node: &SyntaxNode) -> Result<TagValue> {
@@ -196,12 +272,41 @@ impl Parser {
         Ok(TagValue::Null)
     }
 
+    fn token_of_type(&mut self, node: &SyntaxNode, kind: SyntaxKind) -> Result<String> {
+        let mut children = node.children_with_tokens();
+        let r = match children.n() {
+            Some(token) if token.kind() == kind => Ok(token.token_string()),
+            Some(token) => {
+                self.errors.push(ParserError::UnexpectedSyntaxRuleOne {
+                    expected: kind,
+                    found: token.kind(),
+                    span: token.span(),
+                });
+                Err(Error("token of wrong type"))
+            }
+            _ => {
+                self.errors.push(ParserError::MissingToken {
+                    expected: kind,
+                    span: node.span(),
+                });
+                Err(Error("missing token"))
+            }
+        };
+        self.assert_end(children);
+        r
+    }
+
     fn parse_integer(&mut self, node: &SyntaxNode) -> Result<TagValue> {
         self.assert_type(node, SyntaxKind::INTEGER)?;
+        let value = self.token_of_type(node, SyntaxKind::LX_INTEGER)?;
         dbg!(node);
-        // self.assert_end(children);
-        // let value = node.text().parse::<i64>().unwrap();
-        Ok(TagValue::Int(42))
+        if let Ok(value) = value.parse::<i64>() {
+            Ok(TagValue::Int(value))
+        } else {
+            self.errors
+                .push(ParserError::InvalidIntegerConstant { span: node.span() });
+            Err(Error("invalid integer"))
+        }
     }
 
     fn parse_float(&mut self, node: &SyntaxNode) -> Result<TagValue> {
@@ -226,7 +331,7 @@ impl Parser {
         self.assert_type(node, SyntaxKind::CONST)?;
         let mut children = node.children();
 
-        let r = match children.next() {
+        let r = match children.n() {
             Some(c) if c.kind() == SyntaxKind::INTEGER => self.parse_integer(&c),
             Some(c) if c.kind() == SyntaxKind::FLOAT => self.parse_float(&c),
             Some(c) if c.kind() == SyntaxKind::STRING => self.parse_string(&c),
@@ -244,33 +349,46 @@ impl Parser {
                         SyntaxKind::NULL,
                     ],
                     found: c.kind(),
-                    range: range_to_span(c.text_range()),
+                    span: c.span(),
                 });
-                Err(Error {})
+                Err(Error("unexpected syntax"))
             }
-            None => Err(Error {}), // FIXME we need an error here
+            None => Err(Error("missing token")), // FIXME we need an error here
         };
         self.assert_end(children);
         r
     }
 
-    fn parse_directive(&mut self, node: &SyntaxNode) -> Result<()> {
+    fn parse_param(&mut self, node: &SyntaxNode) -> Result<Param> {
+        self.assert_type(node, SyntaxKind::PARAM)?;
+        // self.assert_end(children);
+        Err(Error("param not implemented"))
+    }
+
+    fn parse_directive(&mut self, node: &SyntaxNode) -> Result<Directive> {
         self.assert_type(node, SyntaxKind::DIRECTIVE)?;
-        dbg!(&node);
         let mut children = node.children();
-        if let Some(c) = children.next() {
+        if let Some(c) = children.n() {
             let kw = self.kw(&c)?;
             assert_eq!(kw, "set");
         }
-        if let Some(c) = children.next() {
-            self.ident(&c)?;
-        }
+        let name = if let Some(c) = children.n() {
+            self.ident(&c)?
+        } else {
+            self.errors.push(ParserError::MissingToken {
+                expected: SyntaxKind::IDENT,
+                span: node.span(),
+            });
+            return Err(Error("missing token"));
+        };
 
-        if let Some(c) = children.next() {
-            self.constant(&c)?;
-        }
+        let value = if let Some(c) = children.n() {
+            Some(self.constant(&c)?)
+        } else {
+            None
+        };
         self.assert_end(children);
-        Ok(())
+        Ok(Directive { name, value })
     }
 
     /// Lower the Syntax Tree into a [`Query`] ast
@@ -280,10 +398,15 @@ impl Parser {
             // collect multiple errors before returning.
             match child.kind() {
                 SyntaxKind::DIRECTIVE => {
-                    let _ = self.parse_directive(&child);
+                    if let Ok(d) = self.parse_directive(&child) {
+                        self.parts.push(Part::Directive(d));
+                    }
                 }
+
                 SyntaxKind::PARAM => {
-                    let _ = self.parse_param(&child);
+                    if let Ok(p) = self.parse_param(&child) {
+                        self.parts.push(Part::Param(p));
+                    }
                 }
                 SyntaxKind::QUERY => {
                     let _ = self.parse_query(&child);
@@ -293,37 +416,67 @@ impl Parser {
                     self.errors.push(ParserError::UnexpectedSyntaxRule {
                         expected: &[SyntaxKind::DIRECTIVE, SyntaxKind::PARAM, SyntaxKind::QUERY],
                         found: k,
-                        range: range_to_span(child.text_range()),
+                        span: child.span(),
                     });
                 }
             }
         }
         // FIXME: nope
-        Err(Error {})
+        Err(Error("parsing error"))
     }
-}
-
-fn range_to_span(range: TextRange) -> SourceSpan {
-    let s: usize = range.start().into();
-    let e: usize = range.end().into();
-    SourceSpan::new(s.into(), e - s)
 }
 
 #[cfg(test)]
 mod tests {
+
+    use miette::{GraphicalReportHandler, GraphicalTheme, MietteDiagnostic, NamedSource, Report};
+
     use super::*;
+
+    /// Renders the parser's errors the way a user would see them, so a failing example prints a
+    /// diagnostic rather than a debug dump.
+    fn report(name: &str, content: &str, errors: &[&ParserError]) -> String {
+        let handler = GraphicalReportHandler::new_themed(GraphicalTheme::unicode());
+        let mut out = String::new();
+        for error in errors {
+            // `Report` needs to own its diagnostic, so copy the derived spans and codes across;
+            // the labels are what let the handler slice a snippet out of the source.
+            let diagnostic = MietteDiagnostic {
+                message: error.to_string(),
+                code: error.code().map(|code| code.to_string()),
+                severity: error.severity(),
+                help: error.help().map(|help| help.to_string()),
+                url: error.url().map(|url| url.to_string()),
+                labels: error.labels().map(Iterator::collect),
+            };
+            let report = Report::new(diagnostic)
+                .with_source_code(NamedSource::new(name, content.to_string()));
+            let mut rendered = String::new();
+            if handler
+                .render_report(&mut rendered, report.as_ref())
+                .is_err()
+            {
+                rendered = report.to_string();
+            }
+            out.push_str(&rendered);
+        }
+        out
+    }
 
     #[test]
     fn test_ast_parse() -> Result<()> {
         let input = r"
             // test
-            set a = 42;
+            set a = 43;
             set b;
             a:b
             ";
         let mut parser = Parser::new(input);
         let query = parser.lower();
-        dbg!(&parser.errors);
+        for error in &parser.errors {
+            eprintln!("{}", report("test", input, &[error]));
+        }
+        dbg!(&parser.parts);
         assert!(parser.errors.is_empty());
         let _query = query?;
         Ok(())
