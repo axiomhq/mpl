@@ -196,6 +196,15 @@ pub struct Error(&'static str);
 /// AST parser result type.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// a function call
+#[derive(Debug)]
+pub struct FunctionCall {
+    /// The function name, split into parts for nested functions.
+    pub name: Vec<Ident>,
+    /// The function arguments.
+    pub args: Vec<Expr>,
+}
+
 /// A `param` declaration.
 #[derive(Debug)]
 pub struct Param {
@@ -477,7 +486,7 @@ pub enum Rule {
     /// A parsed sample rule.
     Sample,
     /// A parsed map rule.
-    Map,
+    Map(FunctionCall),
     /// A parsed align rule.
     Align,
     /// A parsed group rule.
@@ -865,10 +874,82 @@ impl Parser {
         self.not_implemented(node);
         Ok(Rule::Sample)
     }
+    fn function_path(&mut self, node: &SyntaxNode) -> Result<Vec<Ident>> {
+        self.assert_type(node, SyntaxKind::FUNCTION_PATH)?;
+        let mut children = node.children();
+        let mut path = Vec::new();
+        while let Some(n) = children.n() {
+            path.push(self.ident(&n)?);
+        }
+        Ok(path)
+    }
     fn rule_map(&mut self, node: &SyntaxNode) -> Result<Rule> {
         self.assert_type(node, SyntaxKind::MAP)?;
-        self.not_implemented(node);
-        Ok(Rule::Map)
+        let mut children = node.children();
+        self.check_kw(node, "map", &mut children)?;
+        let n = self.n(&mut children, node, SyntaxKind::MAP)?;
+        let f = match n.kind() {
+            SyntaxKind::MAP_MUL => {
+                let mut children = n.children();
+                let e = self.n(&mut children, &n, SyntaxKind::MAP_MUL)?;
+                let expr = self.expr(&e)?;
+                FunctionCall {
+                    name: vec![Ident("*".to_string())],
+                    args: vec![expr],
+                }
+            }
+            SyntaxKind::MAP_DIV => {
+                let mut children = n.children();
+                let e = self.n(&mut children, &n, SyntaxKind::MAP_DIV)?;
+                let expr = self.expr(&e)?;
+                FunctionCall {
+                    name: vec![Ident("/".to_string())],
+                    args: vec![expr],
+                }
+            }
+            SyntaxKind::MAP_PLUS => {
+                let mut children = n.children();
+                let e = self.n(&mut children, &n, SyntaxKind::MAP_PLUS)?;
+                let expr = self.expr(&e)?;
+                FunctionCall {
+                    name: vec![Ident("+".to_string())],
+                    args: vec![expr],
+                }
+            }
+            SyntaxKind::MAP_MINUS => {
+                let mut children = n.children();
+                let e = self.n(&mut children, &n, SyntaxKind::MAP_MINUS)?;
+                let expr = self.expr(&e)?;
+                FunctionCall {
+                    name: vec![Ident("-".to_string())],
+                    args: vec![expr],
+                }
+            }
+
+            SyntaxKind::FUNCTION_PATH => {
+                let name = self.function_path(&n)?;
+                let mut args = Vec::new();
+                while let Some(n) = children.n() {
+                    args.push(self.expr(&n)?);
+                }
+                FunctionCall { name, args }
+            }
+            found => {
+                self.errors.push(ParserError::UnexpectedSyntaxRule {
+                    expected: &[
+                        SyntaxKind::MAP_PLUS,
+                        SyntaxKind::MAP_MINUS,
+                        SyntaxKind::MAP_MUL,
+                        SyntaxKind::MAP_DIV,
+                        SyntaxKind::FUNCTION_PATH,
+                    ],
+                    found,
+                    span: n.span(),
+                });
+                return Err(Error("expected LX_MUL"));
+            }
+        };
+        Ok(Rule::Map(f))
     }
     fn rule_align(&mut self, node: &SyntaxNode) -> Result<Rule> {
         self.assert_type(node, SyntaxKind::ALIGN)?;
@@ -1430,6 +1511,8 @@ mod tests {
             param $test2: Option<string>;
             a:b as c
             | where code == #/[123]../
+            | map filter::gt(1)
+            | map * 2
             "#;
         let mut parser = Parser::new(input);
         parser.lower()?;

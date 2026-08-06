@@ -172,7 +172,10 @@ pub enum SyntaxKind {
     FILTER,
     SAMPLE,
     MAP,
-    MAP_MATH,
+    MAP_MUL,
+    MAP_DIV,
+    MAP_PLUS,
+    MAP_MINUS,
     ALIGN,
     AS,
     GROUP,
@@ -925,16 +928,35 @@ impl Parser<'_> {
             s.keyword("map");
             let tkn = s.peek();
             match tkn.tpe() {
-                TokenType::Mul | TokenType::Div | TokenType::Plus | TokenType::Minus => {
-                    s.node(MAP_MATH, |s| {
+                TokenType::Mul => {
+                    s.node(MAP_MUL, |s| {
                         s.eat_token();
                         s.expr();
                     });
                 }
+                TokenType::Div => {
+                    s.node(MAP_DIV, |s| {
+                        s.eat_token();
+                        s.expr();
+                    });
+                }
+                TokenType::Plus => {
+                    s.node(MAP_PLUS, |s| {
+                        s.eat_token();
+                        s.expr();
+                    });
+                }
+                TokenType::Minus => {
+                    s.node(MAP_MINUS, |s| {
+                        s.eat_token();
+                        s.expr();
+                    });
+                }
+
                 _ => {
                     s.function_path();
                     if s.try_structural(TokenType::LParen) {
-                        s.constant();
+                        s.expr();
                         s.structural(TokenType::RParen);
                     }
                 }
