@@ -277,6 +277,7 @@ impl Display for Cmp {
             Cmp::Le(v) => write!(f, "<= {v}"),
             Cmp::Is(v) => write!(f, "is {v}"),
             Cmp::In(v) => write!(f, "in {v}"),
+            Cmp::Contains(v) => write!(f, "contains {v}"),
             Cmp::RegEx(r) => match r {
                 Parameterized::Concrete(r) => write!(f, "== {}", r.as_ref()),
                 Parameterized::Param { span: _, param } => write!(f, "== ${}", param.name),

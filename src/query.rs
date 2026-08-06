@@ -159,6 +159,8 @@ pub enum Cmp {
     RegExNot(Parameterized<EncodableRegex>),
     /// Is the given tag type
     Is(TagType),
+    /// Does array (lhs) has given value
+    Contains(Expr),
 }
 
 /// Rename the output as a new metric

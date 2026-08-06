@@ -700,6 +700,7 @@ fn parse_value_filter(field: String, source: Pair<Rule>, state: &State) -> Resul
                 return Err(ParseError::InRequiresArray { span: value_span });
             }
         },
+        "contains" => Cmp::Contains(value),
         other => {
             return Err(ParseError::UnsupportedTagComparison {
                 span: pair_to_source_span(&operator_pair),

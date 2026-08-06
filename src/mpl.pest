@@ -81,7 +81,7 @@ tags = { tag ~ ("," ~ tag)* }
 
 source = { metric_id ~ time_range? ~ as? }
 
-cmp    = @{ "==" | "!=" | "<=" | "<" | ">=" | ">" | "in" }
+cmp    = @{ "==" | "!=" | "<=" | "<" | ">=" | ">" | "in" | "contains" }
 cmp_re = @{ "==" | "!=" }
 
 kw_is = { "is" }

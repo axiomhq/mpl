@@ -822,6 +822,10 @@ impl Parser<'_> {
                         s.array();
                     }
                 }
+                TokenType::Ident if tkn.text() == "contains" => {
+                    s.keyword("contains");
+                    s.expr();
+                }
                 _ => {
                     s.error("expected comparison operator");
                 }
