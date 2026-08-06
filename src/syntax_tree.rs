@@ -988,16 +988,11 @@ impl Parser<'_> {
 
     fn duration(&mut self) {
         self.node(DURATION, |s| {
-            let tkn = s.next();
-            if tkn.tpe() != TokenType::Integer {
-                s.error_token(tkn, "expected integer duration");
-                return;
-            }
-            s.token(tkn);
+            s.integer();
 
             let tkn = s.peek();
             if tkn.tpe() == TokenType::Ident
-                && matches!(tkn.text(), "ms" | "s" | "m" | "h" | "d" | "w" | "M" | "y")
+                && matches!(tkn.text(), "s" | "m" | "h" | "d" | "w" | "M" | "y")
             {
                 s.node(TIME_UNIT, Parser::eat_token);
             }

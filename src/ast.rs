@@ -167,6 +167,22 @@ pub enum ParserError {
         #[label("expected const")]
         span: SourceSpan,
     },
+    /// The duration is negative.
+    #[error("negative duration")]
+    #[diagnostic(code(mpl_lang::negative_duration))]
+    NegativeDuration {
+        /// The source span of the negative duration.
+        #[label("negative duration")]
+        span: SourceSpan,
+    },
+    /// The time unit is invalid.
+    #[error("invalid time unit")]
+    #[diagnostic(code(mpl_lang::invalid_time_unit))]
+    InvalidTimeUnit {
+        /// The source span of the invalid time unit.
+        #[label("invalid time unit")]
+        span: SourceSpan,
+    },
 }
 
 impl ParserError {
@@ -477,7 +493,9 @@ pub struct FilterAnd(Vec<FilterNot>);
 /// A filter or rule.
 #[derive(Debug)]
 pub struct FilterOr(Vec<FilterAnd>);
-
+/// A parsed duration.
+#[derive(Debug)]
+pub struct Duration(u64);
 /// A parsed rule.
 #[derive(Debug)]
 pub enum Rule {
@@ -488,7 +506,12 @@ pub enum Rule {
     /// A parsed map rule.
     Map(FunctionCall),
     /// A parsed align rule.
-    Align,
+    Align {
+        /// The duration to align by.
+        duration: Option<Duration>,
+        /// The function to align by.
+        func: Vec<Ident>,
+    },
     /// A parsed group rule.
     Group,
     /// A parsed bucket rule.
@@ -498,7 +521,7 @@ pub enum Rule {
     /// A parsed extern rule.
     Extern,
     /// A parsed as rule.
-    As,
+    As(Ident),
 }
 
 /// A parsed simple query.
@@ -951,10 +974,65 @@ impl Parser {
         };
         Ok(Rule::Map(f))
     }
+    fn duration(&mut self, node: &SyntaxNode) -> Result<Duration> {
+        self.assert_type(node, SyntaxKind::DURATION)?;
+        let mut children = node.children();
+        let n = self.n(&mut children, node, SyntaxKind::INTEGER)?;
+        dbg!(node, &n);
+        let TagValue::Int(i) = self.integer_const(&n)? else {
+            return Err(Error("expected integer (this should be unreachable!)"));
+        };
+        let Ok(i) = u64::try_from(i) else {
+            self.errors
+                .push(ParserError::NegativeDuration { span: n.span() });
+            return Err(Error("invalid integer"));
+        };
+        let n = self.n(&mut children, node, SyntaxKind::TIME_UNIT)?;
+        let unit = self.time_unit(&n)?;
+        let duration = match unit.as_str() {
+            "s" => i,
+            "m" => i * 60,
+            "h" => i * 60 * 60,
+            "d" => i * 60 * 60 * 24,
+            "w" => i * 60 * 60 * 24 * 7,
+            "M" => i * 60 * 60 * 24 * 30,
+            "y" => i * 60 * 60 * 24 * 365,
+            _ => {
+                self.errors
+                    .push(ParserError::InvalidTimeUnit { span: n.span() });
+
+                return Err(Error("invalid time unit"));
+            }
+        };
+        Ok(Duration(duration))
+    }
     fn rule_align(&mut self, node: &SyntaxNode) -> Result<Rule> {
         self.assert_type(node, SyntaxKind::ALIGN)?;
-        self.not_implemented(node);
-        Ok(Rule::Align)
+        let mut children = node.children();
+        self.check_kw(node, "align", &mut children)?;
+        let mut n = self.n(&mut children, node, SyntaxKind::KEYWORD)?;
+        let mut duration = None;
+        let mut found = self.kw(&n)?;
+        if found == "to" {
+            n = self.n(&mut children, node, SyntaxKind::DURATION)?;
+            if let Ok(d) = self.duration(&n) {
+                duration = Some(d);
+            }
+            n = self.n(&mut children, node, SyntaxKind::KEYWORD)?;
+            found = self.kw(&n)?;
+        }
+        if found == "using" {
+            let n = self.n(&mut children, node, SyntaxKind::FUNCTION_PATH)?;
+            let func = self.function_path(&n)?;
+            Ok(Rule::Align { duration, func })
+        } else {
+            self.errors.push(ParserError::UnexpectedKeyword {
+                expected: "using",
+                found,
+                span: n.span(),
+            });
+            Err(Error("expected 'using'"))
+        }
     }
     fn rule_group(&mut self, node: &SyntaxNode) -> Result<Rule> {
         self.assert_type(node, SyntaxKind::GROUP)?;
@@ -971,6 +1049,15 @@ impl Parser {
         self.not_implemented(node);
         Ok(Rule::IfDef)
     }
+    fn rule_as(&mut self, node: &SyntaxNode) -> Result<Rule> {
+        self.assert_type(node, SyntaxKind::AS)?;
+        let mut children = node.children();
+        self.check_kw(node, "as", &mut children)?;
+        let n = self.n(&mut children, node, SyntaxKind::IDENT)?;
+        let name = self.ident(&n)?;
+        self.assert_end(children);
+        Ok(Rule::As(name))
+    }
 
     fn rule(&mut self, node: &SyntaxNode) -> Result<Rule> {
         self.assert_type(node, SyntaxKind::RULE)?;
@@ -985,6 +1072,7 @@ impl Parser {
             SyntaxKind::GROUP => self.rule_group(&r),
             SyntaxKind::BUCKET => self.rule_bucket(&r),
             SyntaxKind::IFDEF => self.rule_ifdef(&r),
+            SyntaxKind::AS => self.rule_as(&r),
             kind => {
                 self.errors.push(ParserError::UnknownRule {
                     kind,
@@ -1186,6 +1274,12 @@ impl Parser {
                 .push(ParserError::InvalidIntegerConstant { span: node.span() });
             Err(Error("invalid integer"))
         }
+    }
+
+    fn time_unit(&mut self, node: &SyntaxNode) -> Result<String> {
+        self.assert_type(node, SyntaxKind::TIME_UNIT)?;
+        let value = self.token_of_type(node, SyntaxKind::LX_IDENT)?;
+        Ok(value)
     }
 
     fn float_const(&mut self, node: &SyntaxNode) -> Result<TagValue> {
@@ -1513,6 +1607,8 @@ mod tests {
             | where code == #/[123]../
             | map filter::gt(1)
             | map * 2
+            | align using avg
+            | align to 1m using prom::rate
             "#;
         let mut parser = Parser::new(input);
         parser.lower()?;
