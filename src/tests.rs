@@ -377,7 +377,8 @@ dataset:metric
                     TerminalParamType::Tag(TagType::String),
                     TerminalParamType::Tag(TagType::Int),
                     TerminalParamType::Tag(TagType::Float),
-                    TerminalParamType::Tag(TagType::Bool)
+                    TerminalParamType::Tag(TagType::Bool),
+                    TerminalParamType::Tag(TagType::Array)
                 ],
                 expected.as_slice()
             );
@@ -504,6 +505,14 @@ fn in_non_array_param_requires_array_error() {
 fn in_array_param_compiles() {
     let s = "param $a: array;\nds:m | where t in $a";
     super::compile(s, HashMap::new()).expect("array param on `in` should compile");
+}
+
+#[test]
+fn cmp_array_param_compiles() {
+    for op in ["==", "!=", "<", "<=", ">", ">="] {
+        let s = format!("param $a: array;\nds:m | where t {op} $a");
+        super::compile(&s, HashMap::new()).expect("array param comparison should compile");
+    }
 }
 
 #[test]

@@ -353,11 +353,12 @@ impl QueryVisitor for ParamTypecheckVisitor {
     }
 
     fn visit_cmp(&mut self, _field: &mut String, cmp: &mut Cmp) -> Result<VisitRes, Self::Error> {
-        const TAG_VALUE_PARAM_TYPES: [TerminalParamType; 4] = [
+        const TAG_VALUE_PARAM_TYPES: [TerminalParamType; 5] = [
             TerminalParamType::Tag(TagType::String),
             TerminalParamType::Tag(TagType::Int),
             TerminalParamType::Tag(TagType::Float),
             TerminalParamType::Tag(TagType::Bool),
+            TerminalParamType::Tag(TagType::Array),
         ];
 
         match cmp {
