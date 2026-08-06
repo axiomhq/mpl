@@ -152,9 +152,9 @@ fn lower_examples() {
 
     assert!(
         failures.is_empty(),
-        "{} of {total} examples do not lower cleanly:\n{}",
+        "{}\n{} of {total} examples do not lower cleanly",
+        summarize(&failures),
         failures.len(),
-        summarize(&failures)
     );
 }
 
@@ -206,8 +206,8 @@ fn lower_error_examples() {
     );
     assert!(
         failures.is_empty(),
-        "{} error-corpus files should reach a later stage but fail here:\n{}",
+        "{}\n{} error-corpus files should reach a later stage but fail here.",
+        summarize(&failures),
         failures.len(),
-        summarize(&failures)
     );
 }

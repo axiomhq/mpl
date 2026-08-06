@@ -59,7 +59,7 @@ impl rowan::Language for Lang {
     fn kind_from_raw(raw: rowan::SyntaxKind) -> Self::Kind {
         *SyntaxKind::VARIANTS
             .get(raw.0 as usize)
-            .unwrap_or(&SyntaxKind::THIS_SHOULD_NEVER_BE_EMITTED_GOD_DAMN_IT)
+            .unwrap_or(&THIS_SHOULD_NEVER_BE_EMITTED_GOD_DAMN_IT)
     }
     fn kind_to_raw(kind: Self::Kind) -> rowan::SyntaxKind {
         kind.into()
@@ -112,7 +112,9 @@ pub enum SyntaxKind {
     LX_NOT_EQUAL,
     LX_DOT_DOT,
     LX_STRING,
+    LX_STRING_START,
     LX_STRING_SEGMENT,
+    LX_STRING_END,
     LX_BOOL,
     LX_NULL,
     LX_INF,
@@ -132,6 +134,14 @@ pub enum SyntaxKind {
     FILTER_NOT,
     FILTER_PAREN,
     FILTER_CMP,
+    FILTER_CMP_EQ,
+    FILTER_CMP_NEQ,
+    FILTER_CMP_LT,
+    FILTER_CMP_GT,
+    FILTER_CMP_LTE,
+    FILTER_CMP_GTE,
+    FILTER_CMP_IN,
+    FILTER_CMP_IS,
     FUNCTION_PATH,
     DURATION,
     TIME_UNIT,
@@ -147,6 +157,9 @@ pub enum SyntaxKind {
     BOOL,
     NULL,
     STRING,
+    STRING_START,
+    STRING_SEGMENT,
+    STRING_END,
     ARRAY,
     TAG_LIST,
     TIME_RANGE,
@@ -237,7 +250,9 @@ impl Token<'_> {
             TokenType::NotEqual => LX_NOT_EQUAL,
             TokenType::DotDot => LX_DOT_DOT,
             TokenType::String => LX_STRING,
+            TokenType::StringStart => LX_STRING_START,
             TokenType::StringSegment => LX_STRING_SEGMENT,
+            TokenType::StringEnd => LX_STRING_END,
             TokenType::Bool => LX_BOOL,
             TokenType::Null => LX_NULL,
             TokenType::Inf => LX_INF,
@@ -846,32 +861,51 @@ impl Parser<'_> {
 
             let tkn = s.peek();
             match tkn.tpe() {
-                tt @ (TokenType::EqualEqual | TokenType::NotEqual) => {
-                    s.structural(tt);
+                TokenType::EqualEqual => s.node(FILTER_CMP_EQ, |s| {
+                    s.structural(TokenType::EqualEqual);
                     let tkn = s.peek();
                     if tkn.tpe() == TokenType::Regex {
                         s.regex();
                     } else {
                         s.expr();
                     }
-                }
-                tt @ (TokenType::LessThan
-                | TokenType::GreaterThan
-                | TokenType::LessThanEqual
-                | TokenType::GreaterThanEqual) => {
-                    s.structural(tt);
+                }),
+                TokenType::NotEqual => s.node(FILTER_CMP_NEQ, |s| {
+                    s.structural(TokenType::NotEqual);
+                    let tkn = s.peek();
+                    if tkn.tpe() == TokenType::Regex {
+                        s.regex();
+                    } else {
+                        s.expr();
+                    }
+                }),
+                TokenType::LessThan => s.node(FILTER_CMP_LT, |s| {
+                    s.structural(TokenType::LessThan);
                     s.expr();
-                }
-                TokenType::Ident if tkn.text() == "is" => {
+                }),
+                TokenType::GreaterThan => s.node(FILTER_CMP_GT, |s| {
+                    s.structural(TokenType::GreaterThan);
+                    s.expr();
+                }),
+                TokenType::LessThanEqual => s.node(FILTER_CMP_LTE, |s| {
+                    s.structural(TokenType::LessThanEqual);
+                    s.expr();
+                }),
+                TokenType::GreaterThanEqual => s.node(FILTER_CMP_GTE, |s| {
+                    s.structural(TokenType::GreaterThanEqual);
+                    s.expr();
+                }),
+
+                TokenType::Ident if tkn.text() == "is" => s.node(FILTER_CMP_IS, |s| {
                     s.keyword("is");
                     s.type_ident();
-                }
-                TokenType::Ident if tkn.text() == "in" => {
+                }),
+                TokenType::Ident if tkn.text() == "in" => s.node(FILTER_CMP_IN, |s| {
                     s.keyword("in");
                     if !s.try_variable() {
                         s.array();
                     }
-                }
+                }),
                 _ => {
                     s.error("expected comparison operator");
                 }
