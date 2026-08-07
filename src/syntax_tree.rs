@@ -143,6 +143,7 @@ pub enum SyntaxKind {
     FILTER_CMP_IN,
     FILTER_CMP_IS,
     FUNCTION_PATH,
+    MATH_FN,
     DURATION,
     TIME_UNIT,
     OTEL_TYPE,
@@ -534,10 +535,10 @@ impl Parser<'_> {
             let tkn = s.peek();
             match tkn.tpe() {
                 TokenType::Ident | TokenType::EscapedIdent => s.function_path(),
-                TokenType::Plus => s.eat_token_type(TokenType::Plus),
-                TokenType::Minus => s.eat_token_type(TokenType::Minus),
-                TokenType::Mul => s.eat_token_type(TokenType::Mul),
-                TokenType::Div => s.eat_token_type(TokenType::Div),
+                TokenType::Plus => s.node(MATH_FN, |s| s.eat_token_type(TokenType::Plus)),
+                TokenType::Minus => s.node(MATH_FN, |s| s.eat_token_type(TokenType::Minus)),
+                TokenType::Mul => s.node(MATH_FN, |s| s.eat_token_type(TokenType::Mul)),
+                TokenType::Div => s.node(MATH_FN, |s| s.eat_token_type(TokenType::Div)),
                 _ => s.error("expected compute function"),
             }
             s.rules();

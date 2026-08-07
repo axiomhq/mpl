@@ -263,6 +263,11 @@ trait NonTrivalItem {
     fn span(&self) -> SourceSpan;
     // FIXME: showd this be a cow?
     fn token_string(&self) -> String;
+    fn kind(&self) -> SyntaxKind;
+    /// Returns `true` if this item is a keyword with the given string.
+    fn is_kw(&self, kw: &str) -> bool {
+        dbg!(self.kind()) == SyntaxKind::KEYWORD && dbg!(self.token_string()) == kw
+    }
 }
 
 impl NonTrivalItem for SyntaxNode {
@@ -273,7 +278,18 @@ impl NonTrivalItem for SyntaxNode {
     }
 
     fn token_string(&self) -> String {
-        self.text().to_string()
+        self.children_with_tokens()
+            .filter_map(|n| {
+                if n.kind().is_trivia() {
+                    None
+                } else {
+                    Some(n.token_string())
+                }
+            })
+            .collect::<String>()
+    }
+    fn kind(&self) -> SyntaxKind {
+        self.kind()
     }
 }
 impl NonTrivalItem for NodeOrToken<SyntaxNode, SyntaxToken<Lang>> {
@@ -284,7 +300,13 @@ impl NonTrivalItem for NodeOrToken<SyntaxNode, SyntaxToken<Lang>> {
     }
 
     fn token_string(&self) -> String {
-        self.to_string()
+        match self {
+            NodeOrToken::Node(node) => node.token_string(),
+            NodeOrToken::Token(token) => token.to_string(),
+        }
+    }
+    fn kind(&self) -> SyntaxKind {
+        self.kind()
     }
 }
 
@@ -529,7 +551,7 @@ pub enum Rule {
     /// A parsed filter rule.
     Filter(FilterOr),
     /// A parsed sample rule.
-    Sample,
+    Sample(f64),
     /// A parsed map rule.
     Map(FunctionCall),
     /// A parsed align rule.
@@ -556,7 +578,14 @@ pub enum Rule {
         func: Vec<Ident>,
     },
     /// A parsed ifdef rule.
-    IfDef,
+    IfDef {
+        /// The variable to check.
+        var: Variable,
+        /// The branch to execute if the variable is defined.
+        if_branch: Box<Rule>,
+        /// The branch to execute if the variable is not defined.
+        else_branch: Option<Box<Rule>>,
+    },
     /// A parsed extern rule.
     Extern(Vec<ExtendPart>),
     /// A parsed as rule.
@@ -581,6 +610,9 @@ pub struct SimpleQuery {
 pub struct ComputeQuery {
     l: Query,
     r: Query,
+    name: Ident,
+    rules: Vec<Rule>,
+    func: Vec<Ident>,
 }
 
 /// A parsed query.
@@ -642,12 +674,12 @@ impl Parser {
         Ok(node)
     }
 
-    fn not_implemented(&mut self, node: &SyntaxNode) {
-        self.errors.push(ParserError::NotImplemented {
-            span: node.span(),
-            kind: node.kind(),
-        });
-    }
+    // fn not_implemented(&mut self, node: &SyntaxNode) {
+    //     self.errors.push(ParserError::NotImplemented {
+    //         span: node.span(),
+    //         kind: node.kind(),
+    //     });
+    // }
 
     fn assert_type(&mut self, node: &SyntaxNode, expected: SyntaxKind) -> Result<()> {
         if node.kind() == expected {
@@ -885,8 +917,15 @@ impl Parser {
                 let mut children = c.children();
                 self.check_kw(&c, "in", &mut children)?;
                 let c = self.n(&mut children, &c, SyntaxKind::EXPR)?;
-                let rhs = self.expr(&c)?;
-                Ok(FilterCmp::In { lhs, rhs })
+                if c.kind() == SyntaxKind::VARIABLE {
+                    Ok(FilterCmp::In {
+                        lhs,
+                        rhs: Expr::Var(self.variable(&c)?),
+                    })
+                } else {
+                    let rhs = self.expr(&c)?;
+                    Ok(FilterCmp::In { lhs, rhs })
+                }
             }
             SyntaxKind::FILTER_CMP_IS => {
                 let mut children = c.children();
@@ -1000,17 +1039,38 @@ impl Parser {
     }
     fn rule_sample(&mut self, node: &SyntaxNode) -> Result<Rule> {
         self.assert_type(node, SyntaxKind::SAMPLE)?;
-        self.not_implemented(node);
-        Ok(Rule::Sample)
+        let mut children = node.children();
+        self.check_kw(node, "sample", &mut children)?;
+        let n = self.n(&mut children, node, SyntaxKind::FLOAT)?;
+        let TagValue::Float(f) = self.float_const(&n)? else {
+            return Err(Error("expected float"));
+        };
+        self.assert_end(children);
+        Ok(Rule::Sample(f))
     }
     fn function_path(&mut self, node: &SyntaxNode) -> Result<Vec<Ident>> {
-        self.assert_type(node, SyntaxKind::FUNCTION_PATH)?;
-        let mut children = node.children();
-        let mut path = Vec::new();
-        while let Some(n) = children.n() {
-            path.push(self.ident(&n)?);
+        match node.kind() {
+            SyntaxKind::FUNCTION_PATH => {
+                let mut children = node.children();
+                let mut path = Vec::new();
+                while let Some(n) = children.n() {
+                    path.push(self.ident(&n)?);
+                }
+                Ok(path)
+            }
+            SyntaxKind::MATH_FN => Ok(vec![
+                Ident("__MATH__".to_string()),
+                Ident(node.token_string()),
+            ]),
+            _ => {
+                self.errors.push(ParserError::UnexpectedSyntaxRule {
+                    expected: &[SyntaxKind::FUNCTION_PATH, SyntaxKind::MATH_FN],
+                    found: node.kind(),
+                    span: node.span(),
+                });
+                Err(Error("expected function path"))
+            }
         }
-        Ok(path)
     }
     fn rule_map(&mut self, node: &SyntaxNode) -> Result<Rule> {
         self.assert_type(node, SyntaxKind::MAP)?;
@@ -1220,11 +1280,31 @@ impl Parser {
             Err(Error("expected 'using'"))
         }
     }
+
     fn rule_ifdef(&mut self, node: &SyntaxNode) -> Result<Rule> {
         self.assert_type(node, SyntaxKind::IFDEF)?;
-        self.not_implemented(node);
-        Ok(Rule::IfDef)
+        let mut children = node.children();
+        self.check_kw(node, "ifdef", &mut children)?;
+        let n = self.n(&mut children, node, SyntaxKind::VARIABLE)?;
+        let var = self.variable(&n)?;
+        let n = self.n(&mut children, node, SyntaxKind::FILTER)?;
+        let if_branch = Box::new(self.rule_filter(&n)?);
+        let else_branch = if let Some(n) = children.n()
+            && n.is_kw("else")
+        {
+            let n = self.n(&mut children, node, SyntaxKind::FILTER)?;
+            Some(Box::new(self.rule_filter(&n)?))
+        } else {
+            None
+        };
+        self.assert_end(children);
+        Ok(Rule::IfDef {
+            var,
+            if_branch,
+            else_branch,
+        })
     }
+
     fn rule_as(&mut self, node: &SyntaxNode) -> Result<Rule> {
         self.assert_type(node, SyntaxKind::AS)?;
         let mut children = node.children();
@@ -1345,11 +1425,31 @@ impl Parser {
         let l = self.query(&c)?;
         let c = self.n(&mut children, node, SyntaxKind::SIMPLE_QUERY)?;
         let r = self.query(&c)?;
+        self.check_kw(node, "compute", &mut children)?;
+        let c = self.n(&mut children, node, SyntaxKind::IDENT)?;
+        let name = self.ident(&c)?;
+        self.check_kw(node, "using", &mut children)?;
+        let Some(c) = children.n() else {
+            self.errors.push(ParserError::MissingToken {
+                expected: SyntaxKind::FUNCTION_PATH,
+                span: node.span(),
+            });
+            return Err(Error("expected compute function"));
+        };
 
-        let c = self.n(&mut children, node, SyntaxKind::RULE)?;
-        self.not_implemented(&c);
+        let func = self.function_path(&c)?;
+        let mut rules = vec![];
+        while let Some(c) = children.n() {
+            rules.push(self.rule(&c)?);
+        }
 
-        Ok(ComputeQuery { l, r })
+        Ok(ComputeQuery {
+            l,
+            r,
+            name,
+            rules,
+            func,
+        })
     }
     fn query(&mut self, node: &SyntaxNode) -> Result<Query> {
         self.assert_type(node, SyntaxKind::QUERY)?;

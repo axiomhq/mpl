@@ -179,7 +179,6 @@ fn lower_error_examples() {
     /// Files this layer rejects. Everything else in `tests/errors` is well-formed enough to
     /// lower and fails further down the pipeline.
     const REJECTED: &[&str] = &[
-        "in-int.mpl",
         "in-trailing-comma.mpl",
         "incomplete_query.mpl",
         "invalid_operator.mpl",
