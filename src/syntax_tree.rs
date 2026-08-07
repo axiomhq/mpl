@@ -759,36 +759,32 @@ impl Parser<'_> {
 
     fn variable_type(&mut self) {
         self.node(TYPE, |s| {
-            let token = s.next();
+            let token = s.peek();
             if token.tpe() != TokenType::Ident {
-                s.error_token(
-                    token,
-                    format!(
-                        "expected variable type but got {} ({:?})",
-                        token.text(),
-                        token.tpe()
-                    ),
-                );
+                s.error(format!(
+                    "expected variable type but got {} ({:?})",
+                    token.text(),
+                    token.tpe()
+                ));
                 return;
             }
             match token.text() {
                 // built-in type
                 "string" | "int" | "float" | "bool" | "array" | "null" => {
-                    s.node(OTEL_TYPE, |s| s.token(token));
+                    s.node(OTEL_TYPE, Parser::eat_token);
                 }
-
                 // custom type
                 "Dataset" | "Duration" | "Regex" | "Timestamp" => {
-                    s.node(MPL_TYPE, |s| s.token(token));
+                    s.node(MPL_TYPE, Parser::eat_token);
                 }
                 "Option" => s.rnode(OPTION_TYPE, |s| {
-                    s.token(token);
+                    s.eat_token();
                     s.structural(TokenType::LessThan);
                     s.variable_type();
                     s.structural(TokenType::GreaterThan);
                 }),
                 _ => {
-                    s.error_token(token, format!("unknown type {}", token.text()));
+                    s.error(format!("unknown type {}", token.text()));
                 }
             }
         });

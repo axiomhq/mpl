@@ -1295,6 +1295,7 @@ const SCALARS: &[&str] = &[
     "false",
     "\"s\"",
     "\"a${ x }b\"",
+    "\"a${ x }b${ y }c\"",
 ];
 
 fn gen_expr(rng: &mut Rng) -> String {
@@ -1808,7 +1809,7 @@ fn a_type_name_keeps_its_place_in_the_source() {
         "param $p: int ; d:m",
         "param $p: Dataset ; d:m",
         "param $p: Option< int >; d:m",
-        "param $p: int // c\nd:m",
+        "param $p: int; // c\nd:m",
     ] {
         let SyntaxTree { root, errors } = Parser::new(src).parse();
         assert_eq!(root.to_string(), src, "{src:?} came back reordered");
