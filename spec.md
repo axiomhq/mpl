@@ -302,7 +302,6 @@ Times can be defined as:
 - a Unix timestamp in seconds
 - an RFC3339 date
 - relative times (e.g. `1h`, `2d`, `3w`, `4M`, `5y`) where the time is relative to the current time. The time unit can be one of the following:
-  - `ms` for milliseconds (will be rounded to seconds)
   - `s` for seconds
   - `m` for minutes
   - `h` for hours

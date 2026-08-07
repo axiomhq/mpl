@@ -246,7 +246,7 @@ fn simple_queries(src: &str) -> String {
     "(a:b, c:d) | compute x using /"
     => "COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b))) , \
         QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | KEYWORD(compute) \
-        IDENT(x) KEYWORD(using) /)"
+        IDENT(x) KEYWORD(using) MATH_FN(/))"
     ; "operator as the compute function"
 )]
 #[test_case(
@@ -276,9 +276,9 @@ fn compute_queries_nest() {
         "ROOT(QUERY(COMPUTE_QUERY(( QUERY(COMPUTE_QUERY(( \
          QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b))) , \
          QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | KEYWORD(compute) \
-         IDENT(x) KEYWORD(using) +)) , \
+         IDENT(x) KEYWORD(using) MATH_FN(+))) , \
          QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(e)) : IDENT(f))) ) | KEYWORD(compute) \
-         IDENT(y) KEYWORD(using) -)))"
+         IDENT(y) KEYWORD(using) MATH_FN(-))))"
     );
 }
 
@@ -286,7 +286,10 @@ fn compute_queries_nest() {
 // Directives
 //
 // `set` and `param` share the `DIRECTIVE` kind, and both are only accepted before the query.
-// The `TYPE` node nests for `Option<…>`, which is the one recursive production here.
+// A `TYPE` node nests the kind of type it holds — `OTEL_TYPE` for the tag types, `MPL_TYPE`
+// for the ones only the query language has, `OPTION_TYPE` for `Option<…>` — so a consumer
+// reads the family off the node and the name off its token. `OPTION_TYPE` is the one
+// recursive production here.
 // ---------------------------------------------------------------------------------------
 
 #[test_case("set a;"                   => "DIRECTIVE(KEYWORD(set) IDENT(a) ;)"                                  ; "flag without a value")]
@@ -295,9 +298,21 @@ fn directives(src: &str) -> String {
     first(&format!("{src} d:m"), SyntaxKind::DIRECTIVE)
 }
 
-#[test_case("param $p: string;"        => "PARAM(KEYWORD(param) VARIABLE($p) : TYPE(string) ;)"             ; "declared parameter")]
-#[test_case("param $p: Dataset;"       => "PARAM(KEYWORD(param) VARIABLE($p) : TYPE(Dataset) ;)"            ; "custom type")]
-#[test_case("param $p: Option<int>;"   => "PARAM(KEYWORD(param) VARIABLE($p) : TYPE(Option < TYPE(int) >) ;)" ; "option nests a type")]
+#[test_case(
+    "param $p: string;"
+    => "PARAM(KEYWORD(param) VARIABLE($p) : TYPE(OTEL_TYPE(string)) ;)"
+    ; "declared parameter"
+)]
+#[test_case(
+    "param $p: Dataset;"
+    => "PARAM(KEYWORD(param) VARIABLE($p) : TYPE(MPL_TYPE(Dataset)) ;)"
+    ; "custom type"
+)]
+#[test_case(
+    "param $p: Option<int>;"
+    => "PARAM(KEYWORD(param) VARIABLE($p) : TYPE(OPTION_TYPE(Option < TYPE(OTEL_TYPE(int)) >)) ;)"
+    ; "option nests a type"
+)]
 fn params(src: &str) -> String {
     first(&format!("{src} d:m"), SyntaxKind::PARAM)
 }
@@ -309,7 +324,7 @@ fn directives_precede_the_query_as_siblings() {
     assert_eq!(
         tree("set a = 1; param $p: bool; d:m"),
         "ROOT(DIRECTIVE(KEYWORD(set) IDENT(a) = CONST(INTEGER(1)) ;) \
-         PARAM(KEYWORD(param) VARIABLE($p) : TYPE(bool) ;) \
+         PARAM(KEYWORD(param) VARIABLE($p) : TYPE(OTEL_TYPE(bool)) ;) \
          QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(d)) : IDENT(m))))"
     );
 }
@@ -406,13 +421,13 @@ fn arrays(src: &str) -> String {
 #[test_case(
     "where a == 1"
     => "RULE(FILTER(KEYWORD(where) FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
-        FILTER_CMP(IDENT(a) == EXPR(CONST(INTEGER(1))))))))))"
+        FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))))))))"
     ; "where rule"
 )]
 #[test_case(
     "filter a == 1"
     => "RULE(FILTER(KEYWORD(filter) FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
-        FILTER_CMP(IDENT(a) == EXPR(CONST(INTEGER(1))))))))))"
+        FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))))))))"
     ; "filter is a synonym of where"
 )]
 #[test_case("as x"       => "RULE(AS(KEYWORD(as) IDENT(x)))"                            ; "as rule")]
@@ -420,17 +435,17 @@ fn arrays(src: &str) -> String {
 #[test_case("map rate"   => "RULE(MAP(KEYWORD(map) FUNCTION_PATH(IDENT(rate))))"         ; "map without arguments")]
 #[test_case(
     "map filter::gt(1)"
-    => "RULE(MAP(KEYWORD(map) FUNCTION_PATH(IDENT(filter) :: IDENT(gt)) ( CONST(INTEGER(1)) )))"
+    => "RULE(MAP(KEYWORD(map) FUNCTION_PATH(IDENT(filter) :: IDENT(gt)) ( EXPR(CONST(INTEGER(1))) )))"
     ; "map with a module path and an argument"
 )]
 #[test_case(
     "map * 2"
-    => "RULE(MAP(KEYWORD(map) MAP_MATH(* EXPR(CONST(INTEGER(2))))))"
-    ; "map with an operator takes the MAP_MATH branch"
+    => "RULE(MAP(KEYWORD(map) MAP_MUL(* EXPR(CONST(INTEGER(2))))))"
+    ; "map with an operator takes the branch named for it"
 )]
 #[test_case(
     "map + $v"
-    => "RULE(MAP(KEYWORD(map) MAP_MATH(+ EXPR(VARIABLE($v)))))"
+    => "RULE(MAP(KEYWORD(map) MAP_PLUS(+ EXPR(VARIABLE($v)))))"
     ; "map math against a parameter"
 )]
 #[test_case(
@@ -440,7 +455,7 @@ fn arrays(src: &str) -> String {
 )]
 #[test_case(
     "align to 7d using avg"
-    => "RULE(ALIGN(KEYWORD(align) KEYWORD(to) DURATION(7 TIME_UNIT(d)) KEYWORD(using) \
+    => "RULE(ALIGN(KEYWORD(align) KEYWORD(to) DURATION(INTEGER(7) TIME_UNIT(d)) KEYWORD(using) \
         FUNCTION_PATH(IDENT(avg))))"
     ; "align to a duration"
 )]
@@ -468,7 +483,7 @@ fn arrays(src: &str) -> String {
 #[test_case(
     "bucket by a to 5m using histogram(1.0, 2.0)"
     => "RULE(BUCKET(KEYWORD(bucket) KEYWORD(by) TAG_LIST(IDENT(a)) KEYWORD(to) \
-        DURATION(5 TIME_UNIT(m)) KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( \
+        DURATION(INTEGER(5) TIME_UNIT(m)) KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( \
         BUCKET_ARGS(BUCKET_ARG(FLOAT(1.0)) , BUCKET_ARG(FLOAT(2.0))) )))"
     ; "bucket with every clause"
 )]
@@ -492,15 +507,17 @@ fn arrays(src: &str) -> String {
 #[test_case(
     "ifdef ($p) { where a == 1 }"
     => "RULE(IFDEF(KEYWORD(ifdef) ( VARIABLE($p) ) { FILTER(KEYWORD(where) FILTER_OR(\
-        FILTER_AND(FILTER_NOT(FILTER_PAREN(FILTER_CMP(IDENT(a) == EXPR(CONST(INTEGER(1))))))))) }))"
+        FILTER_AND(FILTER_NOT(FILTER_PAREN(FILTER_CMP(IDENT(a) \
+        FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))))))) }))"
     ; "ifdef"
 )]
 #[test_case(
     "ifdef ($p) { where a == 1 } else { where b == 2 }"
     => "RULE(IFDEF(KEYWORD(ifdef) ( VARIABLE($p) ) { FILTER(KEYWORD(where) FILTER_OR(\
-        FILTER_AND(FILTER_NOT(FILTER_PAREN(FILTER_CMP(IDENT(a) == EXPR(CONST(INTEGER(1))))))))) } \
+        FILTER_AND(FILTER_NOT(FILTER_PAREN(FILTER_CMP(IDENT(a) \
+        FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))))))) } \
         KEYWORD(else) { FILTER(KEYWORD(where) FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
-        FILTER_CMP(IDENT(b) == EXPR(CONST(INTEGER(2))))))))) }))"
+        FILTER_CMP(IDENT(b) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(2)))))))))) }))"
     ; "ifdef else"
 )]
 fn rules(src: &str) -> String {
@@ -528,21 +545,22 @@ fn rules_are_flat_siblings() {
 // ---------------------------------------------------------------------------------------
 // Durations
 //
-// The unit is a separate `TIME_UNIT` node and it is optional, so `align to 5 using …` is
-// accepted with a bare number. Only the eight units in `Parser::duration` are units; any
-// other trailing ident is left for the next production, which is what turns
-// `tests/errors/invalid_time_unit.mpl` into an error at `using` rather than at the unit.
+// The count is an `INTEGER` node and the unit a separate `TIME_UNIT` node, which is optional,
+// so `align to 5 using …` is accepted with a bare number. A second is the finest resolution
+// the language carries, so the units run from `s` up. Only the seven units in
+// `Parser::duration` are units; any other trailing ident is left for the next production,
+// which is what turns `tests/errors/invalid_time_unit.mpl` into an error at `using` rather
+// than at the unit.
 // ---------------------------------------------------------------------------------------
 
-#[test_case("1ms" => "DURATION(1 TIME_UNIT(ms))" ; "milliseconds")]
-#[test_case("1s"  => "DURATION(1 TIME_UNIT(s))"  ; "seconds")]
-#[test_case("1m"  => "DURATION(1 TIME_UNIT(m))"  ; "minutes")]
-#[test_case("1h"  => "DURATION(1 TIME_UNIT(h))"  ; "hours")]
-#[test_case("1d"  => "DURATION(1 TIME_UNIT(d))"  ; "days")]
-#[test_case("1w"  => "DURATION(1 TIME_UNIT(w))"  ; "weeks")]
-#[test_case("1M"  => "DURATION(1 TIME_UNIT(M))"  ; "months are case sensitive")]
-#[test_case("1y"  => "DURATION(1 TIME_UNIT(y))"  ; "years")]
-#[test_case("5"   => "DURATION(5)"               ; "unit is optional")]
+#[test_case("1s"  => "DURATION(INTEGER(1) TIME_UNIT(s))" ; "seconds")]
+#[test_case("1m"  => "DURATION(INTEGER(1) TIME_UNIT(m))" ; "minutes")]
+#[test_case("1h"  => "DURATION(INTEGER(1) TIME_UNIT(h))" ; "hours")]
+#[test_case("1d"  => "DURATION(INTEGER(1) TIME_UNIT(d))" ; "days")]
+#[test_case("1w"  => "DURATION(INTEGER(1) TIME_UNIT(w))" ; "weeks")]
+#[test_case("1M"  => "DURATION(INTEGER(1) TIME_UNIT(M))" ; "months are case sensitive")]
+#[test_case("1y"  => "DURATION(INTEGER(1) TIME_UNIT(y))" ; "years")]
+#[test_case("5"   => "DURATION(INTEGER(5))"              ; "unit is optional")]
 fn durations(src: &str) -> String {
     duration(src)
 }
@@ -550,43 +568,54 @@ fn durations(src: &str) -> String {
 // ---------------------------------------------------------------------------------------
 // Comparisons
 //
+// The operator and its right-hand side share a `FILTER_CMP_*` node, one kind per operator, so
+// the tag is a sibling of the comparison rather than of the operand. That kind is what
+// `mpl_lang::ast` dispatches on, which is why it is pinned per operator rather than once.
+//
 // The right-hand side is an `EXPR` for every operator except `==` / `!=`, which additionally
-// accept a `REGEX`, and `is` / `in`, which take a type and an array respectively. `is` and
-// `in` are matched by text, not by token kind — the lexer emits no keywords
-// (`tests/lexer.rs::identifiers`) — so each needs its own case.
+// accept a `REGEX`, and `is`, which takes an `OTEL_TYPE`. `in` takes an `EXPR` too, so an
+// array literal arrives wrapped like any other constant and a parameter arrives as a bare
+// `VARIABLE`; whether that expression is a collection is settled when it is lowered
+// (`tests/errors/in-int.mpl`). `is` and `in` are matched by text, not by token kind — the
+// lexer emits no keywords (`tests/lexer.rs::identifiers`) — so each needs its own case.
 // ---------------------------------------------------------------------------------------
 
-#[test_case("a == 1"    => "FILTER_CMP(IDENT(a) == EXPR(CONST(INTEGER(1))))"  ; "equal")]
-#[test_case("a != 1"    => "FILTER_CMP(IDENT(a) != EXPR(CONST(INTEGER(1))))"  ; "not equal")]
-#[test_case("a < 1"     => "FILTER_CMP(IDENT(a) < EXPR(CONST(INTEGER(1))))"   ; "less than")]
-#[test_case("a <= 1"    => "FILTER_CMP(IDENT(a) <= EXPR(CONST(INTEGER(1))))"  ; "less than or equal")]
-#[test_case("a > 1"     => "FILTER_CMP(IDENT(a) > EXPR(CONST(INTEGER(1))))"   ; "greater than")]
-#[test_case("a >= 1"    => "FILTER_CMP(IDENT(a) >= EXPR(CONST(INTEGER(1))))"  ; "greater than or equal")]
-#[test_case("a == #/x/" => "FILTER_CMP(IDENT(a) == REGEX(#/x/))"              ; "regex is not wrapped in EXPR")]
-#[test_case("a != #/x/" => "FILTER_CMP(IDENT(a) != REGEX(#/x/))"              ; "negated regex")]
-#[test_case("a == b"    => "FILTER_CMP(IDENT(a) == EXPR(IDENT(b)))"           ; "tag against tag")]
-#[test_case("a == $v"   => "FILTER_CMP(IDENT(a) == EXPR(VARIABLE($v)))"       ; "tag against a parameter")]
+#[test_case("a == 1"    => "FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))"   ; "equal")]
+#[test_case("a != 1"    => "FILTER_CMP(IDENT(a) FILTER_CMP_NEQ(!= EXPR(CONST(INTEGER(1)))))"  ; "not equal")]
+#[test_case("a < 1"     => "FILTER_CMP(IDENT(a) FILTER_CMP_LT(< EXPR(CONST(INTEGER(1)))))"    ; "less than")]
+#[test_case("a <= 1"    => "FILTER_CMP(IDENT(a) FILTER_CMP_LTE(<= EXPR(CONST(INTEGER(1)))))"  ; "less than or equal")]
+#[test_case("a > 1"     => "FILTER_CMP(IDENT(a) FILTER_CMP_GT(> EXPR(CONST(INTEGER(1)))))"    ; "greater than")]
+#[test_case("a >= 1"    => "FILTER_CMP(IDENT(a) FILTER_CMP_GTE(>= EXPR(CONST(INTEGER(1)))))"  ; "greater than or equal")]
+#[test_case("a == #/x/" => "FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== REGEX(#/x/)))"               ; "regex is not wrapped in EXPR")]
+#[test_case("a != #/x/" => "FILTER_CMP(IDENT(a) FILTER_CMP_NEQ(!= REGEX(#/x/)))"              ; "negated regex")]
+#[test_case("a == b"    => "FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(IDENT(b))))"            ; "tag against tag")]
+#[test_case("a == $v"   => "FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(VARIABLE($v))))"        ; "tag against a parameter")]
 #[test_case(
     "a == \"x${ y }\""
-    => "FILTER_CMP(IDENT(a) == EXPR(CONST(STRING(\"x${ EXPR(IDENT(y)) }\"))))"
+    => "FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(CONST(STRING(\"x${ EXPR(IDENT(y)) }\")))))"
     ; "interpolated string on the right"
 )]
-#[test_case("a is string" => "FILTER_CMP(IDENT(a) KEYWORD(is) OTEL_TYPE(IDENT(string)))" ; "is string")]
-#[test_case("a is int"    => "FILTER_CMP(IDENT(a) KEYWORD(is) OTEL_TYPE(IDENT(int)))"    ; "is int")]
-#[test_case("a is float"  => "FILTER_CMP(IDENT(a) KEYWORD(is) OTEL_TYPE(IDENT(float)))"  ; "is float")]
-#[test_case("a is bool"   => "FILTER_CMP(IDENT(a) KEYWORD(is) OTEL_TYPE(IDENT(bool)))"   ; "is bool")]
-#[test_case("a is array"  => "FILTER_CMP(IDENT(a) KEYWORD(is) OTEL_TYPE(IDENT(array)))"  ; "is array")]
+#[test_case("a is string" => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(KEYWORD(is) OTEL_TYPE(IDENT(string))))" ; "is string")]
+#[test_case("a is int"    => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(KEYWORD(is) OTEL_TYPE(IDENT(int))))"    ; "is int")]
+#[test_case("a is float"  => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(KEYWORD(is) OTEL_TYPE(IDENT(float))))"  ; "is float")]
+#[test_case("a is bool"   => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(KEYWORD(is) OTEL_TYPE(IDENT(bool))))"   ; "is bool")]
+#[test_case("a is array"  => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(KEYWORD(is) OTEL_TYPE(IDENT(array))))"  ; "is array")]
 #[test_case(
     "a in [1, 2]"
-    => "FILTER_CMP(IDENT(a) KEYWORD(in) ARRAY([ EXPR(CONST(INTEGER(1))) , EXPR(CONST(INTEGER(2))) ]))"
+    => "FILTER_CMP(IDENT(a) FILTER_CMP_IN(KEYWORD(in) EXPR(CONST(ARRAY([ EXPR(CONST(INTEGER(1))) \
+        , EXPR(CONST(INTEGER(2))) ])))))"
     ; "in an array literal"
 )]
 #[test_case(
     "a in $v"
-    => "FILTER_CMP(IDENT(a) KEYWORD(in) VARIABLE($v))"
+    => "FILTER_CMP(IDENT(a) FILTER_CMP_IN(KEYWORD(in) VARIABLE($v)))"
     ; "in a parameter takes the variable branch"
 )]
-#[test_case("`a b` == 1" => "FILTER_CMP(IDENT(`a b`) == EXPR(CONST(INTEGER(1))))" ; "escaped tag name")]
+#[test_case(
+    "`a b` == 1"
+    => "FILTER_CMP(IDENT(`a b`) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))"
+    ; "escaped tag name"
+)]
 fn comparisons(src: &str) -> String {
     cmp(src)
 }
@@ -623,12 +652,12 @@ fn boolean_grouping(src: &str) -> String {
 fn filter_wrapper_chain() {
     assert_eq!(
         cmp("a == 1"),
-        "FILTER_CMP(IDENT(a) == EXPR(CONST(INTEGER(1))))"
+        "FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))"
     );
     assert_eq!(
         rule("where a == 1"),
         "RULE(FILTER(KEYWORD(where) FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
-         FILTER_CMP(IDENT(a) == EXPR(CONST(INTEGER(1))))))))))"
+         FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))))))))"
     );
 }
 
@@ -886,7 +915,7 @@ fn parse_examples() {
 /// `tests/examples/*.mpl`, instead of the example sitting there unread forever.
 #[test_case("enrich.mpl.unimplemented"         => false ; "enrich needs a join rule")]
 #[test_case("nested-enrich.mpl.unimplemented"  => false ; "nested enrich needs a join rule")]
-#[test_case("replace_labels.mpl.unimplemented" => true  ; "replace labels already parses")]
+#[test_case("replace_labels.mpl.unimplemented" => false ; "replace labels needs a replace rule")]
 fn unimplemented_examples_parse(name: &str) -> bool {
     let content = fs::read_to_string(format!("./tests/examples/{name}"))
         .unwrap_or_else(|e| panic!("{name} is not readable: {e}"));
@@ -906,7 +935,6 @@ fn parse_error_examples() {
         "incomplete_query.mpl",
         "missing_pipe.mpl",
         "typo_keyword.mpl",
-        "in-int.mpl",
         "invalid_time_unit.mpl",
         "in-trailing-comma.mpl",
         "invalid_operator.mpl",
@@ -1337,7 +1365,7 @@ fn gen_filter(rng: &mut Rng, depth: u64) -> String {
 }
 
 fn gen_duration(rng: &mut Rng) -> String {
-    let unit = *rng.pick(&["ms", "s", "m", "h", "d", "w", "M", "y", ""]);
+    let unit = *rng.pick(&["s", "m", "h", "d", "w", "M", "y", ""]);
     format!("{}{unit}", 1 + rng.below(60))
 }
 
@@ -1627,18 +1655,26 @@ fn random_input_does_not_break_the_parser() {
 }
 
 // ---------------------------------------------------------------------------------------
-// Closed gaps and language properties
+// Gaps and language properties
 //
 // Each test below states a behaviour that should hold. None of them asserts the current
 // behaviour where that behaviour is a defect: a test that did would report green for as long
 // as the defect survived and red the moment it was fixed, which is backwards. Written that
 // way, a test states the goal while the gap is open and becomes its regression test the day
-// it closes — which is what all four are now.
+// it closes.
 //
-// Three of them record a defect that has since been fixed, and their notes say what it was,
-// so a rewrite of the code they cover cannot quietly reintroduce it: arrays unreachable from
-// constant position, and the two halves of error recovery. The compute-query ambiguity is a
-// property of the language rather than a defect, and stays here permanently.
+// Three record a defect that has since been fixed, and their notes say what it was, so a
+// rewrite of the code they cover cannot quietly reintroduce it: arrays unreachable from
+// constant position, and the two halves of error recovery.
+//
+// Two are open, both in `Parser::variable_type`: a type name followed by trivia comes back
+// reordered, and one that trips the depth cap comes back short a token. Each names the
+// smallest input that shows it, so the properties at the top of this file are not the only
+// thing standing between the defect and a fix — they reach the same failures, but only
+// through generated input long enough to be unreadable.
+//
+// The compute-query ambiguity is a property of the language rather than a defect, and stays
+// here permanently.
 // ---------------------------------------------------------------------------------------
 
 /// Arrays are reachable from every constant position: `set`, `extend`, a `map` argument, an
@@ -1752,6 +1788,56 @@ fn error_recovery_does_not_duplicate() {
     }
 }
 
+/// A type name sits where the source put it, ahead of the trivia that follows it.
+///
+/// `Parser::variable_type` reads the name with `next()` and only then opens the node it goes
+/// in — `OTEL_TYPE`, `MPL_TYPE` or `OPTION_TYPE`. Opening a node runs `eat_trivia` before its
+/// body, so for the two leaf kinds the whitespace or comment trailing the name reaches the
+/// builder ahead of the name itself and the literal comes back reordered.
+///
+/// A single space is enough to show it, and the parse reports no error at all, which is what
+/// makes it worth its own case: `generated_queries_parse_cleanly` reaches this only when its
+/// generator happens to put trivia after a declared type, and reports it as an anonymous
+/// round-trip mismatch inside a program long enough to be unreadable.
+///
+/// One case per branch that takes a name: a tag type, a query-language type, and a type
+/// nested inside `Option<…>`. The comment case is the shape the generator found.
+#[test]
+fn a_type_name_keeps_its_place_in_the_source() {
+    for src in [
+        "param $p: int ; d:m",
+        "param $p: Dataset ; d:m",
+        "param $p: Option< int >; d:m",
+        "param $p: int // c\nd:m",
+    ] {
+        let SyntaxTree { root, errors } = Parser::new(src).parse();
+        assert_eq!(root.to_string(), src, "{src:?} came back reordered");
+        assert!(errors.is_empty(), "{src:?}: {errors:?}");
+    }
+}
+
+/// Tripping the depth cap costs the input an error, never a token.
+///
+/// `rnode` reports the overflow *instead of* running the production body, so a token the
+/// caller consumed before entering is never handed to the builder. `Parser::variable_type`
+/// takes the `Option` ident with `next()` and enters `rnode(OPTION_TYPE, …)` after, so the
+/// literal comes back one `Option` short.
+///
+/// Two nested `Option`s against a cap of one is the whole reproduction.
+/// `tripping_the_cap_keeps_every_property` covers the same ground for every capped shape at
+/// 60 levels, where the missing token has to be spotted inside a 500-character line.
+#[test]
+fn tripping_the_cap_keeps_every_token() {
+    let src = "param $p: Option<Option<int>>; d:m";
+    let SyntaxTree { root, errors } = Parser::new(src).with_tree_depth(1).parse();
+    assert!(!errors.is_empty(), "{src:?} did not trip a cap of 1");
+    assert_eq!(
+        root.to_string(),
+        src,
+        "{src:?} lost text when the cap tripped"
+    );
+}
+
 // ---------------------------------------------------------------------------------------
 // Tree depth
 //
@@ -1849,7 +1935,7 @@ fn every_recursive_production_is_capped(shape: &str) {
 /// change in what the default protects.
 #[test_case("filter" =>  62 ; "filter spends four nodes per parenthesis")]
 #[test_case("array"  => 251 ; "array spends one node per level")]
-#[test_case("type"   => 250 ; "variable_type spends one node per level")]
+#[test_case("type"   => 251 ; "variable_type spends one node per level")]
 #[test_case("string" => 250 ; "string spends one node per level")]
 #[test_case("query"  => 250 ; "query spends one node per level")]
 fn depth_is_counted_in_nodes_not_nesting(shape: &str) -> usize {
