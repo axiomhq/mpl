@@ -157,7 +157,6 @@ pub enum SyntaxKind {
     BOOL,
     NULL,
     STRING,
-    STRING_START,
     STRING_SEGMENT,
     STRING_END,
     ARRAY,
@@ -625,7 +624,7 @@ impl Parser<'_> {
                 TokenType::Integer => s.integer(),
                 TokenType::Bool => s.bool(),
                 TokenType::Null => s.null(),
-                TokenType::String | TokenType::StringSegment => s.string(),
+                TokenType::String | TokenType::StringStart => s.string(),
                 TokenType::LBracket => s.array(),
                 _ => s.error("expected constant"),
             }
@@ -647,12 +646,21 @@ impl Parser<'_> {
     fn string(&mut self) {
         self.rnode(STRING, |s| {
             let mut tkn = s.next();
-            while tkn.tpe() == TokenType::StringSegment {
+            if tkn.tpe() == TokenType::StringStart {
                 s.token(tkn);
                 s.expr();
                 tkn = s.next();
-            }
-            if tkn.tpe() == TokenType::String {
+                while tkn.tpe() == TokenType::StringSegment {
+                    s.token(tkn);
+                    s.expr();
+                    tkn = s.next();
+                }
+                if tkn.tpe() == TokenType::StringEnd {
+                    s.token(tkn);
+                } else {
+                    s.error_token(tkn, "Unexpected string");
+                }
+            } else if tkn.tpe() == TokenType::String {
                 s.token(tkn);
             } else {
                 s.error_token(tkn, "Unexpected string");
@@ -989,7 +997,6 @@ impl Parser<'_> {
     fn duration(&mut self) {
         self.node(DURATION, |s| {
             s.integer();
-
             let tkn = s.peek();
             if tkn.tpe() == TokenType::Ident
                 && matches!(tkn.text(), "s" | "m" | "h" | "d" | "w" | "M" | "y")
@@ -1130,13 +1137,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse() {
-        let input = r"
+    fn test_syntaxparse() {
+        let input = r#"
             // test
             set a = 42;
             set b;
             a:b
-            ";
+            | where a == "hello ${ $world } snot { $badger }"
+            "#;
         let SyntaxTree { root, errors } = Parser::new(input).parse();
         dbg!(&root, &errors);
         assert_eq!(input, root.to_string());
