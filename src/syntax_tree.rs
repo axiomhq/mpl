@@ -914,7 +914,7 @@ impl Parser<'_> {
                 TokenType::Ident if tkn.text() == "in" => s.node(FILTER_CMP_IN, |s| {
                     s.keyword("in");
                     if !s.try_variable() {
-                        s.array();
+                        s.expr();
                     }
                 }),
                 _ => {
