@@ -378,6 +378,14 @@ impl<'input> Parser<'input> {
         token.tpe() == TokenType::Ident && token.text() == text
     }
 
+    fn try_keyword_token(&mut self, text: &str) -> bool {
+        if !self.is_keyword(text) {
+            return false;
+        }
+        self.eat_token();
+        true
+    }
+
     fn try_keyword(&mut self, text: &str) -> bool {
         if !self.is_keyword(text) {
             return false;
@@ -529,9 +537,9 @@ impl Parser<'_> {
             s.try_structural(TokenType::Comma);
             s.structural(TokenType::RParen);
             s.structural(TokenType::Pipe);
-            s.keyword("compute");
+            s.keyword_token("compute");
             s.ident();
-            s.keyword("using");
+            s.keyword_token("using");
             let tkn = s.peek();
             match tkn.tpe() {
                 TokenType::Ident | TokenType::EscapedIdent => s.function_path(),
@@ -578,7 +586,7 @@ impl Parser<'_> {
 
     fn directive(&mut self) {
         self.node(DIRECTIVE, |s| {
-            s.keyword("set");
+            s.keyword_token("set");
             s.ident();
             if s.try_structural(TokenType::Equal) {
                 s.constant();
@@ -589,7 +597,7 @@ impl Parser<'_> {
 
     fn param(&mut self) {
         self.node(PARAM, |s| {
-            s.keyword("param");
+            s.keyword_token("param");
             s.variable();
             s.structural(TokenType::Colon);
             s.variable_type();
@@ -681,6 +689,19 @@ impl Parser<'_> {
             }
             s.structural(TokenType::RBracket);
         });
+    }
+
+    /// silent keyword ; does not produce a new syntax node just a token
+    fn keyword_token(&mut self, text: &str) {
+        let token = self.next();
+        if token.text() == text {
+            self.token(token);
+        } else {
+            self.error_token(
+                token,
+                format!("expected keyword {} but got {}", text, token.text()),
+            );
+        }
     }
 
     fn keyword(&mut self, text: &str) {
@@ -818,7 +839,7 @@ impl Parser<'_> {
 
     fn filter_rule(&mut self) {
         self.node(FILTER, |s| {
-            if !s.try_keyword("filter") && !s.try_keyword("where") {
+            if !s.try_keyword_token("filter") && !s.try_keyword_token("where") {
                 s.error("expected filter or where");
                 return;
             }
@@ -829,7 +850,7 @@ impl Parser<'_> {
     fn filter_or(&mut self) {
         self.rnode(FILTER_OR, |s| {
             s.filter_and();
-            while s.try_keyword("or") {
+            while s.try_keyword_token("or") {
                 s.filter_and();
             }
         });
@@ -838,7 +859,7 @@ impl Parser<'_> {
     fn filter_and(&mut self) {
         self.rnode(FILTER_AND, |s| {
             s.filter_not();
-            while s.try_keyword("and") {
+            while s.try_keyword_token("and") {
                 s.filter_not();
             }
         });
@@ -905,11 +926,11 @@ impl Parser<'_> {
                 }),
 
                 TokenType::Ident if tkn.text() == "is" => s.node(FILTER_CMP_IS, |s| {
-                    s.keyword("is");
+                    s.keyword_token("is");
                     s.type_ident();
                 }),
                 TokenType::Ident if tkn.text() == "in" => s.node(FILTER_CMP_IN, |s| {
-                    s.keyword("in");
+                    s.keyword_token("in");
                     if !s.try_variable() {
                         s.expr();
                     }
@@ -923,14 +944,14 @@ impl Parser<'_> {
 
     fn sample_rule(&mut self) {
         self.node(SAMPLE, |s| {
-            s.keyword("sample");
+            s.keyword_token("sample");
             s.float();
         });
     }
 
     fn map_rule(&mut self) {
         self.node(MAP, |s| {
-            s.keyword("map");
+            s.keyword_token("map");
             let tkn = s.peek();
             match tkn.tpe() {
                 TokenType::Mul => {
@@ -970,7 +991,7 @@ impl Parser<'_> {
     }
     fn as_rule(&mut self) {
         self.node(AS, |s| {
-            if !s.try_keyword("as") {
+            if !s.try_keyword_token("as") {
                 s.error("expected as");
                 return;
             }
@@ -980,7 +1001,7 @@ impl Parser<'_> {
 
     fn align_rule(&mut self) {
         self.node(ALIGN, |s| {
-            s.keyword("align");
+            s.keyword_token("align");
             // note: this will eat "to $..." with the && as try_variable() is only
             // called when try_to is also true
             if s.try_keyword("to") && !s.try_variable() {
@@ -1014,7 +1035,7 @@ impl Parser<'_> {
 
     fn group_rule(&mut self) {
         self.node(GROUP, |s| {
-            s.keyword("group");
+            s.keyword_token("group");
             if s.try_keyword("by") {
                 s.tag_list();
             }
@@ -1025,7 +1046,7 @@ impl Parser<'_> {
 
     fn bucket_rule(&mut self) {
         self.node(BUCKET, |s| {
-            s.keyword("bucket");
+            s.keyword_token("bucket");
             if s.try_keyword("by") {
                 s.tag_list();
             }
@@ -1070,14 +1091,14 @@ impl Parser<'_> {
 
     fn ifdef_rule(&mut self) {
         self.node(IFDEF, |s| {
-            s.keyword("ifdef");
+            s.keyword_token("ifdef");
             s.structural(TokenType::LParen);
             s.variable();
             s.structural(TokenType::RParen);
             s.structural(TokenType::LBrace);
             s.filter_rule();
             s.structural(TokenType::RBrace);
-            if s.try_keyword("else") {
+            if s.try_keyword_token("else") {
                 s.structural(TokenType::LBrace);
                 s.filter_rule();
                 s.structural(TokenType::RBrace);
@@ -1095,7 +1116,7 @@ impl Parser<'_> {
 
     fn extend_rule(&mut self) {
         self.node(EXTEND, |s| {
-            s.keyword("extend");
+            s.keyword_token("extend");
             s.extend_part();
             while s.try_structural(TokenType::Comma) {
                 s.extend_part();
