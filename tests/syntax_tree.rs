@@ -245,22 +245,22 @@ fn simple_queries(src: &str) -> String {
 #[test_case(
     "(a:b, c:d) | compute x using /"
     => "COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b))) , \
-        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | KEYWORD(compute) \
-        IDENT(x) KEYWORD(using) MATH_FN(/))"
+        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | compute \
+        IDENT(x) using MATH_FN(/))"
     ; "operator as the compute function"
 )]
 #[test_case(
     "(a:b, c:d,) | compute x using sum"
     => "COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b))) , \
-        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) , ) | KEYWORD(compute) \
-        IDENT(x) KEYWORD(using) FUNCTION_PATH(IDENT(sum)))"
+        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) , ) | compute \
+        IDENT(x) using FUNCTION_PATH(IDENT(sum)))"
     ; "trailing comma is allowed"
 )]
 #[test_case(
     "(a:b, c:d) | compute x using a::b"
     => "COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b))) , \
-        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | KEYWORD(compute) \
-        IDENT(x) KEYWORD(using) FUNCTION_PATH(IDENT(a) :: IDENT(b)))"
+        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | compute \
+        IDENT(x) using FUNCTION_PATH(IDENT(a) :: IDENT(b)))"
     ; "module path as the compute function"
 )]
 fn compute_queries(src: &str) -> String {
@@ -275,10 +275,10 @@ fn compute_queries_nest() {
         tree("((a:b, c:d) | compute x using +, e:f) | compute y using -"),
         "ROOT(QUERY(COMPUTE_QUERY(( QUERY(COMPUTE_QUERY(( \
          QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b))) , \
-         QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | KEYWORD(compute) \
-         IDENT(x) KEYWORD(using) MATH_FN(+))) , \
-         QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(e)) : IDENT(f))) ) | KEYWORD(compute) \
-         IDENT(y) KEYWORD(using) MATH_FN(-))))"
+         QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | compute \
+         IDENT(x) using MATH_FN(+))) , \
+         QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(e)) : IDENT(f))) ) | compute \
+         IDENT(y) using MATH_FN(-))))"
     );
 }
 
@@ -292,25 +292,25 @@ fn compute_queries_nest() {
 // recursive production here.
 // ---------------------------------------------------------------------------------------
 
-#[test_case("set a;"                   => "DIRECTIVE(KEYWORD(set) IDENT(a) ;)"                                  ; "flag without a value")]
-#[test_case("set a = 42;"              => "DIRECTIVE(KEYWORD(set) IDENT(a) = CONST(INTEGER(42)) ;)"             ; "with a value")]
+#[test_case("set a;"                   => "DIRECTIVE(set IDENT(a) ;)"                                  ; "flag without a value")]
+#[test_case("set a = 42;"              => "DIRECTIVE(set IDENT(a) = CONST(INTEGER(42)) ;)"             ; "with a value")]
 fn directives(src: &str) -> String {
     first(&format!("{src} d:m"), SyntaxKind::DIRECTIVE)
 }
 
 #[test_case(
     "param $p: string;"
-    => "PARAM(KEYWORD(param) VARIABLE($p) : TYPE(OTEL_TYPE(string)) ;)"
+    => "PARAM(param VARIABLE($p) : TYPE(OTEL_TYPE(string)) ;)"
     ; "declared parameter"
 )]
 #[test_case(
     "param $p: Dataset;"
-    => "PARAM(KEYWORD(param) VARIABLE($p) : TYPE(MPL_TYPE(Dataset)) ;)"
+    => "PARAM(param VARIABLE($p) : TYPE(MPL_TYPE(Dataset)) ;)"
     ; "custom type"
 )]
 #[test_case(
     "param $p: Option<int>;"
-    => "PARAM(KEYWORD(param) VARIABLE($p) : TYPE(OPTION_TYPE(Option < TYPE(OTEL_TYPE(int)) >)) ;)"
+    => "PARAM(param VARIABLE($p) : TYPE(OPTION_TYPE(Option < TYPE(OTEL_TYPE(int)) >)) ;)"
     ; "option nests a type"
 )]
 fn params(src: &str) -> String {
@@ -323,8 +323,8 @@ fn params(src: &str) -> String {
 fn directives_precede_the_query_as_siblings() {
     assert_eq!(
         tree("set a = 1; param $p: bool; d:m"),
-        "ROOT(DIRECTIVE(KEYWORD(set) IDENT(a) = CONST(INTEGER(1)) ;) \
-         PARAM(KEYWORD(param) VARIABLE($p) : TYPE(OTEL_TYPE(bool)) ;) \
+        "ROOT(DIRECTIVE(set IDENT(a) = CONST(INTEGER(1)) ;) \
+         PARAM(param VARIABLE($p) : TYPE(OTEL_TYPE(bool)) ;) \
          QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(d)) : IDENT(m))))"
     );
 }
@@ -420,103 +420,103 @@ fn arrays(src: &str) -> String {
 
 #[test_case(
     "where a == 1"
-    => "RULE(FILTER(KEYWORD(where) FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
+    => "RULE(FILTER(where FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
         FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))))))))"
     ; "where rule"
 )]
 #[test_case(
     "filter a == 1"
-    => "RULE(FILTER(KEYWORD(filter) FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
+    => "RULE(FILTER(filter FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
         FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))))))))"
     ; "filter is a synonym of where"
 )]
-#[test_case("as x"       => "RULE(AS(KEYWORD(as) IDENT(x)))"                            ; "as rule")]
-#[test_case("sample 0.5" => "RULE(SAMPLE(KEYWORD(sample) FLOAT(0.5)))"                  ; "sample")]
-#[test_case("map rate"   => "RULE(MAP(KEYWORD(map) FUNCTION_PATH(IDENT(rate))))"         ; "map without arguments")]
+#[test_case("as x"       => "RULE(AS(as IDENT(x)))"                            ; "as rule")]
+#[test_case("sample 0.5" => "RULE(SAMPLE(sample FLOAT(0.5)))"                  ; "sample")]
+#[test_case("map rate"   => "RULE(MAP(map FUNCTION_PATH(IDENT(rate))))"         ; "map without arguments")]
 #[test_case(
     "map filter::gt(1)"
-    => "RULE(MAP(KEYWORD(map) FUNCTION_PATH(IDENT(filter) :: IDENT(gt)) ( EXPR(CONST(INTEGER(1))) )))"
+    => "RULE(MAP(map FUNCTION_PATH(IDENT(filter) :: IDENT(gt)) ( EXPR(CONST(INTEGER(1))) )))"
     ; "map with a module path and an argument"
 )]
 #[test_case(
     "map * 2"
-    => "RULE(MAP(KEYWORD(map) MAP_MUL(* EXPR(CONST(INTEGER(2))))))"
+    => "RULE(MAP(map MAP_MUL(* EXPR(CONST(INTEGER(2))))))"
     ; "map with an operator takes the branch named for it"
 )]
 #[test_case(
     "map + $v"
-    => "RULE(MAP(KEYWORD(map) MAP_PLUS(+ EXPR(VARIABLE($v)))))"
+    => "RULE(MAP(map MAP_PLUS(+ EXPR(VARIABLE($v)))))"
     ; "map math against a parameter"
 )]
 #[test_case(
     "align using avg"
-    => "RULE(ALIGN(KEYWORD(align) KEYWORD(using) FUNCTION_PATH(IDENT(avg))))"
+    => "RULE(ALIGN(align KEYWORD(using) FUNCTION_PATH(IDENT(avg))))"
     ; "align without a target"
 )]
 #[test_case(
     "align to 7d using avg"
-    => "RULE(ALIGN(KEYWORD(align) KEYWORD(to) DURATION(INTEGER(7) TIME_UNIT(d)) KEYWORD(using) \
+    => "RULE(ALIGN(align KEYWORD(to) DURATION(INTEGER(7) TIME_UNIT(d)) KEYWORD(using) \
         FUNCTION_PATH(IDENT(avg))))"
     ; "align to a duration"
 )]
 #[test_case(
     "align to $d using avg"
-    => "RULE(ALIGN(KEYWORD(align) KEYWORD(to) VARIABLE($d) KEYWORD(using) FUNCTION_PATH(IDENT(avg))))"
+    => "RULE(ALIGN(align KEYWORD(to) VARIABLE($d) KEYWORD(using) FUNCTION_PATH(IDENT(avg))))"
     ; "align to a parameter takes the variable branch"
 )]
 #[test_case(
     "group using max"
-    => "RULE(GROUP(KEYWORD(group) KEYWORD(using) FUNCTION_PATH(IDENT(max))))"
+    => "RULE(GROUP(group KEYWORD(using) FUNCTION_PATH(IDENT(max))))"
     ; "group without tags"
 )]
 #[test_case(
     "group by a, b using sum"
-    => "RULE(GROUP(KEYWORD(group) KEYWORD(by) TAG_LIST(IDENT(a) , IDENT(b)) KEYWORD(using) \
+    => "RULE(GROUP(group KEYWORD(by) TAG_LIST(IDENT(a) , IDENT(b)) KEYWORD(using) \
         FUNCTION_PATH(IDENT(sum))))"
     ; "group by a tag list"
 )]
 #[test_case(
     "bucket using histogram()"
-    => "RULE(BUCKET(KEYWORD(bucket) KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( )))"
+    => "RULE(BUCKET(bucket KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( )))"
     ; "bucket with empty argument list emits no BUCKET_ARGS"
 )]
 #[test_case(
     "bucket by a to 5m using histogram(1.0, 2.0)"
-    => "RULE(BUCKET(KEYWORD(bucket) KEYWORD(by) TAG_LIST(IDENT(a)) KEYWORD(to) \
+    => "RULE(BUCKET(bucket KEYWORD(by) TAG_LIST(IDENT(a)) KEYWORD(to) \
         DURATION(INTEGER(5) TIME_UNIT(m)) KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( \
         BUCKET_ARGS(BUCKET_ARG(FLOAT(1.0)) , BUCKET_ARG(FLOAT(2.0))) )))"
     ; "bucket with every clause"
 )]
 #[test_case(
     "bucket using histogram(le)"
-    => "RULE(BUCKET(KEYWORD(bucket) KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( \
+    => "RULE(BUCKET(bucket KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( \
         BUCKET_ARGS(BUCKET_ARG(IDENT(le))) )))"
     ; "bucket argument may be an ident"
 )]
 #[test_case(
     "extend a = 1"
-    => "RULE(EXTEND(KEYWORD(extend) EXTEND_PART(IDENT(a) = EXPR(CONST(INTEGER(1))))))"
+    => "RULE(EXTEND(extend EXTEND_PART(IDENT(a) = EXPR(CONST(INTEGER(1))))))"
     ; "extend with one part"
 )]
 #[test_case(
     "extend a = 1, b = \"x\""
-    => "RULE(EXTEND(KEYWORD(extend) EXTEND_PART(IDENT(a) = EXPR(CONST(INTEGER(1)))) , \
+    => "RULE(EXTEND(extend EXTEND_PART(IDENT(a) = EXPR(CONST(INTEGER(1)))) , \
         EXTEND_PART(IDENT(b) = EXPR(CONST(STRING(\"x\"))))))"
     ; "extend parts are siblings"
 )]
 #[test_case(
     "ifdef ($p) { where a == 1 }"
-    => "RULE(IFDEF(KEYWORD(ifdef) ( VARIABLE($p) ) { FILTER(KEYWORD(where) FILTER_OR(\
+    => "RULE(IFDEF(ifdef ( VARIABLE($p) ) { FILTER(where FILTER_OR(\
         FILTER_AND(FILTER_NOT(FILTER_PAREN(FILTER_CMP(IDENT(a) \
         FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))))))) }))"
     ; "ifdef"
 )]
 #[test_case(
     "ifdef ($p) { where a == 1 } else { where b == 2 }"
-    => "RULE(IFDEF(KEYWORD(ifdef) ( VARIABLE($p) ) { FILTER(KEYWORD(where) FILTER_OR(\
+    => "RULE(IFDEF(ifdef ( VARIABLE($p) ) { FILTER(where FILTER_OR(\
         FILTER_AND(FILTER_NOT(FILTER_PAREN(FILTER_CMP(IDENT(a) \
         FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))))))) } \
-        KEYWORD(else) { FILTER(KEYWORD(where) FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
+        else { FILTER(where FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
         FILTER_CMP(IDENT(b) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(2)))))))))) }))"
     ; "ifdef else"
 )]
@@ -595,20 +595,20 @@ fn durations(src: &str) -> String {
     => "FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(CONST(STRING(\"x${ EXPR(IDENT(y)) }\")))))"
     ; "interpolated string on the right"
 )]
-#[test_case("a is string" => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(KEYWORD(is) OTEL_TYPE(IDENT(string))))" ; "is string")]
-#[test_case("a is int"    => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(KEYWORD(is) OTEL_TYPE(IDENT(int))))"    ; "is int")]
-#[test_case("a is float"  => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(KEYWORD(is) OTEL_TYPE(IDENT(float))))"  ; "is float")]
-#[test_case("a is bool"   => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(KEYWORD(is) OTEL_TYPE(IDENT(bool))))"   ; "is bool")]
-#[test_case("a is array"  => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(KEYWORD(is) OTEL_TYPE(IDENT(array))))"  ; "is array")]
+#[test_case("a is string" => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(is OTEL_TYPE(IDENT(string))))" ; "is string")]
+#[test_case("a is int"    => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(is OTEL_TYPE(IDENT(int))))"    ; "is int")]
+#[test_case("a is float"  => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(is OTEL_TYPE(IDENT(float))))"  ; "is float")]
+#[test_case("a is bool"   => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(is OTEL_TYPE(IDENT(bool))))"   ; "is bool")]
+#[test_case("a is array"  => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(is OTEL_TYPE(IDENT(array))))"  ; "is array")]
 #[test_case(
     "a in [1, 2]"
-    => "FILTER_CMP(IDENT(a) FILTER_CMP_IN(KEYWORD(in) EXPR(CONST(ARRAY([ EXPR(CONST(INTEGER(1))) \
+    => "FILTER_CMP(IDENT(a) FILTER_CMP_IN(in EXPR(CONST(ARRAY([ EXPR(CONST(INTEGER(1))) \
         , EXPR(CONST(INTEGER(2))) ])))))"
     ; "in an array literal"
 )]
 #[test_case(
     "a in $v"
-    => "FILTER_CMP(IDENT(a) FILTER_CMP_IN(KEYWORD(in) VARIABLE($v)))"
+    => "FILTER_CMP(IDENT(a) FILTER_CMP_IN(in VARIABLE($v)))"
     ; "in a parameter takes the variable branch"
 )]
 #[test_case(
@@ -656,7 +656,7 @@ fn filter_wrapper_chain() {
     );
     assert_eq!(
         rule("where a == 1"),
-        "RULE(FILTER(KEYWORD(where) FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
+        "RULE(FILTER(where FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
          FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))))))))"
     );
 }
