@@ -377,7 +377,7 @@ impl<'input> Parser<'input> {
         };
         token.tpe() == TokenType::Ident && token.text() == text
     }
-
+    /// silent keyword ; does not produce a new syntax node just a token
     fn try_keyword_token(&mut self, text: &str) -> bool {
         if !self.is_keyword(text) {
             return false;
