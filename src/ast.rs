@@ -1863,6 +1863,7 @@ impl Parser {
             "bool" => Ok(TagType::Bool),
             "string" => Ok(TagType::String),
             "array" => Ok(TagType::Array),
+            "null" => Ok(TagType::Null),
             _ => {
                 self.errors.push(ParserError::InvalidType {
                     span: node.span(),
@@ -1937,7 +1938,7 @@ impl Parser {
             });
             return Err(Error("missing type"));
         };
-        // self.assert_end(children);
+        self.assert_end(children);
         Ok(Param { name, ty })
     }
 
