@@ -1017,7 +1017,7 @@ impl Parser<'_> {
             s.integer();
             let tkn = s.peek();
             if tkn.tpe() == TokenType::Ident
-                && matches!(tkn.text(), "s" | "m" | "h" | "d" | "w" | "M" | "y")
+                && matches!(tkn.text(), "ms" | "s" | "m" | "h" | "d" | "w" | "M" | "y")
             {
                 s.node(TIME_UNIT, Parser::eat_token);
             }

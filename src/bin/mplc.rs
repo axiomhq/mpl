@@ -40,6 +40,19 @@ struct Args {
     command: Command,
 }
 
+/// Corpus mode
+#[derive(Default, Clone, Copy, clap::ValueEnum)]
+enum CorpusMode {
+    /// Full v1 style corpus parsing
+    #[default]
+    Full,
+    /// v2 Lexer
+    Lex,
+    /// v2 lexer -> sytnax tree
+    SyntaxTree,
+    /// v2 lexer -> syntax tree -> ast
+    Ast,
+}
 #[derive(clap::Subcommand)]
 enum Command {
     /// Parse an MPL file and output the AST
@@ -60,8 +73,8 @@ enum Command {
         /// the ndjson file to test
         file: String,
         /// whether to lex the corpus or fully parse it
-        #[arg(short, long)]
-        lex: bool,
+        #[arg(short, long, value_enum, default_value = "full")]
+        mode: CorpusMode,
     },
 }
 
@@ -97,45 +110,83 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     match args.command {
-        Command::Corpus { file, lex } => {
+        Command::Corpus { file, mode } => {
             let corpus = read_corpus(&file)?;
 
             let mut success = 0;
             let error_cnt;
-            if lex {
-                let mut errors = Vec::new();
-                for c in &corpus {
-                    let mut lexed = mpl_lang::lexer::Lexer::new(c.as_str());
+            match mode {
+                CorpusMode::Full => {
+                    let system_params = system_params();
+                    let mut errors = Vec::new();
 
-                    if let Some(t) = lexed.find(Token::is_invalid) {
-                        errors.push((c.clone(), t));
-                    } else {
-                        success += 1;
+                    for c in &corpus {
+                        let params = system_params.clone();
+                        let parsed = mpl_lang::compile(c.as_str(), params).map_err(|e| {
+                            Report::new(e).with_source_code(NamedSource::new(&file, c.clone()))
+                        });
+                        match parsed {
+                            Ok(_) => success += 1,
+                            Err(e) => errors.push((c.clone(), e)),
+                        }
+                    }
+                    error_cnt = errors.len();
+                    for (q, e) in &errors {
+                        println!("error: {q}: {e}");
                     }
                 }
-                error_cnt = errors.len();
-                for (q, t) in &errors {
-                    println!("error: {q}: {t:?}");
-                }
-            } else {
-                let system_params = system_params();
-                let mut errors = Vec::new();
+                CorpusMode::Lex => {
+                    let mut errors = Vec::new();
+                    for c in &corpus {
+                        let mut lexed = mpl_lang::lexer::Lexer::new(c.as_str());
 
-                for c in &corpus {
-                    let params = system_params.clone();
-                    let parsed = mpl_lang::compile(c.as_str(), params).map_err(|e| {
-                        Report::new(e).with_source_code(NamedSource::new(&file, c.clone()))
-                    });
-                    match parsed {
-                        Ok(_) => success += 1,
-                        Err(e) => errors.push((c.clone(), e)),
+                        if let Some(t) = lexed.find(Token::is_invalid) {
+                            errors.push((c.clone(), t));
+                        } else {
+                            success += 1;
+                        }
+                    }
+                    error_cnt = errors.len();
+                    for (q, t) in &errors {
+                        println!("error: {q}: {t:?}");
                     }
                 }
-                error_cnt = errors.len();
-                for (q, e) in &errors {
-                    println!("error: {q}: {e}");
+                CorpusMode::SyntaxTree => {
+                    let mut errors = Vec::new();
+                    for c in &corpus {
+                        let tree = mpl_lang::syntax_tree::Parser::new(c.as_str()).parse();
+                        if tree.errors.is_empty() {
+                            success += 1;
+                        } else {
+                            for e in tree.errors {
+                                errors.push((c.clone(), e));
+                            }
+                        }
+                    }
+                    error_cnt = errors.len();
+                    for (q, t) in &errors {
+                        println!("error: {q}: {t:?}");
+                    }
                 }
-            }
+                CorpusMode::Ast => {
+                    let mut errors = Vec::new();
+                    for c in &corpus {
+                        let parser = mpl_lang::ast::Parser::new(c.as_str());
+                        let ast = parser.lower();
+                        if ast.errors.is_empty() {
+                            success += 1;
+                        } else {
+                            for e in ast.errors {
+                                errors.push((c.clone(), e));
+                            }
+                        }
+                    }
+                    error_cnt = errors.len();
+                    for (q, t) in &errors {
+                        println!("error: {q}: {t:?}");
+                    }
+                }
+            };
             println!(
                 "total: {}, success: {success}, errors: {error_cnt}",
                 corpus.len(),
