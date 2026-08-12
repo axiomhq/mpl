@@ -27,6 +27,17 @@ pub enum ParserWarning {
         )]
         span: SourceSpan,
     },
+    /// Time must be second aligned
+    #[error("Time must be second aligned")]
+    TimeNotSecondAligned {
+        /// The nanosecond time provided
+        time: u64,
+        /// the span of hte invalid time
+        #[label(
+            "A duration of {time}ns does not cleanly translate into seconds, any sub second interval will be truncated"
+        )]
+        span: SourceSpan,
+    },
 }
 
 #[derive(thiserror::Error, Debug, Diagnostic)]
@@ -247,6 +258,15 @@ pub enum ParserError {
     UnicodeEscape {
         /// The source span of the invalid escape sequence.
         #[label("unicode escape sequences are not supported")]
+        span: SourceSpan,
+    },
+    /// Sub second durations are not supported
+    #[error("Sub second intervals are not supported")]
+    TimeTooSmall {
+        /// The nanosecond interval given
+        time: u64,
+        /// The source span of the invalid duration.
+        #[label("Sub second intervals are not supported, {time}ns provided")]
         span: SourceSpan,
     },
 }
@@ -1310,6 +1330,21 @@ impl Parser {
         let n = self.n(&mut children, node, SyntaxKind::TIME_UNIT)?;
         let unit = self.time_unit(&n)?;
         let duration = match unit.as_str() {
+            "ms" if i < 1000 => {
+                self.errors.push(ParserError::TimeTooSmall {
+                    time: i,
+                    span: n.span(),
+                });
+                1
+            }
+            "ms" if !i.is_multiple_of(1000) => {
+                self.warnings.push(ParserWarning::TimeNotSecondAligned {
+                    time: i,
+                    span: n.span(),
+                });
+                i / 1000
+            }
+            "ms" => i / 1000,
             "s" => i,
             "m" => i * 60,
             "h" => i * 60 * 60,
