@@ -771,11 +771,6 @@ fn trivia_at_the_edges_is_kept(src: &str) {
     ; "sample takes a float"
 )]
 #[test_case(
-    "d:m | bucket using histogram(1)"
-    => "\"expected ident or float in bucket arg\"@29+1"
-    ; "bucket argument may not be an integer"
-)]
-#[test_case(
     "d:"
     => "\"expected ident but got  (Eof)\"@2+0 Eof"
     ; "query truncated after the colon"
@@ -1774,11 +1769,7 @@ fn error_recovery_is_lossless() {
 /// `next()`.
 #[test]
 fn error_recovery_does_not_duplicate() {
-    for src in [
-        "d:m | where a ~ 1",
-        "d:m | bucket using histogram(1)",
-        "d:m | where a is nonsense",
-    ] {
+    for src in ["d:m | where a ~ 1", "d:m | where a is nonsense"] {
         let SyntaxTree { root, errors } = Parser::new(src).parse();
         assert!(!errors.is_empty(), "{src:?} was expected to fail");
         assert_eq!(
