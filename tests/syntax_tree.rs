@@ -27,7 +27,7 @@ use std::fs;
 
 use miette::{GraphicalReportHandler, GraphicalTheme, NamedSource, Report};
 use mpl_lang::lexer::Lexer;
-use mpl_lang::syntax_tree::{Lang, Parser, SyntaxError, SyntaxKind, SyntaxNode};
+use mpl_lang::syntax_tree::{Lang, Parser, SyntaxError, SyntaxKind, SyntaxNode, SyntaxTree};
 use rowan::{Language, NodeOrToken};
 use test_case::test_case;
 
@@ -62,13 +62,13 @@ fn shape(node: &SyntaxNode) -> String {
 /// dropped a token looks perfectly well-formed, so a table row that does not assert
 /// losslessness can pass while the parser is eating input.
 fn parse_clean(src: &str) -> SyntaxNode {
-    let (tree, errors) = Parser::new(src).parse();
+    let SyntaxTree { root, errors } = Parser::new(src).parse();
     assert!(
         errors.is_empty(),
         "unexpected errors for {src:?}: {errors:?}"
     );
-    assert_eq!(tree.to_string(), src, "tree does not reproduce {src:?}");
-    tree
+    assert_eq!(root.to_string(), src, "tree does not reproduce {src:?}");
+    root
 }
 
 /// Shape of the whole tree.
@@ -197,7 +197,7 @@ fn describe_error(error: &SyntaxError) -> String {
 
 /// All errors for an input, in the order the parser reported them.
 fn errors(src: &str) -> String {
-    let (_tree, errors) = Parser::new(src).parse();
+    let SyntaxTree { root: _, errors } = Parser::new(src).parse();
     errors
         .iter()
         .map(describe_error)
@@ -245,22 +245,22 @@ fn simple_queries(src: &str) -> String {
 #[test_case(
     "(a:b, c:d) | compute x using /"
     => "COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b))) , \
-        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | KEYWORD(compute) \
-        IDENT(x) KEYWORD(using) /)"
+        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | compute \
+        IDENT(x) using MATH_FN(/))"
     ; "operator as the compute function"
 )]
 #[test_case(
     "(a:b, c:d,) | compute x using sum"
     => "COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b))) , \
-        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) , ) | KEYWORD(compute) \
-        IDENT(x) KEYWORD(using) FUNCTION_PATH(IDENT(sum)))"
+        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) , ) | compute \
+        IDENT(x) using FUNCTION_PATH(IDENT(sum)))"
     ; "trailing comma is allowed"
 )]
 #[test_case(
     "(a:b, c:d) | compute x using a::b"
     => "COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b))) , \
-        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | KEYWORD(compute) \
-        IDENT(x) KEYWORD(using) FUNCTION_PATH(IDENT(a) :: IDENT(b)))"
+        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | compute \
+        IDENT(x) using FUNCTION_PATH(IDENT(a) :: IDENT(b)))"
     ; "module path as the compute function"
 )]
 fn compute_queries(src: &str) -> String {
@@ -275,10 +275,10 @@ fn compute_queries_nest() {
         tree("((a:b, c:d) | compute x using +, e:f) | compute y using -"),
         "ROOT(QUERY(COMPUTE_QUERY(( QUERY(COMPUTE_QUERY(( \
          QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b))) , \
-         QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | KEYWORD(compute) \
-         IDENT(x) KEYWORD(using) +)) , \
-         QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(e)) : IDENT(f))) ) | KEYWORD(compute) \
-         IDENT(y) KEYWORD(using) -)))"
+         QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | compute \
+         IDENT(x) using MATH_FN(+))) , \
+         QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(e)) : IDENT(f))) ) | compute \
+         IDENT(y) using MATH_FN(-))))"
     );
 }
 
@@ -286,18 +286,33 @@ fn compute_queries_nest() {
 // Directives
 //
 // `set` and `param` share the `DIRECTIVE` kind, and both are only accepted before the query.
-// The `TYPE` node nests for `Option<…>`, which is the one recursive production here.
+// A `TYPE` node nests the kind of type it holds — `OTEL_TYPE` for the tag types, `MPL_TYPE`
+// for the ones only the query language has, `OPTION_TYPE` for `Option<…>` — so a consumer
+// reads the family off the node and the name off its token. `OPTION_TYPE` is the one
+// recursive production here.
 // ---------------------------------------------------------------------------------------
 
-#[test_case("set a;"                   => "DIRECTIVE(KEYWORD(set) IDENT(a) ;)"                                  ; "flag without a value")]
-#[test_case("set a = 42;"              => "DIRECTIVE(KEYWORD(set) IDENT(a) = CONST(INTEGER(42)) ;)"             ; "with a value")]
+#[test_case("set a;"                   => "DIRECTIVE(set IDENT(a) ;)"                                  ; "flag without a value")]
+#[test_case("set a = 42;"              => "DIRECTIVE(set IDENT(a) = CONST(INTEGER(42)) ;)"             ; "with a value")]
 fn directives(src: &str) -> String {
     first(&format!("{src} d:m"), SyntaxKind::DIRECTIVE)
 }
 
-#[test_case("param $p: string;"        => "PARAM(KEYWORD(param) VARIABLE($p) : TYPE(string) ;)"             ; "declared parameter")]
-#[test_case("param $p: Dataset;"       => "PARAM(KEYWORD(param) VARIABLE($p) : TYPE(Dataset) ;)"            ; "custom type")]
-#[test_case("param $p: Option<int>;"   => "PARAM(KEYWORD(param) VARIABLE($p) : TYPE(Option < TYPE(int) >) ;)" ; "option nests a type")]
+#[test_case(
+    "param $p: string;"
+    => "PARAM(param VARIABLE($p) : TYPE(OTEL_TYPE(string)) ;)"
+    ; "declared parameter"
+)]
+#[test_case(
+    "param $p: Dataset;"
+    => "PARAM(param VARIABLE($p) : TYPE(MPL_TYPE(Dataset)) ;)"
+    ; "custom type"
+)]
+#[test_case(
+    "param $p: Option<int>;"
+    => "PARAM(param VARIABLE($p) : TYPE(OPTION_TYPE(Option < TYPE(OTEL_TYPE(int)) >)) ;)"
+    ; "option nests a type"
+)]
 fn params(src: &str) -> String {
     first(&format!("{src} d:m"), SyntaxKind::PARAM)
 }
@@ -308,8 +323,8 @@ fn params(src: &str) -> String {
 fn directives_precede_the_query_as_siblings() {
     assert_eq!(
         tree("set a = 1; param $p: bool; d:m"),
-        "ROOT(DIRECTIVE(KEYWORD(set) IDENT(a) = CONST(INTEGER(1)) ;) \
-         PARAM(KEYWORD(param) VARIABLE($p) : TYPE(bool) ;) \
+        "ROOT(DIRECTIVE(set IDENT(a) = CONST(INTEGER(1)) ;) \
+         PARAM(param VARIABLE($p) : TYPE(OTEL_TYPE(bool)) ;) \
          QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(d)) : IDENT(m))))"
     );
 }
@@ -405,102 +420,104 @@ fn arrays(src: &str) -> String {
 
 #[test_case(
     "where a == 1"
-    => "RULE(FILTER(KEYWORD(where) FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
-        FILTER_CMP(IDENT(a) == EXPR(CONST(INTEGER(1))))))))))"
+    => "RULE(FILTER(where FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
+        FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))))))))"
     ; "where rule"
 )]
 #[test_case(
     "filter a == 1"
-    => "RULE(FILTER(KEYWORD(filter) FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
-        FILTER_CMP(IDENT(a) == EXPR(CONST(INTEGER(1))))))))))"
+    => "RULE(FILTER(filter FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
+        FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))))))))"
     ; "filter is a synonym of where"
 )]
-#[test_case("as x"       => "RULE(AS(KEYWORD(as) IDENT(x)))"                            ; "as rule")]
-#[test_case("sample 0.5" => "RULE(SAMPLE(KEYWORD(sample) FLOAT(0.5)))"                  ; "sample")]
-#[test_case("map rate"   => "RULE(MAP(KEYWORD(map) FUNCTION_PATH(IDENT(rate))))"         ; "map without arguments")]
+#[test_case("as x"       => "RULE(AS(as IDENT(x)))"                            ; "as rule")]
+#[test_case("sample 0.5" => "RULE(SAMPLE(sample FLOAT(0.5)))"                  ; "sample")]
+#[test_case("map rate"   => "RULE(MAP(map FUNCTION_PATH(IDENT(rate))))"         ; "map without arguments")]
 #[test_case(
     "map filter::gt(1)"
-    => "RULE(MAP(KEYWORD(map) FUNCTION_PATH(IDENT(filter) :: IDENT(gt)) ( CONST(INTEGER(1)) )))"
+    => "RULE(MAP(map FUNCTION_PATH(IDENT(filter) :: IDENT(gt)) ( EXPR(CONST(INTEGER(1))) )))"
     ; "map with a module path and an argument"
 )]
 #[test_case(
     "map * 2"
-    => "RULE(MAP(KEYWORD(map) MAP_MATH(* EXPR(CONST(INTEGER(2))))))"
-    ; "map with an operator takes the MAP_MATH branch"
+    => "RULE(MAP(map MAP_MUL(* EXPR(CONST(INTEGER(2))))))"
+    ; "map with an operator takes the branch named for it"
 )]
 #[test_case(
     "map + $v"
-    => "RULE(MAP(KEYWORD(map) MAP_MATH(+ EXPR(VARIABLE($v)))))"
+    => "RULE(MAP(map MAP_PLUS(+ EXPR(VARIABLE($v)))))"
     ; "map math against a parameter"
 )]
 #[test_case(
     "align using avg"
-    => "RULE(ALIGN(KEYWORD(align) KEYWORD(using) FUNCTION_PATH(IDENT(avg))))"
+    => "RULE(ALIGN(align KEYWORD(using) FUNCTION_PATH(IDENT(avg))))"
     ; "align without a target"
 )]
 #[test_case(
     "align to 7d using avg"
-    => "RULE(ALIGN(KEYWORD(align) KEYWORD(to) DURATION(7 TIME_UNIT(d)) KEYWORD(using) \
+    => "RULE(ALIGN(align KEYWORD(to) DURATION(INTEGER(7) TIME_UNIT(d)) KEYWORD(using) \
         FUNCTION_PATH(IDENT(avg))))"
     ; "align to a duration"
 )]
 #[test_case(
     "align to $d using avg"
-    => "RULE(ALIGN(KEYWORD(align) KEYWORD(to) VARIABLE($d) KEYWORD(using) FUNCTION_PATH(IDENT(avg))))"
+    => "RULE(ALIGN(align KEYWORD(to) VARIABLE($d) KEYWORD(using) FUNCTION_PATH(IDENT(avg))))"
     ; "align to a parameter takes the variable branch"
 )]
 #[test_case(
     "group using max"
-    => "RULE(GROUP(KEYWORD(group) KEYWORD(using) FUNCTION_PATH(IDENT(max))))"
+    => "RULE(GROUP(group KEYWORD(using) FUNCTION_PATH(IDENT(max))))"
     ; "group without tags"
 )]
 #[test_case(
     "group by a, b using sum"
-    => "RULE(GROUP(KEYWORD(group) KEYWORD(by) TAG_LIST(IDENT(a) , IDENT(b)) KEYWORD(using) \
+    => "RULE(GROUP(group KEYWORD(by) TAG_LIST(IDENT(a) , IDENT(b)) KEYWORD(using) \
         FUNCTION_PATH(IDENT(sum))))"
     ; "group by a tag list"
 )]
 #[test_case(
     "bucket using histogram()"
-    => "RULE(BUCKET(KEYWORD(bucket) KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( )))"
+    => "RULE(BUCKET(bucket KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( )))"
     ; "bucket with empty argument list emits no BUCKET_ARGS"
 )]
 #[test_case(
     "bucket by a to 5m using histogram(1.0, 2.0)"
-    => "RULE(BUCKET(KEYWORD(bucket) KEYWORD(by) TAG_LIST(IDENT(a)) KEYWORD(to) \
-        DURATION(5 TIME_UNIT(m)) KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( \
+    => "RULE(BUCKET(bucket KEYWORD(by) TAG_LIST(IDENT(a)) KEYWORD(to) \
+        DURATION(INTEGER(5) TIME_UNIT(m)) KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( \
         BUCKET_ARGS(BUCKET_ARG(FLOAT(1.0)) , BUCKET_ARG(FLOAT(2.0))) )))"
     ; "bucket with every clause"
 )]
 #[test_case(
     "bucket using histogram(le)"
-    => "RULE(BUCKET(KEYWORD(bucket) KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( \
+    => "RULE(BUCKET(bucket KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( \
         BUCKET_ARGS(BUCKET_ARG(IDENT(le))) )))"
     ; "bucket argument may be an ident"
 )]
 #[test_case(
     "extend a = 1"
-    => "RULE(EXTEND(KEYWORD(extend) EXTEND_PART(IDENT(a) = EXPR(CONST(INTEGER(1))))))"
+    => "RULE(EXTEND(extend EXTEND_PART(IDENT(a) = EXPR(CONST(INTEGER(1))))))"
     ; "extend with one part"
 )]
 #[test_case(
     "extend a = 1, b = \"x\""
-    => "RULE(EXTEND(KEYWORD(extend) EXTEND_PART(IDENT(a) = EXPR(CONST(INTEGER(1)))) , \
+    => "RULE(EXTEND(extend EXTEND_PART(IDENT(a) = EXPR(CONST(INTEGER(1)))) , \
         EXTEND_PART(IDENT(b) = EXPR(CONST(STRING(\"x\"))))))"
     ; "extend parts are siblings"
 )]
 #[test_case(
     "ifdef ($p) { where a == 1 }"
-    => "RULE(IFDEF(KEYWORD(ifdef) ( VARIABLE($p) ) { FILTER(KEYWORD(where) FILTER_OR(\
-        FILTER_AND(FILTER_NOT(FILTER_PAREN(FILTER_CMP(IDENT(a) == EXPR(CONST(INTEGER(1))))))))) }))"
+    => "RULE(IFDEF(ifdef ( VARIABLE($p) ) { FILTER(where FILTER_OR(\
+        FILTER_AND(FILTER_NOT(FILTER_PAREN(FILTER_CMP(IDENT(a) \
+        FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))))))) }))"
     ; "ifdef"
 )]
 #[test_case(
     "ifdef ($p) { where a == 1 } else { where b == 2 }"
-    => "RULE(IFDEF(KEYWORD(ifdef) ( VARIABLE($p) ) { FILTER(KEYWORD(where) FILTER_OR(\
-        FILTER_AND(FILTER_NOT(FILTER_PAREN(FILTER_CMP(IDENT(a) == EXPR(CONST(INTEGER(1))))))))) } \
-        KEYWORD(else) { FILTER(KEYWORD(where) FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
-        FILTER_CMP(IDENT(b) == EXPR(CONST(INTEGER(2))))))))) }))"
+    => "RULE(IFDEF(ifdef ( VARIABLE($p) ) { FILTER(where FILTER_OR(\
+        FILTER_AND(FILTER_NOT(FILTER_PAREN(FILTER_CMP(IDENT(a) \
+        FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))))))) } \
+        else { FILTER(where FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
+        FILTER_CMP(IDENT(b) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(2)))))))))) }))"
     ; "ifdef else"
 )]
 fn rules(src: &str) -> String {
@@ -528,21 +545,22 @@ fn rules_are_flat_siblings() {
 // ---------------------------------------------------------------------------------------
 // Durations
 //
-// The unit is a separate `TIME_UNIT` node and it is optional, so `align to 5 using …` is
-// accepted with a bare number. Only the eight units in `Parser::duration` are units; any
-// other trailing ident is left for the next production, which is what turns
-// `tests/errors/invalid_time_unit.mpl` into an error at `using` rather than at the unit.
+// The count is an `INTEGER` node and the unit a separate `TIME_UNIT` node, which is optional,
+// so `align to 5 using …` is accepted with a bare number. A second is the finest resolution
+// the language carries, so the units run from `s` up. Only the seven units in
+// `Parser::duration` are units; any other trailing ident is left for the next production,
+// which is what turns `tests/errors/invalid_time_unit.mpl` into an error at `using` rather
+// than at the unit.
 // ---------------------------------------------------------------------------------------
 
-#[test_case("1ms" => "DURATION(1 TIME_UNIT(ms))" ; "milliseconds")]
-#[test_case("1s"  => "DURATION(1 TIME_UNIT(s))"  ; "seconds")]
-#[test_case("1m"  => "DURATION(1 TIME_UNIT(m))"  ; "minutes")]
-#[test_case("1h"  => "DURATION(1 TIME_UNIT(h))"  ; "hours")]
-#[test_case("1d"  => "DURATION(1 TIME_UNIT(d))"  ; "days")]
-#[test_case("1w"  => "DURATION(1 TIME_UNIT(w))"  ; "weeks")]
-#[test_case("1M"  => "DURATION(1 TIME_UNIT(M))"  ; "months are case sensitive")]
-#[test_case("1y"  => "DURATION(1 TIME_UNIT(y))"  ; "years")]
-#[test_case("5"   => "DURATION(5)"               ; "unit is optional")]
+#[test_case("1s"  => "DURATION(INTEGER(1) TIME_UNIT(s))" ; "seconds")]
+#[test_case("1m"  => "DURATION(INTEGER(1) TIME_UNIT(m))" ; "minutes")]
+#[test_case("1h"  => "DURATION(INTEGER(1) TIME_UNIT(h))" ; "hours")]
+#[test_case("1d"  => "DURATION(INTEGER(1) TIME_UNIT(d))" ; "days")]
+#[test_case("1w"  => "DURATION(INTEGER(1) TIME_UNIT(w))" ; "weeks")]
+#[test_case("1M"  => "DURATION(INTEGER(1) TIME_UNIT(M))" ; "months are case sensitive")]
+#[test_case("1y"  => "DURATION(INTEGER(1) TIME_UNIT(y))" ; "years")]
+#[test_case("5"   => "DURATION(INTEGER(5))"              ; "unit is optional")]
 fn durations(src: &str) -> String {
     duration(src)
 }
@@ -550,43 +568,54 @@ fn durations(src: &str) -> String {
 // ---------------------------------------------------------------------------------------
 // Comparisons
 //
+// The operator and its right-hand side share a `FILTER_CMP_*` node, one kind per operator, so
+// the tag is a sibling of the comparison rather than of the operand. That kind is what
+// `mpl_lang::ast` dispatches on, which is why it is pinned per operator rather than once.
+//
 // The right-hand side is an `EXPR` for every operator except `==` / `!=`, which additionally
-// accept a `REGEX`, and `is` / `in`, which take a type and an array respectively. `is` and
-// `in` are matched by text, not by token kind — the lexer emits no keywords
-// (`tests/lexer.rs::identifiers`) — so each needs its own case.
+// accept a `REGEX`, and `is`, which takes an `OTEL_TYPE`. `in` takes an `EXPR` too, so an
+// array literal arrives wrapped like any other constant and a parameter arrives as a bare
+// `VARIABLE`; whether that expression is a collection is settled when it is lowered
+// (`tests/errors/in-int.mpl`). `is` and `in` are matched by text, not by token kind — the
+// lexer emits no keywords (`tests/lexer.rs::identifiers`) — so each needs its own case.
 // ---------------------------------------------------------------------------------------
 
-#[test_case("a == 1"    => "FILTER_CMP(IDENT(a) == EXPR(CONST(INTEGER(1))))"  ; "equal")]
-#[test_case("a != 1"    => "FILTER_CMP(IDENT(a) != EXPR(CONST(INTEGER(1))))"  ; "not equal")]
-#[test_case("a < 1"     => "FILTER_CMP(IDENT(a) < EXPR(CONST(INTEGER(1))))"   ; "less than")]
-#[test_case("a <= 1"    => "FILTER_CMP(IDENT(a) <= EXPR(CONST(INTEGER(1))))"  ; "less than or equal")]
-#[test_case("a > 1"     => "FILTER_CMP(IDENT(a) > EXPR(CONST(INTEGER(1))))"   ; "greater than")]
-#[test_case("a >= 1"    => "FILTER_CMP(IDENT(a) >= EXPR(CONST(INTEGER(1))))"  ; "greater than or equal")]
-#[test_case("a == #/x/" => "FILTER_CMP(IDENT(a) == REGEX(#/x/))"              ; "regex is not wrapped in EXPR")]
-#[test_case("a != #/x/" => "FILTER_CMP(IDENT(a) != REGEX(#/x/))"              ; "negated regex")]
-#[test_case("a == b"    => "FILTER_CMP(IDENT(a) == EXPR(IDENT(b)))"           ; "tag against tag")]
-#[test_case("a == $v"   => "FILTER_CMP(IDENT(a) == EXPR(VARIABLE($v)))"       ; "tag against a parameter")]
+#[test_case("a == 1"    => "FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))"   ; "equal")]
+#[test_case("a != 1"    => "FILTER_CMP(IDENT(a) FILTER_CMP_NEQ(!= EXPR(CONST(INTEGER(1)))))"  ; "not equal")]
+#[test_case("a < 1"     => "FILTER_CMP(IDENT(a) FILTER_CMP_LT(< EXPR(CONST(INTEGER(1)))))"    ; "less than")]
+#[test_case("a <= 1"    => "FILTER_CMP(IDENT(a) FILTER_CMP_LTE(<= EXPR(CONST(INTEGER(1)))))"  ; "less than or equal")]
+#[test_case("a > 1"     => "FILTER_CMP(IDENT(a) FILTER_CMP_GT(> EXPR(CONST(INTEGER(1)))))"    ; "greater than")]
+#[test_case("a >= 1"    => "FILTER_CMP(IDENT(a) FILTER_CMP_GTE(>= EXPR(CONST(INTEGER(1)))))"  ; "greater than or equal")]
+#[test_case("a == #/x/" => "FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== REGEX(#/x/)))"               ; "regex is not wrapped in EXPR")]
+#[test_case("a != #/x/" => "FILTER_CMP(IDENT(a) FILTER_CMP_NEQ(!= REGEX(#/x/)))"              ; "negated regex")]
+#[test_case("a == b"    => "FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(IDENT(b))))"            ; "tag against tag")]
+#[test_case("a == $v"   => "FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(VARIABLE($v))))"        ; "tag against a parameter")]
 #[test_case(
     "a == \"x${ y }\""
-    => "FILTER_CMP(IDENT(a) == EXPR(CONST(STRING(\"x${ EXPR(IDENT(y)) }\"))))"
+    => "FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(CONST(STRING(\"x${ EXPR(IDENT(y)) }\")))))"
     ; "interpolated string on the right"
 )]
-#[test_case("a is string" => "FILTER_CMP(IDENT(a) KEYWORD(is) OTEL_TYPE(IDENT(string)))" ; "is string")]
-#[test_case("a is int"    => "FILTER_CMP(IDENT(a) KEYWORD(is) OTEL_TYPE(IDENT(int)))"    ; "is int")]
-#[test_case("a is float"  => "FILTER_CMP(IDENT(a) KEYWORD(is) OTEL_TYPE(IDENT(float)))"  ; "is float")]
-#[test_case("a is bool"   => "FILTER_CMP(IDENT(a) KEYWORD(is) OTEL_TYPE(IDENT(bool)))"   ; "is bool")]
-#[test_case("a is array"  => "FILTER_CMP(IDENT(a) KEYWORD(is) OTEL_TYPE(IDENT(array)))"  ; "is array")]
+#[test_case("a is string" => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(is OTEL_TYPE(IDENT(string))))" ; "is string")]
+#[test_case("a is int"    => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(is OTEL_TYPE(IDENT(int))))"    ; "is int")]
+#[test_case("a is float"  => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(is OTEL_TYPE(IDENT(float))))"  ; "is float")]
+#[test_case("a is bool"   => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(is OTEL_TYPE(IDENT(bool))))"   ; "is bool")]
+#[test_case("a is array"  => "FILTER_CMP(IDENT(a) FILTER_CMP_IS(is OTEL_TYPE(IDENT(array))))"  ; "is array")]
 #[test_case(
     "a in [1, 2]"
-    => "FILTER_CMP(IDENT(a) KEYWORD(in) ARRAY([ EXPR(CONST(INTEGER(1))) , EXPR(CONST(INTEGER(2))) ]))"
+    => "FILTER_CMP(IDENT(a) FILTER_CMP_IN(in EXPR(CONST(ARRAY([ EXPR(CONST(INTEGER(1))) \
+        , EXPR(CONST(INTEGER(2))) ])))))"
     ; "in an array literal"
 )]
 #[test_case(
     "a in $v"
-    => "FILTER_CMP(IDENT(a) KEYWORD(in) VARIABLE($v))"
+    => "FILTER_CMP(IDENT(a) FILTER_CMP_IN(in VARIABLE($v)))"
     ; "in a parameter takes the variable branch"
 )]
-#[test_case("`a b` == 1" => "FILTER_CMP(IDENT(`a b`) == EXPR(CONST(INTEGER(1))))" ; "escaped tag name")]
+#[test_case(
+    "`a b` == 1"
+    => "FILTER_CMP(IDENT(`a b`) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))"
+    ; "escaped tag name"
+)]
 fn comparisons(src: &str) -> String {
     cmp(src)
 }
@@ -623,12 +652,12 @@ fn boolean_grouping(src: &str) -> String {
 fn filter_wrapper_chain() {
     assert_eq!(
         cmp("a == 1"),
-        "FILTER_CMP(IDENT(a) == EXPR(CONST(INTEGER(1))))"
+        "FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))"
     );
     assert_eq!(
         rule("where a == 1"),
-        "RULE(FILTER(KEYWORD(where) FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
-         FILTER_CMP(IDENT(a) == EXPR(CONST(INTEGER(1))))))))))"
+        "RULE(FILTER(where FILTER_OR(FILTER_AND(FILTER_NOT(FILTER_PAREN(\
+         FILTER_CMP(IDENT(a) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))))))))"
     );
 }
 
@@ -658,8 +687,8 @@ fn trivia_does_not_change_the_shape(src: &str) {
 #[test_case("   "                      ; "whitespace")]
 #[test_case("\n\t "                    ; "mixed whitespace")]
 fn trivia_only_input_is_kept_and_reported(src: &str) {
-    let (tree, errors) = Parser::new(src).parse();
-    assert_eq!(tree.to_string(), src, "trivia was dropped from {src:?}");
+    let SyntaxTree { root, errors } = Parser::new(src).parse();
+    assert_eq!(root.to_string(), src, "trivia was dropped from {src:?}");
     assert!(
         !errors.is_empty(),
         "{src:?} is not a query but parsed clean"
@@ -742,11 +771,6 @@ fn trivia_at_the_edges_is_kept(src: &str) {
     ; "sample takes a float"
 )]
 #[test_case(
-    "d:m | bucket using histogram(1)"
-    => "\"expected ident or float in bucket arg\"@29+1"
-    ; "bucket argument may not be an integer"
-)]
-#[test_case(
     "d:"
     => "\"expected ident but got  (Eof)\"@2+0 Eof"
     ; "query truncated after the colon"
@@ -767,7 +791,7 @@ fn error_reporting(src: &str) -> String {
 #[test]
 fn time_ranges_parse() {
     for src in ["d:m[5m..]", "d:m[1..2] | group using sum"] {
-        let (_tree, errors) = Parser::new(src).parse();
+        let SyntaxTree { root: _, errors } = Parser::new(src).parse();
         assert!(errors.is_empty(), "{src:?} should parse: {errors:?}");
     }
 }
@@ -868,7 +892,7 @@ fn report(name: &str, content: &str, errors: &[SyntaxError]) -> String {
 #[test]
 fn parse_examples() {
     for (name, content) in files("./tests/examples", "mpl") {
-        let (_tree, errors) = Parser::new(&content).parse();
+        let SyntaxTree { root: _, errors } = Parser::new(&content).parse();
         assert!(
             errors.is_empty(),
             "[{name}] {}\n{errors:?}",
@@ -886,11 +910,11 @@ fn parse_examples() {
 /// `tests/examples/*.mpl`, instead of the example sitting there unread forever.
 #[test_case("enrich.mpl.unimplemented"         => false ; "enrich needs a join rule")]
 #[test_case("nested-enrich.mpl.unimplemented"  => false ; "nested enrich needs a join rule")]
-#[test_case("replace_labels.mpl.unimplemented" => true  ; "replace labels already parses")]
+#[test_case("replace_labels.mpl.unimplemented" => false ; "replace labels needs a replace rule")]
 fn unimplemented_examples_parse(name: &str) -> bool {
     let content = fs::read_to_string(format!("./tests/examples/{name}"))
         .unwrap_or_else(|e| panic!("{name} is not readable: {e}"));
-    let (_tree, errors) = Parser::new(&content).parse();
+    let SyntaxTree { root: _, errors } = Parser::new(&content).parse();
     errors.is_empty()
 }
 
@@ -906,14 +930,13 @@ fn parse_error_examples() {
         "incomplete_query.mpl",
         "missing_pipe.mpl",
         "typo_keyword.mpl",
-        "in-int.mpl",
         "invalid_time_unit.mpl",
         "in-trailing-comma.mpl",
         "invalid_operator.mpl",
     ];
 
     for (name, content) in files("./tests/errors", "mpl") {
-        let (_tree, errors) = Parser::new(&content).parse();
+        let SyntaxTree { root: _, errors } = Parser::new(&content).parse();
         if REJECTED_BY_THE_PARSER.contains(&name.as_str()) {
             assert!(!errors.is_empty(), "[{name}] expected a syntax error");
         } else {
@@ -947,8 +970,8 @@ fn parse_error_examples() {
 /// because three error paths reported a token they had not consumed and it landed in the
 /// tree twice — see `error_recovery_does_not_duplicate`.
 fn assert_lossless(src: &str) {
-    let (tree, _errors) = Parser::new(src).parse();
-    assert_eq!(tree.to_string(), src, "parse of {src:?} did not round trip");
+    let SyntaxTree { root, errors: _ } = Parser::new(src).parse();
+    assert_eq!(root.to_string(), src, "parse of {src:?} did not round trip");
 }
 
 /// Property: every token the lexer produced reaches the tree, in source order.
@@ -966,10 +989,10 @@ fn assert_lossless(src: &str) {
 /// honest — discarding the offending token instead of consuming it would satisfy
 /// `assert_lossless` on some inputs but never this.
 fn assert_no_token_is_dropped(src: &str) {
-    let (tree, _errors) = Parser::new(src).parse();
+    let SyntaxTree { root, errors: _ } = Parser::new(src).parse();
     // `any` advances the iterator, so consecutive calls match the tree's tokens in order —
     // extra tokens between two matches are skipped, which is what makes this a subsequence.
-    let mut in_tree = tree
+    let mut in_tree = root
         .descendants_with_tokens()
         .filter_map(NodeOrToken::into_token)
         .map(|token| token.text().to_string())
@@ -998,13 +1021,13 @@ fn assert_no_token_is_dropped(src: &str) {
 /// against that tree has to land in the right place too. It used to return early whenever
 /// there were errors, which meant the case it exists for was the one case it skipped.
 fn assert_ranges_match_the_input(src: &str) {
-    let (tree, _errors) = Parser::new(src).parse();
+    let SyntaxTree { root, errors: _ } = Parser::new(src).parse();
     assert_eq!(
-        usize::from(tree.text_range().end()),
+        usize::from(root.text_range().end()),
         src.len(),
         "root range does not cover {src:?}"
     );
-    for node in tree.descendants() {
+    for node in root.descendants() {
         let range = node.text_range();
         let (start, end) = (usize::from(range.start()), usize::from(range.end()));
         assert!(
@@ -1036,8 +1059,8 @@ fn assert_ranges_match_the_input(src: &str) {
 /// and round-trips, and only breaks whichever consumer matches on kinds — which is all of
 /// them.
 fn assert_kind_discipline(src: &str) {
-    let (tree, _errors) = Parser::new(src).parse();
-    for node in tree.descendants() {
+    let SyntaxTree { root, errors: _ } = Parser::new(src).parse();
+    for node in root.descendants() {
         assert!(
             !is_lexer_kind(node.kind()),
             "node has the token kind {:?} in {src:?}",
@@ -1069,7 +1092,7 @@ fn is_lexer_kind(kind: SyntaxKind) -> bool {
 /// turns a syntax error into a crash in the language server. Truncated input is where the
 /// risk lives, since the end-of-input token is synthesised at `input.len()`.
 fn assert_spans_are_in_bounds(src: &str) {
-    let (_tree, errors) = Parser::new(src).parse();
+    let SyntaxTree { root: _, errors } = Parser::new(src).parse();
     for error in &errors {
         let range = match error {
             SyntaxError::Eof { .. } => continue,
@@ -1097,7 +1120,7 @@ fn assert_spans_are_in_bounds(src: &str) {
 /// end of the query reports one — and the point of the bound is to catch growth that is not
 /// linear at all, not to pin that constant.
 fn assert_errors_are_bounded(src: &str) {
-    let (_tree, errors) = Parser::new(src).parse();
+    let SyntaxTree { root: _, errors } = Parser::new(src).parse();
     assert!(
         errors.len() <= 32 * src.len() + 32,
         "{} errors for {} bytes of input {src:?}",
@@ -1193,8 +1216,8 @@ fn kind_from_raw_rejects_values_past_root() {
 #[test]
 fn kinds_in_real_trees_round_trip() {
     for (_name, content) in files("./tests/examples", "mpl") {
-        let (tree, _errors) = Parser::new(&content).parse();
-        for element in tree.descendants_with_tokens() {
+        let SyntaxTree { root, errors: _ } = Parser::new(&content).parse();
+        for element in root.descendants_with_tokens() {
             let kind = element.kind();
             assert_eq!(
                 Lang::kind_from_raw(Lang::kind_to_raw(kind)),
@@ -1267,6 +1290,7 @@ const SCALARS: &[&str] = &[
     "false",
     "\"s\"",
     "\"a${ x }b\"",
+    "\"a${ x }b${ y }c\"",
 ];
 
 fn gen_expr(rng: &mut Rng) -> String {
@@ -1337,7 +1361,7 @@ fn gen_filter(rng: &mut Rng, depth: u64) -> String {
 }
 
 fn gen_duration(rng: &mut Rng) -> String {
-    let unit = *rng.pick(&["ms", "s", "m", "h", "d", "w", "M", "y", ""]);
+    let unit = *rng.pick(&["s", "m", "h", "d", "w", "M", "y", ""]);
     format!("{}{unit}", 1 + rng.below(60))
 }
 
@@ -1517,15 +1541,15 @@ fn generated_queries_parse_cleanly() {
     let mut seen = Vec::new();
     for _ in 0..2000 {
         let src = gen_program(&mut rng);
-        let (tree, errors) = Parser::new(&src).parse();
+        let SyntaxTree { root, errors } = Parser::new(&src).parse();
         assert!(
             errors.is_empty(),
             "generated query failed: {src:?}\n{errors:?}"
         );
-        assert_eq!(tree.to_string(), src, "generated query did not round trip");
+        assert_eq!(root.to_string(), src, "generated query did not round trip");
         assert_ranges_match_the_input(&src);
         assert_kind_discipline(&src);
-        for element in tree.descendants_with_tokens() {
+        for element in root.descendants_with_tokens() {
             let kind = element.kind();
             if !seen.contains(&kind) {
                 seen.push(kind);
@@ -1555,7 +1579,10 @@ fn generated_queries_parse_cleanly() {
         SyntaxKind::TAG_LIST,
         SyntaxKind::SAMPLE,
         SyntaxKind::MAP,
-        SyntaxKind::MAP_MATH,
+        SyntaxKind::MAP_PLUS,
+        SyntaxKind::MAP_MINUS,
+        SyntaxKind::MAP_MUL,
+        SyntaxKind::MAP_DIV,
         SyntaxKind::ALIGN,
         SyntaxKind::AS,
         SyntaxKind::GROUP,
@@ -1624,18 +1651,26 @@ fn random_input_does_not_break_the_parser() {
 }
 
 // ---------------------------------------------------------------------------------------
-// Closed gaps and language properties
+// Gaps and language properties
 //
 // Each test below states a behaviour that should hold. None of them asserts the current
 // behaviour where that behaviour is a defect: a test that did would report green for as long
 // as the defect survived and red the moment it was fixed, which is backwards. Written that
 // way, a test states the goal while the gap is open and becomes its regression test the day
-// it closes — which is what all four are now.
+// it closes.
 //
-// Three of them record a defect that has since been fixed, and their notes say what it was,
-// so a rewrite of the code they cover cannot quietly reintroduce it: arrays unreachable from
-// constant position, and the two halves of error recovery. The compute-query ambiguity is a
-// property of the language rather than a defect, and stays here permanently.
+// Three record a defect that has since been fixed, and their notes say what it was, so a
+// rewrite of the code they cover cannot quietly reintroduce it: arrays unreachable from
+// constant position, and the two halves of error recovery.
+//
+// Two are open, both in `Parser::variable_type`: a type name followed by trivia comes back
+// reordered, and one that trips the depth cap comes back short a token. Each names the
+// smallest input that shows it, so the properties at the top of this file are not the only
+// thing standing between the defect and a fix — they reach the same failures, but only
+// through generated input long enough to be unreadable.
+//
+// The compute-query ambiguity is a property of the language rather than a defect, and stays
+// here permanently.
 // ---------------------------------------------------------------------------------------
 
 /// Arrays are reachable from every constant position: `set`, `extend`, a `map` argument, an
@@ -1655,7 +1690,7 @@ fn arrays_parse_in_constant_position() {
         "d:m | where a in [[1], [2]]",
         "d:m | extend a = \"${ [1] }\"",
     ] {
-        let (_tree, errors) = Parser::new(src).parse();
+        let SyntaxTree { root: _, errors } = Parser::new(src).parse();
         assert!(errors.is_empty(), "{src:?} should parse: {errors:?}");
     }
 }
@@ -1671,7 +1706,7 @@ fn arrays_parse_in_constant_position() {
 #[test]
 fn extend_swallows_the_comma_of_a_compute_query() {
     let ambiguous = "(a:b | extend x = 1, c:d) | compute y using sum";
-    let (_tree, errors) = Parser::new(ambiguous).parse();
+    let SyntaxTree { root: _, errors } = Parser::new(ambiguous).parse();
     assert!(
         !errors.is_empty(),
         "the ambiguity appears to have been resolved"
@@ -1698,10 +1733,10 @@ fn extend_swallows_the_comma_of_a_compute_query() {
 #[test]
 fn error_recovery_is_lossless() {
     for src in ["d:m | fflter a == 1", "param $p: nonsense; d:m"] {
-        let (tree, errors) = Parser::new(src).parse();
+        let SyntaxTree { root, errors } = Parser::new(src).parse();
         assert!(!errors.is_empty(), "{src:?} was expected to fail");
         assert_eq!(
-            tree.to_string(),
+            root.to_string(),
             src,
             "{src:?} lost text during error recovery"
         );
@@ -1734,19 +1769,65 @@ fn error_recovery_is_lossless() {
 /// `next()`.
 #[test]
 fn error_recovery_does_not_duplicate() {
-    for src in [
-        "d:m | where a ~ 1",
-        "d:m | bucket using histogram(1)",
-        "d:m | where a is nonsense",
-    ] {
-        let (tree, errors) = Parser::new(src).parse();
+    for src in ["d:m | where a ~ 1", "d:m | where a is nonsense"] {
+        let SyntaxTree { root, errors } = Parser::new(src).parse();
         assert!(!errors.is_empty(), "{src:?} was expected to fail");
         assert_eq!(
-            tree.to_string(),
+            root.to_string(),
             src,
             "{src:?} duplicated a token during recovery"
         );
     }
+}
+
+/// A type name sits where the source put it, ahead of the trivia that follows it.
+///
+/// `Parser::variable_type` reads the name with `next()` and only then opens the node it goes
+/// in — `OTEL_TYPE`, `MPL_TYPE` or `OPTION_TYPE`. Opening a node runs `eat_trivia` before its
+/// body, so for the two leaf kinds the whitespace or comment trailing the name reaches the
+/// builder ahead of the name itself and the literal comes back reordered.
+///
+/// A single space is enough to show it, and the parse reports no error at all, which is what
+/// makes it worth its own case: `generated_queries_parse_cleanly` reaches this only when its
+/// generator happens to put trivia after a declared type, and reports it as an anonymous
+/// round-trip mismatch inside a program long enough to be unreadable.
+///
+/// One case per branch that takes a name: a tag type, a query-language type, and a type
+/// nested inside `Option<…>`. The comment case is the shape the generator found.
+#[test]
+fn a_type_name_keeps_its_place_in_the_source() {
+    for src in [
+        "param $p: int ; d:m",
+        "param $p: Dataset ; d:m",
+        "param $p: Option< int >; d:m",
+        "param $p: int; // c\nd:m",
+    ] {
+        let SyntaxTree { root, errors } = Parser::new(src).parse();
+        assert_eq!(root.to_string(), src, "{src:?} came back reordered");
+        assert!(errors.is_empty(), "{src:?}: {errors:?}");
+    }
+}
+
+/// Tripping the depth cap costs the input an error, never a token.
+///
+/// `rnode` reports the overflow *instead of* running the production body, so a token the
+/// caller consumed before entering is never handed to the builder. `Parser::variable_type`
+/// takes the `Option` ident with `next()` and enters `rnode(OPTION_TYPE, …)` after, so the
+/// literal comes back one `Option` short.
+///
+/// Two nested `Option`s against a cap of one is the whole reproduction.
+/// `tripping_the_cap_keeps_every_property` covers the same ground for every capped shape at
+/// 60 levels, where the missing token has to be spotted inside a 500-character line.
+#[test]
+fn tripping_the_cap_keeps_every_token() {
+    let src = "param $p: Option<Option<int>>; d:m";
+    let SyntaxTree { root, errors } = Parser::new(src).with_tree_depth(1).parse();
+    assert!(!errors.is_empty(), "{src:?} did not trip a cap of 1");
+    assert_eq!(
+        root.to_string(),
+        src,
+        "{src:?} lost text when the cap tripped"
+    );
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1788,7 +1869,7 @@ fn nest(shape: &str, n: usize) -> String {
 fn is_rejected(shape: &str, cap: Option<usize>, n: usize) -> bool {
     let src = nest(shape, n);
     let parser = Parser::new(&src);
-    let (_tree, errors) = match cap {
+    let SyntaxTree { root: _, errors } = match cap {
         Some(cap) => parser.with_tree_depth(cap),
         None => parser,
     }
@@ -1846,7 +1927,7 @@ fn every_recursive_production_is_capped(shape: &str) {
 /// change in what the default protects.
 #[test_case("filter" =>  62 ; "filter spends four nodes per parenthesis")]
 #[test_case("array"  => 251 ; "array spends one node per level")]
-#[test_case("type"   => 250 ; "variable_type spends one node per level")]
+#[test_case("type"   => 251 ; "variable_type spends one node per level")]
 #[test_case("string" => 250 ; "string spends one node per level")]
 #[test_case("query"  => 250 ; "query spends one node per level")]
 fn depth_is_counted_in_nodes_not_nesting(shape: &str) -> usize {
@@ -1883,13 +1964,13 @@ fn with_tree_depth_moves_the_cap() {
 #[test_case("query"  ; "query")]
 fn tripping_the_cap_keeps_every_property(shape: &str) {
     let src = nest(shape, 60);
-    let (tree, errors) = Parser::new(&src).with_tree_depth(20).parse();
+    let SyntaxTree { root, errors } = Parser::new(&src).with_tree_depth(20).parse();
     assert!(
         !errors.is_empty(),
         "{shape} at 60 levels did not trip a cap of 20"
     );
     assert_eq!(
-        tree.to_string(),
+        root.to_string(),
         src,
         "{shape} lost or duplicated text when the cap tripped"
     );
@@ -1911,9 +1992,9 @@ fn tripping_the_cap_keeps_every_property(shape: &str) {
 #[test_case("string" ; "string")]
 fn nesting_that_used_to_overflow_the_stack_now_returns(shape: &str) {
     let src = nest(shape, 5000);
-    let (tree, errors) = Parser::new(&src).parse();
+    let SyntaxTree { root, errors } = Parser::new(&src).parse();
     assert!(!errors.is_empty(), "{shape} at 5000 levels parsed clean");
-    assert_eq!(tree.to_string(), src, "{shape} lost text at 5000 levels");
+    assert_eq!(root.to_string(), src, "{shape} lost text at 5000 levels");
 }
 
 /// The default has to leave room for `rowan`'s destructor, which recurses too.

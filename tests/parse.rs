@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::fs;
 
+use mpl_lang::query::{ParamType, TerminalParamType};
+
 #[test]
 fn parse_examples() {
     fs::read_dir("./tests/examples")
@@ -12,7 +14,12 @@ fn parse_examples() {
             let file_name = path.file_name().unwrap().to_str().unwrap();
             println!("Running example: {file_name}");
             let content = fs::read_to_string(path).unwrap();
-            match mpl_lang::compile(&content, HashMap::new()) {
+            let mut params = HashMap::new();
+            params.insert(
+                "__interval".to_string(),
+                ParamType::Terminal(TerminalParamType::Duration),
+            );
+            match mpl_lang::compile(&content, params) {
                 Ok(_) => println!("Parsed successfully"),
                 Err(mpl_lang::CompileError::Parse(mpl_lang::ParseError::NotSupported {
                     span,

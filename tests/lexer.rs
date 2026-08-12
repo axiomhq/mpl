@@ -34,7 +34,9 @@ fn is_self_describing(tpe: TokenType) -> bool {
             | TokenType::EscapedVariable
             | TokenType::Regex
             | TokenType::String
+            | TokenType::StringStart
             | TokenType::StringSegment
+            | TokenType::StringEnd
     )
 }
 
@@ -226,14 +228,15 @@ fn string_escapes(src: &str) -> String {
 //
 // `${` does not get a token of its own: it terminates the fragment that precedes it and is
 // included in that fragment's text, and the matching `}` opens the fragment that follows
-// it. So `"a${x}b"` is three tokens — `StringSegment("a${)`, `Ident(x)`, `String(}b")` — and
+// it. So `"a${x}b"` is three tokens — `StringStart("a${)`, `Ident(x)`, `StringEnd(}b")` — and
 // a consumer reassembles the literal by stripping the `${` / `}` markers from the fragments.
 //
-// The fragment's *kind* is what says whether more is coming: a fragment closed by `${` is a
-// `StringSegment` and is always followed by a body and another fragment, a fragment closed
-// by `"` is a `String` and ends the literal. That is the distinction `Parser::string` loops
-// on (src/syntax_tree.rs:432), so every case below pins which of the two each fragment is —
-// a segment mistyped as a complete string terminates the literal one interpolation early.
+// The fragment's *kind* is its position in the literal: `StringStart` opens one and promises
+// a body, `StringSegment` sits between two bodies and promises another, `StringEnd` closes
+// the literal, and `String` is a literal with no interpolation at all. `Parser::string`
+// (src/syntax_tree.rs:647) walks exactly that sequence, so every case below pins which kind
+// each fragment is — a segment mistyped as a `StringEnd` terminates the literal one
+// interpolation early.
 //
 // The tests are written against that shape deliberately: the invariant worth pinning is
 // that the interpolation markers stay attached to the string fragments and that the body
@@ -243,38 +246,38 @@ fn string_escapes(src: &str) -> String {
 // `$` is *not* followed by `{` must stay inside the literal.
 // ---------------------------------------------------------------------------------------
 
-#[test_case(r#""${x}""#        => r#"StringSegment("${) Ident(x) String(}")"#   ; "whole string is one interpolation")]
-#[test_case(r#""a${x}b""#      => r#"StringSegment("a${) Ident(x) String(}b")"# ; "text on both sides")]
-#[test_case(r#""${x}b""#       => r#"StringSegment("${) Ident(x) String(}b")"#  ; "text after only")]
-#[test_case(r#""a${x}""#       => r#"StringSegment("a${) Ident(x) String(}")"#  ; "text before only")]
-#[test_case(r#""${}""#         => r#"StringSegment("${) String(}")"#            ; "empty interpolation")]
-#[test_case(r#""a${x}b${y}c""# => r#"StringSegment("a${) Ident(x) StringSegment(}b${) Ident(y) String(}c")"# ; "two interpolations")]
-#[test_case(r#""${x}${y}""#    => r#"StringSegment("${) Ident(x) StringSegment(}${) Ident(y) String(}")"# ; "adjacent interpolations")]
+#[test_case(r#""${x}""#        => r#"StringStart("${) Ident(x) StringEnd(}")"#   ; "whole string is one interpolation")]
+#[test_case(r#""a${x}b""#      => r#"StringStart("a${) Ident(x) StringEnd(}b")"# ; "text on both sides")]
+#[test_case(r#""${x}b""#       => r#"StringStart("${) Ident(x) StringEnd(}b")"#  ; "text after only")]
+#[test_case(r#""a${x}""#       => r#"StringStart("a${) Ident(x) StringEnd(}")"#  ; "text before only")]
+#[test_case(r#""${}""#         => r#"StringStart("${) StringEnd(}")"#            ; "empty interpolation")]
+#[test_case(r#""a${x}b${y}c""# => r#"StringStart("a${) Ident(x) StringSegment(}b${) Ident(y) StringEnd(}c")"# ; "two interpolations")]
+#[test_case(r#""${x}${y}""#    => r#"StringStart("${) Ident(x) StringSegment(}${) Ident(y) StringEnd(}")"# ; "adjacent interpolations")]
 // The body is a token stream, not a substring: operators, keywords, numbers, variables and
 // regexes all lex as themselves inside `${ }`.
-#[test_case(r#""${a + b}""#    => r#"StringSegment("${) Ident(a) + Ident(b) String(}")"#              ; "expression body")]
-#[test_case(r#""${a:b}""#      => r#"StringSegment("${) Ident(a) : Ident(b) String(}")"#              ; "colon in body")]
-#[test_case(r#""${$foo}""#     => r#"StringSegment("${) Variable($foo) String(}")"#                   ; "variable body")]
-#[test_case(r#""${where}""#    => r#"StringSegment("${) Ident(where) String(}")"#                     ; "grammar keyword body")]
-#[test_case(r#""${1.5}""#      => r#"StringSegment("${) Float(1.5) String(}")"#                       ; "float body")]
-#[test_case(r#""${#/a/}""#     => r#"StringSegment("${) Regex(#/a/) String(}")"#                      ; "regex body")]
-#[test_case(r#""${f(a, b)}""#  => r#"StringSegment("${) Ident(f) ( Ident(a) , Ident(b) ) String(}")"# ; "call body")]
+#[test_case(r#""${a + b}""#    => r#"StringStart("${) Ident(a) + Ident(b) StringEnd(}")"#              ; "expression body")]
+#[test_case(r#""${a:b}""#      => r#"StringStart("${) Ident(a) : Ident(b) StringEnd(}")"#              ; "colon in body")]
+#[test_case(r#""${$foo}""#     => r#"StringStart("${) Variable($foo) StringEnd(}")"#                   ; "variable body")]
+#[test_case(r#""${where}""#    => r#"StringStart("${) Ident(where) StringEnd(}")"#                     ; "grammar keyword body")]
+#[test_case(r#""${1.5}""#      => r#"StringStart("${) Float(1.5) StringEnd(}")"#                       ; "float body")]
+#[test_case(r#""${#/a/}""#     => r#"StringStart("${) Regex(#/a/) StringEnd(}")"#                      ; "regex body")]
+#[test_case(r#""${f(a, b)}""#  => r#"StringStart("${) Ident(f) ( Ident(a) , Ident(b) ) StringEnd(}")"# ; "call body")]
 // A `$` only opens an interpolation when `{` follows it; everything else stays literal.
 #[test_case(r#""a$b""#         => r#"String("a$b")"#                                ; "dollar before an ident is literal")]
 #[test_case(r#""a$""#          => r#"String("a$")"#                                 ; "dollar before the terminator is literal")]
 #[test_case(r#""$""#           => r#"String("$")"#                                  ; "lone dollar is literal")]
 #[test_case(r#""$$x""#         => r#"String("$$x")"#                                ; "double dollar is literal")]
 #[test_case(r#""a\${x}""#      => r#"String("a\${x}")"#                             ; "escaped dollar suppresses interpolation")]
-#[test_case(r#""héllo ${x}""#  => r#"StringSegment("héllo ${) Ident(x) String(}")"# ; "multi byte text before an interpolation")]
-#[test_case(r#""${é}""#        => r#"StringSegment("${) Ident(é) String(}")"#       ; "multi byte ident in the body")]
+#[test_case(r#""héllo ${x}""#  => r#"StringStart("héllo ${) Ident(x) StringEnd(}")"# ; "multi byte text before an interpolation")]
+#[test_case(r#""${é}""#        => r#"StringStart("${) Ident(é) StringEnd(}")"#       ; "multi byte ident in the body")]
 fn string_interpolation(src: &str) -> String {
     lex(src)
 }
 
 /// Whitespace inside `${ }` is a `Whitespace` token, not string content — the clearest
 /// single demonstration that the body leaves string-literal mode entirely.
-#[test_case(r#""${ x }""#   => r#"StringSegment("${) Whitespace( ) Ident(x) Whitespace( ) String(}")"# ; "spaces around the body")]
-#[test_case(r#""a b${ c }""# => r#"StringSegment("a b${) Whitespace( ) Ident(c) Whitespace( ) String(}")"# ; "spaces in the literal stay in the fragment")]
+#[test_case(r#""${ x }""#   => r#"StringStart("${) Whitespace( ) Ident(x) Whitespace( ) StringEnd(}")"# ; "spaces around the body")]
+#[test_case(r#""a b${ c }""# => r#"StringStart("a b${) Whitespace( ) Ident(c) Whitespace( ) StringEnd(}")"# ; "spaces in the literal stay in the fragment")]
 fn interpolation_whitespace(src: &str) -> String {
     lex_ws(src)
 }
@@ -291,61 +294,61 @@ fn interpolation_whitespace(src: &str) -> String {
 
 #[test_case(
     r#""${"b"}""#
-    => r#"StringSegment("${) String("b") String(}")"#
+    => r#"StringStart("${) String("b") StringEnd(}")"#
     ; "string literal inside an interpolation"
 )]
 #[test_case(
     r#""a${"b"}c""#
-    => r#"StringSegment("a${) String("b") String(}c")"#
+    => r#"StringStart("a${) String("b") StringEnd(}c")"#
     ; "string literal inside an interpolation with surrounding text"
 )]
 #[test_case(
     r#""a${"b${c}d"}e""#
-    => r#"StringSegment("a${) StringSegment("b${) Ident(c) String(}d") String(}e")"#
+    => r#"StringStart("a${) StringStart("b${) Ident(c) StringEnd(}d") StringEnd(}e")"#
     ; "interpolation inside an interpolated string"
 )]
 #[test_case(
     r#""a${"b${"c${d}e"}f"}g""#
-    => r#"StringSegment("a${) StringSegment("b${) StringSegment("c${) Ident(d) String(}e") String(}f") String(}g")"#
+    => r#"StringStart("a${) StringStart("b${) StringStart("c${) Ident(d) StringEnd(}e") StringEnd(}f") StringEnd(}g")"#
     ; "three levels deep"
 )]
 #[test_case(
     r#""${"a" + "b"}""#
-    => r#"StringSegment("${) String("a") + String("b") String(}")"#
+    => r#"StringStart("${) String("a") + String("b") StringEnd(}")"#
     ; "two sibling strings in one body"
 )]
 // A `}` inside a nested literal is string content, so it must not pop the outer `StrOpen`
 // and end the interpolation early.
 #[test_case(
     r#""${"}"}""#
-    => r#"StringSegment("${) String("}") String(}")"#
+    => r#"StringStart("${) String("}") StringEnd(}")"#
     ; "close brace inside a nested literal is content"
 )]
 #[test_case(
     r#""${"${"}""#
-    => r#"StringSegment("${) StringSegment("${) String("}")"#
+    => r#"StringStart("${) StringStart("${) String("}")"#
     ; "dollar brace inside a nested literal opens another level"
 )]
 // Braces and interpolations interleaved: a `{` pushed inside a body must be popped by its
 // own `}` before the interpolation's `}` is reached.
 #[test_case(
     r#""${{a}}""#
-    => r#"StringSegment("${) { Ident(a) } String(}")"#
+    => r#"StringStart("${) { Ident(a) } StringEnd(}")"#
     ; "brace group inside a body"
 )]
 #[test_case(
     r#""${ {a: "x"} }""#
-    => r#"StringSegment("${) { Ident(a) : String("x") } String(}")"#
+    => r#"StringStart("${) { Ident(a) : String("x") } StringEnd(}")"#
     ; "brace group containing a string"
 )]
 #[test_case(
     r#"{ "a${b}c" }"#
-    => r#"{ StringSegment("a${) Ident(b) String(}c") }"#
+    => r#"{ StringStart("a${) Ident(b) StringEnd(}c") }"#
     ; "interpolated string inside a brace group"
 )]
 #[test_case(
     r#"{ "a${ {b} }c" }"#
-    => r#"{ StringSegment("a${) { Ident(b) } String(}c") }"#
+    => r#"{ StringStart("a${) { Ident(b) } StringEnd(}c") }"#
     ; "brace group inside an interpolation inside a brace group"
 )]
 // Once a literal is closed the stack is empty again, so a following `}` is a plain
@@ -357,12 +360,12 @@ fn interpolation_whitespace(src: &str) -> String {
 )]
 #[test_case(
     r#""a${b}c" }"#
-    => r#"StringSegment("a${) Ident(b) String(}c") }"#
+    => r#"StringStart("a${) Ident(b) StringEnd(}c") }"#
     ; "close brace after a complete interpolated string"
 )]
 #[test_case(
     r#"d:m | compute msg = "svc=${svc} code=${code}""#
-    => r#"Ident(d) : Ident(m) | Ident(compute) Ident(msg) = StringSegment("svc=${) Ident(svc) StringSegment(} code=${) Ident(code) String(}")"#
+    => r#"Ident(d) : Ident(m) | Ident(compute) Ident(msg) = StringStart("svc=${) Ident(svc) StringSegment(} code=${) Ident(code) StringEnd(}")"#
     ; "interpolation in a realistic query"
 )]
 fn nested_string_interpolation(src: &str) -> String {
@@ -378,15 +381,15 @@ fn nested_string_interpolation(src: &str) -> String {
 // via `CORPUS`, and these cases pin down which token the input degrades to.
 // ---------------------------------------------------------------------------------------
 
-#[test_case(r#""a${"#     => r#"StringSegment("a${)"#                     ; "ends right after the marker")]
-#[test_case(r#""${"#      => r#"StringSegment("${)"#                      ; "ends right after a leading marker")]
+#[test_case(r#""a${"#     => r#"StringStart("a${)"#                     ; "ends right after the marker")]
+#[test_case(r#""${"#      => r#"StringStart("${)"#                      ; "ends right after a leading marker")]
 #[test_case(r#""a$"#      => r#"Invalid("a$)"#                            ; "ends on a dollar")]
-#[test_case(r#""${x"#     => r#"StringSegment("${) Ident(x)"#             ; "ends inside the body")]
-#[test_case(r#""${x}"#    => r#"StringSegment("${) Ident(x) Invalid(})"#  ; "ends on the closing brace")]
-#[test_case(r#""${x}b"#   => r#"StringSegment("${) Ident(x) Invalid(}b)"# ; "ends inside the trailing fragment")]
-#[test_case(r#""${x}b""#  => r#"StringSegment("${) Ident(x) String(}b")"# ; "terminated for contrast")]
-#[test_case(r#""a${"b""#  => r#"StringSegment("a${) String("b")"#         ; "nested literal closes but the outer does not")]
-#[test_case(r#""a${"b"#   => r#"StringSegment("a${) Invalid("b)"#         ; "nested literal is itself unterminated")]
+#[test_case(r#""${x"#     => r#"StringStart("${) Ident(x)"#             ; "ends inside the body")]
+#[test_case(r#""${x}"#    => r#"StringStart("${) Ident(x) Invalid(})"#  ; "ends on the closing brace")]
+#[test_case(r#""${x}b"#   => r#"StringStart("${) Ident(x) Invalid(}b)"# ; "ends inside the trailing fragment")]
+#[test_case(r#""${x}b""#  => r#"StringStart("${) Ident(x) StringEnd(}b")"# ; "terminated for contrast")]
+#[test_case(r#""a${"b""#  => r#"StringStart("a${) String("b")"#         ; "nested literal closes but the outer does not")]
+#[test_case(r#""a${"b"#   => r#"StringStart("a${) Invalid("b)"#         ; "nested literal is itself unterminated")]
 fn unterminated_interpolation(src: &str) -> String {
     lex(src)
 }
@@ -645,53 +648,65 @@ fn assert_total(input: &str) {
     );
 }
 
-/// Property: a fragment's kind is exactly what its own last characters say it is.
+/// Property: a fragment's kind is exactly what its own first and last characters say it is.
 ///
-/// `StringSegment` promises "an interpolation body follows"; `String` promises "the literal
-/// ends here". `Parser::string` (src/syntax_tree.rs:432) loops on that promise alone, so the
-/// two must never be interchangeable: a `${`-terminated fragment typed as `String` ends the
-/// literal an interpolation early, and a `"`-terminated one typed as `StringSegment` sends
-/// the parser looking for a body that does not exist.
+/// Each kind is a promise about what surrounds it: `StringStart` opens the literal and
+/// promises a body, `StringSegment` follows a body and promises another, `StringEnd` closes
+/// the literal, and `String` stands alone. `Parser::string` (src/syntax_tree.rs:647) walks
+/// that sequence on the kinds alone, so they must never be interchangeable: a `${`-terminated
+/// fragment typed as `StringEnd` ends the literal an interpolation early, and a
+/// `"`-terminated one typed as `StringSegment` sends the parser looking for a body that does
+/// not exist.
 ///
 /// Stated over the text rather than over the input, this holds for truncated input too — the
 /// lexer degrades a cut-off literal to `Invalid`, which this property deliberately says
 /// nothing about.
 ///
-/// Returns how many `StringSegment`s it saw, so callers can prove the property was not
+/// Returns how many fragments promised a body, so callers can prove the property was not
 /// vacuous — over random input a generator that never emits a well-formed `${` would satisfy
 /// this trivially.
 fn assert_fragment_kinds(input: &str) -> usize {
-    let mut segments = 0;
+    let mut opened = 0;
     for token in Lexer::new(input) {
+        let text = token.text();
         match token.tpe() {
+            TokenType::StringStart => {
+                assert!(
+                    text.starts_with('"') && text.ends_with("${"),
+                    "StringStart {text:?} does not open a literal and promise a body in {input:?}"
+                );
+                opened += 1;
+            }
             TokenType::StringSegment => {
                 assert!(
-                    token.text().ends_with("${"),
-                    "StringSegment {:?} does not end with an interpolation marker in {input:?}",
-                    token.text()
+                    text.starts_with('}') && text.ends_with("${"),
+                    "StringSegment {text:?} does not sit between two bodies in {input:?}"
                 );
-                segments += 1;
+                opened += 1;
             }
+            TokenType::StringEnd => assert!(
+                text.starts_with('}') && text.ends_with('"'),
+                "StringEnd {text:?} does not close a literal in {input:?}"
+            ),
             TokenType::String => assert!(
-                token.text().ends_with('"') && token.text().len() > 1,
-                "String {:?} is not a closed literal in {input:?}",
-                token.text()
+                text.starts_with('"') && text.ends_with('"') && text.len() > 1,
+                "String {text:?} is not a closed literal in {input:?}"
             ),
             _ => {}
         }
     }
-    segments
+    opened
 }
 
 #[test]
 fn corpus_tiles() {
-    let mut segments = 0;
+    let mut opened = 0;
     for input in CORPUS {
         assert_tiles(input);
         assert_total(input);
-        segments += assert_fragment_kinds(input);
+        opened += assert_fragment_kinds(input);
     }
-    assert!(segments > 0, "no interpolation segments in the corpus");
+    assert!(opened > 0, "no interpolation markers in the corpus");
 }
 
 #[test]
@@ -748,7 +763,7 @@ const FRAGMENTS: &[&str] = &[
 #[test]
 fn generated_inputs_tile() {
     let mut rng = Rng(0x5eed_1234_abcd_ef01);
-    let mut segments = 0;
+    let mut opened = 0;
     for _ in 0..2000 {
         let len = usize::try_from(rng.next_u64() % 20).unwrap_or(0);
         let mut input = String::new();
@@ -757,10 +772,10 @@ fn generated_inputs_tile() {
         }
         assert_tiles(&input);
         assert_total(&input);
-        segments += assert_fragment_kinds(&input);
+        opened += assert_fragment_kinds(&input);
     }
     assert!(
-        segments > 0,
+        opened > 0,
         "generator never produced a well-formed interpolation marker"
     );
 }

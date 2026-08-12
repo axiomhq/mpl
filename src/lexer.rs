@@ -91,12 +91,18 @@ pub enum TokenType {
     NotEqual,
     /// A dot dot `..` operator.
     DotDot,
-    /// A string literal.
+    /// A string literal. `"..."`
     String,
-    /// A string literal segment.
+    /// A string start. `"... ${`
+    StringStart,
+    /// A string segment. `}...${`
     StringSegment,
+    /// A string end. `}..."`
+    StringEnd,
     /// A bool literal value.
     Bool,
+    /// A null literal value.
+    Null,
     /// A inf literal value.
     Inf,
 }
@@ -221,6 +227,25 @@ impl<'input> Lexer<'input> {
             while self.chars.peek().is_some_and(char::is_ascii_digit) {
                 self.advance_char();
             }
+            // consume e-notation
+            if self.chars.peek().is_some_and(|c| *c == 'e') {
+                self.advance_char();
+                while self.chars.peek().is_some_and(char::is_ascii_digit) {
+                    self.advance_char();
+                }
+            }
+
+            Token {
+                tpe: TokenType::Float,
+                text: &self.input[start..self.pos],
+                pos: start,
+            }
+        } else if self.chars.peek().is_some_and(|c| *c == 'e') {
+            self.advance_char();
+            while self.chars.peek().is_some_and(char::is_ascii_digit) {
+                self.advance_char();
+            }
+
             Token {
                 tpe: TokenType::Float,
                 text: &self.input[start..self.pos],
@@ -270,7 +295,7 @@ impl<'input> Lexer<'input> {
         }
     }
 
-    fn parse_string(&mut self, start: usize) -> Token<'input> {
+    fn parse_string(&mut self, pos: usize) -> Token<'input> {
         self.state.push(State::StrOpen);
         while let Some(c) = self.chars.peek() {
             match c {
@@ -284,8 +309,8 @@ impl<'input> Lexer<'input> {
                     } else {
                         return Token {
                             tpe: TokenType::Invalid,
-                            text: &self.input[start..self.pos],
-                            pos: start,
+                            text: &self.input[pos..self.pos],
+                            pos,
                         };
                     }
                 }
@@ -301,8 +326,8 @@ impl<'input> Lexer<'input> {
                         // there is no char after the dollar sign, so it's invalid
                         return Token {
                             tpe: TokenType::Invalid,
-                            text: &self.input[start..self.pos],
-                            pos: start,
+                            text: &self.input[pos..self.pos],
+                            pos,
                         };
                     }
                 }
@@ -318,26 +343,31 @@ impl<'input> Lexer<'input> {
                 // if !matches!(self.state.pop(), Some(State::StrOpen)) {
                 //     return Token::Invalid(start, &self.input[start..self.pos]);
                 // }
+
                 self.pos += 1;
-                Token {
-                    tpe: TokenType::String,
-                    text: &self.input[start..self.pos],
-                    pos: start,
-                }
+                let text = &self.input[pos..self.pos];
+                let tpe = if text.starts_with('"') {
+                    TokenType::String
+                } else {
+                    TokenType::StringEnd
+                };
+                Token { tpe, text, pos }
             }
             Some('{') => {
                 // we don't pop since we enter nested terretorry
                 self.pos += 1;
-                Token {
-                    tpe: TokenType::StringSegment,
-                    text: &self.input[start..self.pos],
-                    pos: start,
-                }
+                let text = &self.input[pos..self.pos];
+                let tpe = if text.starts_with('"') {
+                    TokenType::StringStart
+                } else {
+                    TokenType::StringSegment
+                };
+                Token { tpe, text, pos }
             }
             _ => Token {
                 tpe: TokenType::Invalid,
-                text: &self.input[start..self.pos],
-                pos: start,
+                text: &self.input[pos..self.pos],
+                pos,
             },
         }
     }
@@ -408,6 +438,12 @@ impl<'input> Lexer<'input> {
                 text: ident,
                 pos: start,
             },
+            "null" => Token {
+                tpe: TokenType::Null,
+                text: ident,
+                pos: start,
+            },
+
             other => Token {
                 tpe: TokenType::Ident,
                 text: other,

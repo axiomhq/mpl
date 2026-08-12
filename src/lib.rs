@@ -9,6 +9,8 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(unused_assignments)] // We need this for the type error
 
+/// AST lowering
+pub mod ast;
 /// The lexer for the MPL query language.
 pub mod lexer;
 mod parser;

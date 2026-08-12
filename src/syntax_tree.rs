@@ -1,6 +1,6 @@
 use std::{fmt::Display, iter::Peekable};
 
-use miette::{Diagnostic, SourceSpan};
+use miette::{Diagnostic, MietteDiagnostic, SourceSpan};
 use rowan::GreenNodeBuilder;
 use strum::VariantArray;
 
@@ -38,6 +38,19 @@ pub enum SyntaxError {
         range: SourceSpan,
     },
 }
+impl SyntaxError {
+    /// Converts this error into a [`MietteDiagnostic`].
+    pub fn to_diagnostic(&self) -> MietteDiagnostic {
+        MietteDiagnostic {
+            message: self.to_string(),
+            code: self.code().map(|code| code.to_string()),
+            severity: self.severity(),
+            help: self.help().map(|help| help.to_string()),
+            url: self.url().map(|url| url.to_string()),
+            labels: self.labels().map(Iterator::collect),
+        }
+    }
+}
 /// The language definition for the MPL language syntax tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Lang {}
@@ -46,7 +59,7 @@ impl rowan::Language for Lang {
     fn kind_from_raw(raw: rowan::SyntaxKind) -> Self::Kind {
         *SyntaxKind::VARIANTS
             .get(raw.0 as usize)
-            .unwrap_or(&SyntaxKind::THIS_SHOULD_NEVER_BE_EMITTED_GOD_DAMN_IT)
+            .unwrap_or(&THIS_SHOULD_NEVER_BE_EMITTED_GOD_DAMN_IT)
     }
     fn kind_to_raw(kind: Self::Kind) -> rowan::SyntaxKind {
         kind.into()
@@ -99,8 +112,11 @@ pub enum SyntaxKind {
     LX_NOT_EQUAL,
     LX_DOT_DOT,
     LX_STRING,
+    LX_STRING_START,
     LX_STRING_SEGMENT,
+    LX_STRING_END,
     LX_BOOL,
+    LX_NULL,
     LX_INF,
 
     IDENT,
@@ -118,10 +134,21 @@ pub enum SyntaxKind {
     FILTER_NOT,
     FILTER_PAREN,
     FILTER_CMP,
+    FILTER_CMP_EQ,
+    FILTER_CMP_NEQ,
+    FILTER_CMP_LT,
+    FILTER_CMP_GT,
+    FILTER_CMP_LTE,
+    FILTER_CMP_GTE,
+    FILTER_CMP_IN,
+    FILTER_CMP_IS,
     FUNCTION_PATH,
+    MATH_FN,
     DURATION,
     TIME_UNIT,
     OTEL_TYPE,
+    MPL_TYPE,
+    OPTION_TYPE,
 
     EXPR,
     REGEX,
@@ -129,7 +156,10 @@ pub enum SyntaxKind {
     INTEGER,
     FLOAT,
     BOOL,
+    NULL,
     STRING,
+    STRING_SEGMENT,
+    STRING_END,
     ARRAY,
     TAG_LIST,
     TIME_RANGE,
@@ -142,7 +172,10 @@ pub enum SyntaxKind {
     FILTER,
     SAMPLE,
     MAP,
-    MAP_MATH,
+    MAP_MUL,
+    MAP_DIV,
+    MAP_PLUS,
+    MAP_MINUS,
     ALIGN,
     AS,
     GROUP,
@@ -158,6 +191,26 @@ pub enum SyntaxKind {
     THIS_SHOULD_NEVER_BE_EMITTED_GOD_DAMN_IT,
     // IMPORTANT! THIS NEEDS TO BE LAST!!!
     ROOT,
+}
+#[allow(clippy::enum_glob_use)]
+use SyntaxKind::*;
+
+impl SyntaxKind {
+    /// Returns `true` if the kind is a trivia token (comment, whitespace, or invalid).
+    #[must_use]
+    pub fn is_trivia(self) -> bool {
+        matches!(
+            self,
+            SyntaxKind::LX_COMMENT
+                | SyntaxKind::LX_WHITESPACE
+                | SyntaxKind::LX_INVALID
+                | SyntaxKind::LX_SEMI_COLON
+                | SyntaxKind::INVALID
+                | SyntaxKind::GARBAGE
+                | SyntaxKind::THIS_SHOULD_NEVER_BE_EMITTED_GOD_DAMN_IT
+                | SyntaxKind::ROOT
+        )
+    }
 }
 
 impl Token<'_> {
@@ -200,8 +253,11 @@ impl Token<'_> {
             TokenType::NotEqual => LX_NOT_EQUAL,
             TokenType::DotDot => LX_DOT_DOT,
             TokenType::String => LX_STRING,
+            TokenType::StringStart => LX_STRING_START,
             TokenType::StringSegment => LX_STRING_SEGMENT,
+            TokenType::StringEnd => LX_STRING_END,
             TokenType::Bool => LX_BOOL,
+            TokenType::Null => LX_NULL,
             TokenType::Inf => LX_INF,
         }
     }
@@ -212,9 +268,6 @@ impl From<SyntaxKind> for rowan::SyntaxKind {
         Self(kind as u16)
     }
 }
-
-#[allow(clippy::enum_glob_use)]
-use SyntaxKind::*;
 
 /// Parser for the MPL language syntax tree.
 pub struct Parser<'input> {
@@ -324,6 +377,14 @@ impl<'input> Parser<'input> {
         };
         token.tpe() == TokenType::Ident && token.text() == text
     }
+    /// silent keyword ; does not produce a new syntax node just a token
+    fn try_keyword_token(&mut self, text: &str) -> bool {
+        if !self.is_keyword(text) {
+            return false;
+        }
+        self.eat_token();
+        true
+    }
 
     fn try_keyword(&mut self, text: &str) -> bool {
         if !self.is_keyword(text) {
@@ -400,11 +461,18 @@ impl<'input> Parser<'input> {
     }
 }
 
+/// Represents a parsed syntax tree.
+pub struct SyntaxTree {
+    /// root node
+    pub root: SyntaxNode,
+    /// errors encountered during parsing
+    pub errors: Vec<SyntaxError>,
+}
 /// Grammar
 impl Parser<'_> {
     /// Parses the input and returns the syntax tree.
     #[must_use]
-    pub fn parse(mut self) -> (SyntaxNode, Vec<SyntaxError>) {
+    pub fn parse(mut self) -> SyntaxTree {
         self.node(ROOT, |s| {
             s.eat_trivia();
             while s.is_keyword("set") {
@@ -435,7 +503,10 @@ impl Parser<'_> {
                 });
             }
         });
-        (SyntaxNode::new_root(self.builder.finish()), self.errors)
+        SyntaxTree {
+            root: SyntaxNode::new_root(self.builder.finish()),
+            errors: self.errors,
+        }
     }
 
     fn query(&mut self) {
@@ -466,16 +537,16 @@ impl Parser<'_> {
             s.try_structural(TokenType::Comma);
             s.structural(TokenType::RParen);
             s.structural(TokenType::Pipe);
-            s.keyword("compute");
+            s.keyword_token("compute");
             s.ident();
-            s.keyword("using");
+            s.keyword_token("using");
             let tkn = s.peek();
             match tkn.tpe() {
                 TokenType::Ident | TokenType::EscapedIdent => s.function_path(),
-                TokenType::Plus => s.eat_token_type(TokenType::Plus),
-                TokenType::Minus => s.eat_token_type(TokenType::Minus),
-                TokenType::Mul => s.eat_token_type(TokenType::Mul),
-                TokenType::Div => s.eat_token_type(TokenType::Div),
+                TokenType::Plus => s.node(MATH_FN, |s| s.eat_token_type(TokenType::Plus)),
+                TokenType::Minus => s.node(MATH_FN, |s| s.eat_token_type(TokenType::Minus)),
+                TokenType::Mul => s.node(MATH_FN, |s| s.eat_token_type(TokenType::Mul)),
+                TokenType::Div => s.node(MATH_FN, |s| s.eat_token_type(TokenType::Div)),
                 _ => s.error("expected compute function"),
             }
             s.rules();
@@ -515,7 +586,7 @@ impl Parser<'_> {
 
     fn directive(&mut self) {
         self.node(DIRECTIVE, |s| {
-            s.keyword("set");
+            s.keyword_token("set");
             s.ident();
             if s.try_structural(TokenType::Equal) {
                 s.constant();
@@ -526,7 +597,7 @@ impl Parser<'_> {
 
     fn param(&mut self) {
         self.node(PARAM, |s| {
-            s.keyword("param");
+            s.keyword_token("param");
             s.variable();
             s.structural(TokenType::Colon);
             s.variable_type();
@@ -545,6 +616,9 @@ impl Parser<'_> {
     fn bool(&mut self) {
         self.node(BOOL, |s| s.eat_token_type(TokenType::Bool));
     }
+    fn null(&mut self) {
+        self.node(NULL, |s| s.eat_token_type(TokenType::Null));
+    }
 
     fn constant(&mut self) {
         self.node(CONST, |s| {
@@ -558,7 +632,8 @@ impl Parser<'_> {
                 TokenType::Float => s.float(),
                 TokenType::Integer => s.integer(),
                 TokenType::Bool => s.bool(),
-                TokenType::String | TokenType::StringSegment => s.string(),
+                TokenType::Null => s.null(),
+                TokenType::String | TokenType::StringStart => s.string(),
                 TokenType::LBracket => s.array(),
                 _ => s.error("expected constant"),
             }
@@ -580,12 +655,21 @@ impl Parser<'_> {
     fn string(&mut self) {
         self.rnode(STRING, |s| {
             let mut tkn = s.next();
-            while tkn.tpe() == TokenType::StringSegment {
+            if tkn.tpe() == TokenType::StringStart {
                 s.token(tkn);
                 s.expr();
                 tkn = s.next();
-            }
-            if tkn.tpe() == TokenType::String {
+                while tkn.tpe() == TokenType::StringSegment {
+                    s.token(tkn);
+                    s.expr();
+                    tkn = s.next();
+                }
+                if tkn.tpe() == TokenType::StringEnd {
+                    s.token(tkn);
+                } else {
+                    s.error_token(tkn, "Unexpected string");
+                }
+            } else if tkn.tpe() == TokenType::String {
                 s.token(tkn);
             } else {
                 s.error_token(tkn, "Unexpected string");
@@ -605,6 +689,19 @@ impl Parser<'_> {
             }
             s.structural(TokenType::RBracket);
         });
+    }
+
+    /// silent keyword ; does not produce a new syntax node just a token
+    fn keyword_token(&mut self, text: &str) {
+        let token = self.next();
+        if token.text() == text {
+            self.token(token);
+        } else {
+            self.error_token(
+                token,
+                format!("expected keyword {} but got {}", text, token.text()),
+            );
+        }
     }
 
     fn keyword(&mut self, text: &str) {
@@ -682,38 +779,35 @@ impl Parser<'_> {
     }
 
     fn variable_type(&mut self) {
-        self.rnode(TYPE, |s| {
-            let token = s.next();
+        self.node(TYPE, |s| {
+            let token = s.peek();
             if token.tpe() != TokenType::Ident {
-                s.error_token(
-                    token,
-                    format!(
-                        "expected variable type but got {} ({:?})",
-                        token.text(),
-                        token.tpe()
-                    ),
-                );
+                s.error(format!(
+                    "expected variable type but got {} ({:?})",
+                    token.text(),
+                    token.tpe()
+                ));
                 return;
             }
             match token.text() {
-             // built-in type
-            "string" | "int" | "float" | "bool" | "array" |
-            // custom type
-            "Dataset" | "Duration" | "duration" | "Regex" =>
-                s.token(token),
-            "Option" => {
-                s.token(token);
-                s.structural(TokenType::LessThan);
-                s.variable_type();
-                s.structural(TokenType::GreaterThan);
+                // built-in type
+                "string" | "int" | "float" | "bool" | "array" | "null" => {
+                    s.node(OTEL_TYPE, Parser::eat_token);
+                }
+                // custom type
+                "Dataset" | "Duration" | "Regex" | "Timestamp" => {
+                    s.node(MPL_TYPE, Parser::eat_token);
+                }
+                "Option" => s.rnode(OPTION_TYPE, |s| {
+                    s.eat_token();
+                    s.structural(TokenType::LessThan);
+                    s.variable_type();
+                    s.structural(TokenType::GreaterThan);
+                }),
+                _ => {
+                    s.error(format!("unknown type {}", token.text()));
+                }
             }
-            _ => {
-                s.error_token(
-                    token,
-                    format!("unknown type {}", token.text()),
-                );
-            }
-        }
         });
     }
 
@@ -745,7 +839,7 @@ impl Parser<'_> {
 
     fn filter_rule(&mut self) {
         self.node(FILTER, |s| {
-            if !s.try_keyword("filter") && !s.try_keyword("where") {
+            if !s.try_keyword_token("filter") && !s.try_keyword_token("where") {
                 s.error("expected filter or where");
                 return;
             }
@@ -756,7 +850,7 @@ impl Parser<'_> {
     fn filter_or(&mut self) {
         self.rnode(FILTER_OR, |s| {
             s.filter_and();
-            while s.try_keyword("or") {
+            while s.try_keyword_token("or") {
                 s.filter_and();
             }
         });
@@ -765,7 +859,7 @@ impl Parser<'_> {
     fn filter_and(&mut self) {
         self.rnode(FILTER_AND, |s| {
             s.filter_not();
-            while s.try_keyword("and") {
+            while s.try_keyword_token("and") {
                 s.filter_not();
             }
         });
@@ -796,32 +890,51 @@ impl Parser<'_> {
 
             let tkn = s.peek();
             match tkn.tpe() {
-                tt @ (TokenType::EqualEqual | TokenType::NotEqual) => {
-                    s.structural(tt);
+                TokenType::EqualEqual => s.node(FILTER_CMP_EQ, |s| {
+                    s.structural(TokenType::EqualEqual);
                     let tkn = s.peek();
                     if tkn.tpe() == TokenType::Regex {
                         s.regex();
                     } else {
                         s.expr();
                     }
-                }
-                tt @ (TokenType::LessThan
-                | TokenType::GreaterThan
-                | TokenType::LessThanEqual
-                | TokenType::GreaterThanEqual) => {
-                    s.structural(tt);
-                    s.expr();
-                }
-                TokenType::Ident if tkn.text() == "is" => {
-                    s.keyword("is");
-                    s.type_ident();
-                }
-                TokenType::Ident if tkn.text() == "in" => {
-                    s.keyword("in");
-                    if !s.try_variable() {
-                        s.array();
+                }),
+                TokenType::NotEqual => s.node(FILTER_CMP_NEQ, |s| {
+                    s.structural(TokenType::NotEqual);
+                    let tkn = s.peek();
+                    if tkn.tpe() == TokenType::Regex {
+                        s.regex();
+                    } else {
+                        s.expr();
                     }
-                }
+                }),
+                TokenType::LessThan => s.node(FILTER_CMP_LT, |s| {
+                    s.structural(TokenType::LessThan);
+                    s.expr();
+                }),
+                TokenType::GreaterThan => s.node(FILTER_CMP_GT, |s| {
+                    s.structural(TokenType::GreaterThan);
+                    s.expr();
+                }),
+                TokenType::LessThanEqual => s.node(FILTER_CMP_LTE, |s| {
+                    s.structural(TokenType::LessThanEqual);
+                    s.expr();
+                }),
+                TokenType::GreaterThanEqual => s.node(FILTER_CMP_GTE, |s| {
+                    s.structural(TokenType::GreaterThanEqual);
+                    s.expr();
+                }),
+
+                TokenType::Ident if tkn.text() == "is" => s.node(FILTER_CMP_IS, |s| {
+                    s.keyword_token("is");
+                    s.type_ident();
+                }),
+                TokenType::Ident if tkn.text() == "in" => s.node(FILTER_CMP_IN, |s| {
+                    s.keyword_token("in");
+                    if !s.try_variable() {
+                        s.expr();
+                    }
+                }),
                 _ => {
                     s.error("expected comparison operator");
                 }
@@ -831,26 +944,45 @@ impl Parser<'_> {
 
     fn sample_rule(&mut self) {
         self.node(SAMPLE, |s| {
-            s.keyword("sample");
+            s.keyword_token("sample");
             s.float();
         });
     }
 
     fn map_rule(&mut self) {
         self.node(MAP, |s| {
-            s.keyword("map");
+            s.keyword_token("map");
             let tkn = s.peek();
             match tkn.tpe() {
-                TokenType::Mul | TokenType::Div | TokenType::Plus | TokenType::Minus => {
-                    s.node(MAP_MATH, |s| {
+                TokenType::Mul => {
+                    s.node(MAP_MUL, |s| {
                         s.eat_token();
                         s.expr();
                     });
                 }
+                TokenType::Div => {
+                    s.node(MAP_DIV, |s| {
+                        s.eat_token();
+                        s.expr();
+                    });
+                }
+                TokenType::Plus => {
+                    s.node(MAP_PLUS, |s| {
+                        s.eat_token();
+                        s.expr();
+                    });
+                }
+                TokenType::Minus => {
+                    s.node(MAP_MINUS, |s| {
+                        s.eat_token();
+                        s.expr();
+                    });
+                }
+
                 _ => {
                     s.function_path();
                     if s.try_structural(TokenType::LParen) {
-                        s.constant();
+                        s.expr();
                         s.structural(TokenType::RParen);
                     }
                 }
@@ -859,7 +991,7 @@ impl Parser<'_> {
     }
     fn as_rule(&mut self) {
         self.node(AS, |s| {
-            if !s.try_keyword("as") {
+            if !s.try_keyword_token("as") {
                 s.error("expected as");
                 return;
             }
@@ -869,7 +1001,7 @@ impl Parser<'_> {
 
     fn align_rule(&mut self) {
         self.node(ALIGN, |s| {
-            s.keyword("align");
+            s.keyword_token("align");
             // note: this will eat "to $..." with the && as try_variable() is only
             // called when try_to is also true
             if s.try_keyword("to") && !s.try_variable() {
@@ -882,13 +1014,7 @@ impl Parser<'_> {
 
     fn duration(&mut self) {
         self.node(DURATION, |s| {
-            let tkn = s.next();
-            if tkn.tpe() != TokenType::Integer {
-                s.error_token(tkn, "expected integer duration");
-                return;
-            }
-            s.token(tkn);
-
+            s.integer();
             let tkn = s.peek();
             if tkn.tpe() == TokenType::Ident
                 && matches!(tkn.text(), "ms" | "s" | "m" | "h" | "d" | "w" | "M" | "y")
@@ -909,7 +1035,7 @@ impl Parser<'_> {
 
     fn group_rule(&mut self) {
         self.node(GROUP, |s| {
-            s.keyword("group");
+            s.keyword_token("group");
             if s.try_keyword("by") {
                 s.tag_list();
             }
@@ -920,7 +1046,7 @@ impl Parser<'_> {
 
     fn bucket_rule(&mut self) {
         self.node(BUCKET, |s| {
-            s.keyword("bucket");
+            s.keyword_token("bucket");
             if s.try_keyword("by") {
                 s.tag_list();
             }
@@ -947,6 +1073,9 @@ impl Parser<'_> {
                 TokenType::Float => {
                     s.float();
                 }
+                TokenType::Integer => {
+                    s.integer();
+                }
                 _ => {
                     s.error("expected ident or float in bucket arg");
                 }
@@ -965,14 +1094,14 @@ impl Parser<'_> {
 
     fn ifdef_rule(&mut self) {
         self.node(IFDEF, |s| {
-            s.keyword("ifdef");
+            s.keyword_token("ifdef");
             s.structural(TokenType::LParen);
             s.variable();
             s.structural(TokenType::RParen);
             s.structural(TokenType::LBrace);
             s.filter_rule();
             s.structural(TokenType::RBrace);
-            if s.try_keyword("else") {
+            if s.try_keyword_token("else") {
                 s.structural(TokenType::LBrace);
                 s.filter_rule();
                 s.structural(TokenType::RBrace);
@@ -990,7 +1119,7 @@ impl Parser<'_> {
 
     fn extend_rule(&mut self) {
         self.node(EXTEND, |s| {
-            s.keyword("extend");
+            s.keyword_token("extend");
             s.extend_part();
             while s.try_structural(TokenType::Comma) {
                 s.extend_part();
@@ -1011,7 +1140,10 @@ impl Parser<'_> {
         self.node(OTEL_TYPE, |s| {
             let tkn = s.peek();
             if tkn.tpe() == TokenType::Ident
-                && matches!(tkn.text(), "string" | "int" | "float" | "bool" | "array")
+                && matches!(
+                    tkn.text(),
+                    "string" | "int" | "float" | "bool" | "array" | "null"
+                )
             {
                 s.ident();
             } else {
@@ -1026,16 +1158,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse() {
-        let input = r"
+    fn test_syntaxparse() {
+        let input = r#"
             // test
             set a = 42;
             set b;
             a:b
-            ";
-        let (tree, errors) = Parser::new(input).parse();
-        dbg!(&tree, &errors);
-        assert_eq!(input, tree.to_string());
+            | where a == "hello ${ $world } snot { $badger }"
+            "#;
+        let SyntaxTree { root, errors } = Parser::new(input).parse();
+        dbg!(&root, &errors);
+        assert_eq!(input, root.to_string());
 
         assert!(errors.is_empty());
     }
