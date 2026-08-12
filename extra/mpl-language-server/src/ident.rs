@@ -71,6 +71,7 @@ mod tests {
     #[test_case("true"         => true  ; "bool literal")]
     #[test_case("false"        => true  ; "false literal")]
     #[test_case("inf"          => true  ; "inf literal")]
+    #[test_case("null"         => true  ; "null literal")]
     fn escaping_is_required(name: &str) -> bool {
         needs_escape(name)
     }

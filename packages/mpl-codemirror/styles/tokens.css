@@ -4,6 +4,7 @@
 .mpl-string { color: #0a3069; }
 .mpl-number { color: #0550ae; }
 .mpl-bool { color: #cf222e; }
+.mpl-null { color: #cf222e; }
 .mpl-regexp { color: #116329; }
 .mpl-operator { color: #cf222e; }
 .mpl-punctuation { color: #cf222e; }
@@ -15,6 +16,7 @@
 .dark-theme .mpl-string { color: #98c379; }
 .dark-theme .mpl-number { color: #d19a66; }
 .dark-theme .mpl-bool { color: #d19a66; }
+.dark-theme .mpl-null { color: #d19a66; }
 .dark-theme .mpl-regexp { color: #56b6c2; }
 .dark-theme .mpl-operator { color: #56b6c2; }
 .dark-theme .mpl-punctuation { color: #abb2bf; }

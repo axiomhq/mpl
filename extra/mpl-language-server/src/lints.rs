@@ -32,13 +32,14 @@ const LINT_RULES: &[LintRule] = &[
 // `WarningReason::OldDuration` and surfaced via `Warning::to_diagnostic_item`.
 // See `diagnostics.rs`.
 
-/// The parser wraps a rule's leading word in a `KEYWORD` node, so requiring
-/// that parent is what keeps a tag named `filter` from being flagged.
+/// The word that opens a filter rule sits directly under the `FILTER` node,
+/// while a tag of the same name is wrapped in an `IDENT` first. Requiring that
+/// parent is what keeps a tag named `filter` from being flagged.
 fn lint_filter_keyword(token: &SyntaxToken) -> Option<DiagnosticItem> {
     if token.text() != "filter"
         || !token
             .parent()
-            .is_some_and(|p| p.kind() == SyntaxKind::KEYWORD)
+            .is_some_and(|p| p.kind() == SyntaxKind::FILTER)
     {
         return None;
     }
@@ -77,7 +78,7 @@ fn lint_unnecessary_escape(token: &SyntaxToken) -> Option<DiagnosticItem> {
 
 /// Runs the lint rules against `query` and returns any hint diagnostics.
 pub(crate) fn detect_hints(query: &str) -> Vec<DiagnosticItem> {
-    let (tree, _errors) = Parser::new(query).parse();
+    let tree = Parser::new(query).parse().root;
     tree.descendants_with_tokens()
         .filter_map(NodeOrToken::into_token)
         .filter_map(|token| {

@@ -468,7 +468,7 @@ pub enum QueryContext<'a> {
 /// document order is the innermost, which is what scopes the returned slice to
 /// the subquery being edited.
 pub fn locate_query_context(text: &str) -> QueryContext<'_> {
-    let (tree, _errors) = SyntaxParser::new(text).parse();
+    let tree = SyntaxParser::new(text).parse().root;
     let offset = rowan::TextSize::of(text);
 
     let enclosing = tree
@@ -513,7 +513,7 @@ pub fn locate_query_context(text: &str) -> QueryContext<'_> {
 /// Byte offsets of the `|` tokens in `text`, in order. The lexer keeps pipes
 /// inside strings, regexes and comments out of the token stream.
 fn pipe_offsets(text: &str) -> Vec<usize> {
-    let (tree, _errors) = SyntaxParser::new(text).parse();
+    let tree = SyntaxParser::new(text).parse().root;
     tree.descendants_with_tokens()
         .filter_map(NodeOrToken::into_token)
         .filter(|t| t.kind() == SyntaxKind::LX_PIPE)
@@ -730,39 +730,27 @@ enum StringContext {
 /// Classifies the position at byte offset `pos` as ordinary code, the inside
 /// of a `${ … }` interpolation, or plain string-literal text.
 ///
-/// The lexer splits an interpolated literal at each `${` and `}`, emitting a
-/// `STRING_SEGMENT` for every run of text that opens an interpolation and a
-/// `STRING` for the run that closes one. Counting those over the text before
-/// the cursor gives the nesting at that point.
+/// The lexer splits an interpolated literal at each `${` and `}`, naming each
+/// run by the part it plays: `STRING_START` opens an interpolation,
+/// `STRING_SEGMENT` closes one and opens the next, and `STRING_END` closes the
+/// last. Counting those over the text before the cursor gives the nesting at
+/// that point, which is what tells the nested literal in `"a ${ "b" } c"` apart
+/// from the run that closes the outer one.
 fn classify_string_context(text: &str, pos: usize) -> StringContext {
     let end = pos.min(text.len());
     let Some(prefix) = text.get(..end) else {
         return StringContext::Code;
     };
-    let (tree, _errors) = SyntaxParser::new(prefix).parse();
+    let tree = SyntaxParser::new(prefix).parse().root;
 
-    // Whether a literal token opens or closes an interpolation is written on
-    // its first character: `"` starts a fresh literal, `}` resumes the one an
-    // interpolation was opened from. That is what tells the nested string in
-    // `"a ${ "b" } c"` apart from the run that closes the outer literal.
     let mut depth = 0usize;
     for token in tree
         .descendants_with_tokens()
         .filter_map(NodeOrToken::into_token)
     {
         match token.kind() {
-            // Ends at a `${`: a fresh literal enters an interpolation, a
-            // resumed one closes its interpolation and immediately opens the
-            // next, leaving the depth where it was.
-            SyntaxKind::LX_STRING_SEGMENT if token.text().starts_with('"') => depth += 1,
-            SyntaxKind::LX_STRING_SEGMENT => {}
-            // Ends at a closing quote: a resumed literal closes the
-            // interpolation with it, a fresh one was a complete nested literal
-            // and leaves the surrounding interpolation open.
-            SyntaxKind::LX_STRING if token.text().starts_with('}') => {
-                depth = depth.saturating_sub(1);
-            }
-            SyntaxKind::LX_STRING => {}
+            SyntaxKind::LX_STRING_START => depth += 1,
+            SyntaxKind::LX_STRING_END => depth = depth.saturating_sub(1),
             // An unterminated literal swallows the rest of the input, so the
             // cursor is inside string text. The lexer only produces one of
             // these starting at the opening `"`, or at the `}` that reopens a
@@ -796,7 +784,7 @@ fn find_last_pipe(text: &str) -> Option<usize> {
 /// (`$ds:metric`) names nothing the tag lookup could resolve, so it yields
 /// `None`.
 fn extract_source_info(text: &str) -> Option<(String, String)> {
-    let (tree, _errors) = SyntaxParser::new(text).parse();
+    let tree = SyntaxParser::new(text).parse().root;
     let offset = rowan::TextSize::of(text);
     // `descendants` is preorder, so of the subqueries covering the cursor the
     // last one is the innermost.
@@ -858,7 +846,7 @@ fn ident_name(node: &SyntaxNode) -> Option<String> {
 /// gathers them whether or not that body parses, which is what lets params be
 /// offered while the query is still being written.
 pub fn extract_declared_params(text: &str) -> Vec<ParamItem> {
-    let (tree, _errors) = SyntaxParser::new(text).parse();
+    let tree = SyntaxParser::new(text).parse().root;
     tree.children()
         .filter(|node| node.kind() == SyntaxKind::PARAM)
         .filter_map(|param| param_item(&param))
@@ -897,14 +885,15 @@ fn param_item(param: &SyntaxNode) -> Option<ParamItem> {
         .to_string();
 
     let type_node = param.children().find(|n| n.kind() == SyntaxKind::TYPE)?;
-    let outer = first_ident(&type_node)?;
-    let (spelling, optional) = if outer == "Option" {
-        let inner = type_node
-            .children()
-            .find(|n| n.kind() == SyntaxKind::TYPE)?;
-        (first_ident(&inner)?, true)
-    } else {
-        (outer, false)
+    // `Option<T>` nests the wrapped type one level down, under the node that
+    // records the wrapper. Anything else names its type directly.
+    let wrapped = type_node
+        .children()
+        .find(|n| n.kind() == SyntaxKind::OPTION_TYPE)
+        .and_then(|opt| opt.children().find(|n| n.kind() == SyntaxKind::TYPE));
+    let (spelling, optional) = match wrapped {
+        Some(inner) => (first_ident(&inner)?, true),
+        None => (first_ident(&type_node)?, false),
     };
 
     let typ = ParamType::from_spelling(&spelling)?;
@@ -1847,7 +1836,7 @@ fn suggest_filter_context(
 /// absence of one is the test; comments and blank lines are trivia and never
 /// produce a node either way.
 fn is_preamble_only(text: &str) -> bool {
-    let (tree, _errors) = SyntaxParser::new(text).parse();
+    let tree = SyntaxParser::new(text).parse().root;
     let mut declared = false;
     for node in tree.descendants() {
         match node.kind() {
@@ -1931,7 +1920,7 @@ fn suggest_for_preamble(text: &str, partial: &str, span: Span) -> Vec<Completion
 /// `param` or `set` would still be legal there. Unlike [`is_preamble_only`] an
 /// empty prefix qualifies: the very start of a query is a preamble position.
 fn is_preamble_position(text: &str) -> bool {
-    let (tree, _errors) = SyntaxParser::new(text).parse();
+    let tree = SyntaxParser::new(text).parse().root;
     !tree.descendants().any(|n| {
         matches!(
             n.kind(),

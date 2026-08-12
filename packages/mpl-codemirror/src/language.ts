@@ -7,6 +7,7 @@ type TokenType =
   | "string"
   | "number"
   | "bool"
+  | "null"
   | "regexp"
   | "operator"
   | "punctuation"
@@ -26,6 +27,7 @@ const decos: Record<TokenType, Decoration> = {
   string: Decoration.mark({ class: "mpl-string" }),
   number: Decoration.mark({ class: "mpl-number" }),
   bool: Decoration.mark({ class: "mpl-bool" }),
+  null: Decoration.mark({ class: "mpl-null" }),
   regexp: Decoration.mark({ class: "mpl-regexp" }),
   operator: Decoration.mark({ class: "mpl-operator" }),
   punctuation: Decoration.mark({ class: "mpl-punctuation" }),

@@ -1,3 +1,5 @@
+use test_case::test_case;
+
 use super::{TokenType, collect_tokens};
 
 // ── Variable tokens ──────────────────────────────────────────────
@@ -84,6 +86,21 @@ fn string_interpolation_highlights_inner_param() {
     );
 }
 
+/// An interpolated literal is painted as the runs the lexer names — the text up
+/// to `${`, and the text from `}` on — so the expression between them keeps its
+/// own colours while the quoted text around it stays a string.
+#[test]
+fn string_interpolation_delimiters_are_string_runs() {
+    let query = r#"ds:metric | where tag == "host ${ $h } end""#;
+    let tokens = collect_tokens(query);
+    let runs: Vec<&str> = tokens
+        .iter()
+        .filter(|t| t.kind == TokenType::String)
+        .map(|t| &query[t.span.from..t.span.to])
+        .collect();
+    assert_eq!(runs, vec![r#""host ${"#, r#"} end""#]);
+}
+
 #[test]
 fn string_interpolation_highlights_number() {
     let query = r#"ds:metric | extend url = "port ${ 8080 }""#;
@@ -149,6 +166,17 @@ fn number_float() {
 }
 
 #[test]
+fn number_e_notation() {
+    let query = "ds:metric | map + 1e5";
+    let tokens = collect_tokens(query);
+    assert!(
+        tokens
+            .iter()
+            .any(|t| t.kind == TokenType::Number && &query[t.span.from..t.span.to] == "1e5")
+    );
+}
+
+#[test]
 fn number_time_relative() {
     let query = "ds:metric | align to 1m using avg";
     let tokens = collect_tokens(query);
@@ -170,6 +198,19 @@ fn bool_token() {
         .find(|t| t.kind == TokenType::Bool)
         .expect("should have bool token");
     assert_eq!(&query[b.span.from..b.span.to], "true");
+}
+
+// ── Null tokens ──────────────────────────────────────────────────
+
+#[test]
+fn null_token() {
+    let query = "ds:metric | filter tag == null";
+    let tokens = collect_tokens(query);
+    let n = tokens
+        .iter()
+        .find(|t| t.kind == TokenType::Null)
+        .expect("should have null token");
+    assert_eq!(&query[n.span.from..n.span.to], "null");
 }
 
 // ── Regexp tokens ────────────────────────────────────────────────
@@ -196,6 +237,33 @@ fn operator_cmp() {
         .find(|t| t.kind == TokenType::Operator)
         .expect("should have operator token");
     assert_eq!(&query[op.span.from..op.span.to], "==");
+}
+
+#[test_case("<"  ; "less than")]
+#[test_case(">"  ; "greater than")]
+#[test_case("<=" ; "less than or equal")]
+#[test_case(">=" ; "greater than or equal")]
+fn operator_relational(op: &str) {
+    let query = format!("ds:metric | filter tag {op} 5");
+    let tokens = collect_tokens(&query);
+    assert!(
+        tokens
+            .iter()
+            .any(|t| t.kind == TokenType::Operator && &query[t.span.from..t.span.to] == op),
+        "`{op}` should be an operator token"
+    );
+}
+
+/// The angle brackets of `Option<T>` delimit a type rather than compare, so
+/// they carry no operator colour.
+#[test]
+fn option_angle_brackets_are_not_operators() {
+    let query = "param $f: Option<string>;\nds:metric";
+    let tokens = collect_tokens(query);
+    assert!(
+        !tokens.iter().any(|t| t.kind == TokenType::Operator
+            && matches!(&query[t.span.from..t.span.to], "<" | ">")),
+    );
 }
 
 #[test]

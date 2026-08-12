@@ -18,6 +18,7 @@ pub enum TokenType {
     String,
     Number,
     Bool,
+    Null,
     Regexp,
     Operator,
     Punctuation,
@@ -41,26 +42,52 @@ const RULE_KEYWORDS: &[&str] = &[
     "is", "map", "not", "or", "param", "sample", "set", "to", "using", "where",
 ];
 
+/// The constructs that carry their leading word as a plain token, written
+/// straight into the node the word opens. For those the token's own parent
+/// names the construct, which is what tells the `filter` that starts a rule
+/// from a tag of the same name — a tag is always wrapped in an `IDENT` first.
+fn opens_construct(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::DIRECTIVE
+            | SyntaxKind::PARAM
+            | SyntaxKind::COMPUTE_QUERY
+            | SyntaxKind::FILTER
+            | SyntaxKind::FILTER_OR
+            | SyntaxKind::FILTER_AND
+            | SyntaxKind::FILTER_CMP_IS
+            | SyntaxKind::FILTER_CMP_IN
+            | SyntaxKind::SAMPLE
+            | SyntaxKind::MAP
+            | SyntaxKind::AS
+            | SyntaxKind::ALIGN
+            | SyntaxKind::GROUP
+            | SyntaxKind::BUCKET
+            | SyntaxKind::IFDEF
+            | SyntaxKind::EXTEND
+    )
+}
+
 /// What an identifier means is decided by the node that encloses it, not by the
 /// identifier itself: `duration` is a type in a `param` declaration, a keyword
 /// after `is`, and a tag name anywhere else. Walk out until a node decides,
 /// passing through the wrappers that only restate "this is an identifier".
 fn ident_token_type(token: &SyntaxToken) -> TokenType {
+    if token.parent().is_some_and(|p| opens_construct(p.kind())) {
+        return TokenType::Keyword;
+    }
+    // An error node records that the parser gave up, not what it gave up on, so
+    // it decides nothing by itself — keep climbing and let an enclosing
+    // construct answer, falling back to the word only if none does.
+    let mut recovering = false;
     for node in token.parent_ancestors() {
         match node.kind() {
-            SyntaxKind::KEYWORD | SyntaxKind::BUCKET_ARG => return TokenType::Keyword,
-            // The parser gave up here, so there is no enclosing construct to
-            // consult — fall back to the word itself. Confined to error nodes
-            // on purpose, so a tag legitimately named `where` in a query that
-            // parses keeps its variable colour.
-            SyntaxKind::GARBAGE | SyntaxKind::INVALID => {
-                return if RULE_KEYWORDS.contains(&token.text()) {
-                    TokenType::Keyword
-                } else {
-                    TokenType::Variable
-                };
-            }
-            SyntaxKind::TYPE | SyntaxKind::OTEL_TYPE => return TokenType::Type,
+            SyntaxKind::KEYWORD => return TokenType::Keyword,
+            SyntaxKind::GARBAGE | SyntaxKind::INVALID => recovering = true,
+            SyntaxKind::TYPE
+            | SyntaxKind::OTEL_TYPE
+            | SyntaxKind::MPL_TYPE
+            | SyntaxKind::OPTION_TYPE => return TokenType::Type,
             // The `m` of `1m` is an identifier to the lexer but part of the
             // number to a reader. Reached by point queries; `collect_tokens`
             // claims the whole duration before it gets here.
@@ -86,7 +113,13 @@ fn ident_token_type(token: &SyntaxToken) -> TokenType {
             _ => break,
         }
     }
-    TokenType::Variable
+    // Confined to error nodes on purpose, so a tag legitimately named `where` in
+    // a query that parses keeps its variable colour.
+    if recovering && RULE_KEYWORDS.contains(&token.text()) {
+        TokenType::Keyword
+    } else {
+        TokenType::Variable
+    }
 }
 
 /// The kind a single token is painted with.
@@ -94,8 +127,9 @@ fn token_token_type(token: &SyntaxToken) -> Option<TokenType> {
     use SyntaxKind::{
         LX_BOOL, LX_COMMENT, LX_DIV, LX_EQUAL_EQUAL, LX_ESCAPED_IDENT, LX_ESCAPED_VARIABLE,
         LX_FLOAT, LX_GREATER_THAN, LX_GREATER_THAN_EQUAL, LX_IDENT, LX_INF, LX_INTEGER,
-        LX_LESS_THAN, LX_LESS_THAN_EQUAL, LX_MINUS, LX_MUL, LX_NOT_EQUAL, LX_PIPE, LX_PLUS,
-        LX_REGEX, LX_STRING, LX_STRING_SEGMENT, LX_VARIABLE, TYPE,
+        LX_LESS_THAN, LX_LESS_THAN_EQUAL, LX_MINUS, LX_MUL, LX_NOT_EQUAL, LX_NULL, LX_PIPE,
+        LX_PLUS, LX_REGEX, LX_STRING, LX_STRING_END, LX_STRING_SEGMENT, LX_STRING_START,
+        LX_VARIABLE, OPTION_TYPE,
     };
 
     Some(match token.kind() {
@@ -103,9 +137,10 @@ fn token_token_type(token: &SyntaxToken) -> Option<TokenType> {
         // An interpolated literal is several tokens: each run of literal text
         // carries its own `${` or `}` delimiter, and the expressions between
         // them are coloured on their own.
-        LX_STRING | LX_STRING_SEGMENT => TokenType::String,
+        LX_STRING | LX_STRING_START | LX_STRING_SEGMENT | LX_STRING_END => TokenType::String,
         LX_INTEGER | LX_FLOAT | LX_INF => TokenType::Number,
         LX_BOOL => TokenType::Bool,
+        LX_NULL => TokenType::Null,
         LX_REGEX => TokenType::Regexp,
         LX_COMMENT => TokenType::Comment,
         LX_PIPE => TokenType::Punctuation,
@@ -113,7 +148,7 @@ fn token_token_type(token: &SyntaxToken) -> Option<TokenType> {
         // In `Option<...>` the angle brackets delimit a type; everywhere else
         // they compare.
         LX_LESS_THAN | LX_LESS_THAN_EQUAL | LX_GREATER_THAN | LX_GREATER_THAN_EQUAL
-            if !token.parent().is_some_and(|p| p.kind() == TYPE) =>
+            if !token.parent().is_some_and(|p| p.kind() == OPTION_TYPE) =>
         {
             TokenType::Operator
         }
@@ -141,7 +176,7 @@ fn content_range(node: &SyntaxNode) -> Option<TextRange> {
 /// overlap, which is what CodeMirror's decoration builder requires.
 #[must_use]
 pub fn collect_tokens(query: &str) -> Vec<Token> {
-    let (tree, _errors) = Parser::new(query).parse();
+    let tree = Parser::new(query).parse().root;
     let mut tokens = Vec::new();
     let mut walk = tree.preorder_with_tokens();
     while let Some(event) = walk.next() {
@@ -186,7 +221,7 @@ pub fn collect_tokens(query: &str) -> Vec<Token> {
 #[must_use]
 pub fn token_at(query: &str, offset: usize) -> Option<Token> {
     let offset = TextSize::new(u32::try_from(offset).ok()?);
-    let (tree, _errors) = Parser::new(query).parse();
+    let tree = Parser::new(query).parse().root;
     if !tree.text_range().contains_inclusive(offset) {
         return None;
     }
