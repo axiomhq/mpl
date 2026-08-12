@@ -9,7 +9,6 @@
 //! `lower_first` is the shared shape: parse a query, find the one node the case is about, and
 //! hand it to the function under test. It asserts the parse was clean first, so a case that
 //! fails is a lowering failure and never a typo in the query wrapped around it.
-
 use super::*;
 use miette::{GraphicalReportHandler, GraphicalTheme, NamedSource, Report};
 use test_case::test_case;
@@ -546,6 +545,23 @@ fn test_ast_parse() {
         | align to $duration using sum
         | extend a = 1, b = "gobble", c = "hello ${ $world } snot { $badger }"
         "#;
+    let parser = Parser::new(input);
+    let ast = parser.lower();
+    for error in &ast.errors {
+        eprintln!("{}", report("test", input, &[error]));
+    }
+    assert!(ast.errors.is_empty());
+    dbg!(&ast.parts);
+}
+
+#[test]
+fn test_e_notation() {
+    let input = r"
+        `xx-xx-xx`:`xx_xx.xx_xx_xx`
+        | map / 1.09951163e12
+        | align to $__interval using avg
+        | group using avg
+        ";
     let parser = Parser::new(input);
     let ast = parser.lower();
     for error in &ast.errors {

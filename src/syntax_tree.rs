@@ -1073,6 +1073,9 @@ impl Parser<'_> {
                 TokenType::Float => {
                     s.float();
                 }
+                TokenType::Integer => {
+                    s.integer();
+                }
                 _ => {
                     s.error("expected ident or float in bucket arg");
                 }

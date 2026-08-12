@@ -227,6 +227,25 @@ impl<'input> Lexer<'input> {
             while self.chars.peek().is_some_and(char::is_ascii_digit) {
                 self.advance_char();
             }
+            // consume e-notation
+            if self.chars.peek().is_some_and(|c| *c == 'e') {
+                self.advance_char();
+                while self.chars.peek().is_some_and(char::is_ascii_digit) {
+                    self.advance_char();
+                }
+            }
+
+            Token {
+                tpe: TokenType::Float,
+                text: &self.input[start..self.pos],
+                pos: start,
+            }
+        } else if self.chars.peek().is_some_and(|c| *c == 'e') {
+            self.advance_char();
+            while self.chars.peek().is_some_and(char::is_ascii_digit) {
+                self.advance_char();
+            }
+
             Token {
                 tpe: TokenType::Float,
                 text: &self.input[start..self.pos],
