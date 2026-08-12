@@ -158,7 +158,9 @@ console.log(`\nExamples (must parse) — ${examplesDir}`);
 
 for (const { name, path } of mplFiles(examplesDir)) {
   const content = readFileSync(path, "utf8");
-  const diags = mpl.diagnostics(content);
+  // Registered the way an editor host registers them, so an example may lean on
+  // a host-supplied param the same way a real query does.
+  const diags = mpl.diagnostics(content, intervalSystemParam);
   const hardErrors = diags.filter(
     (d) => d.severity === "error" && !isAcceptable(d)
   );
@@ -182,7 +184,7 @@ console.log(`\nErrors (must have errors) — ${errorsDir}`);
 
 for (const { name, path } of mplFiles(errorsDir)) {
   const content = readFileSync(path, "utf8");
-  const diags = mpl.diagnostics(content);
+  const diags = mpl.diagnostics(content, intervalSystemParam);
   const errors = diags.filter((d) => d.severity === "error");
 
   if (errors.length > 0) {

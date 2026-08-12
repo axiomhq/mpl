@@ -36,6 +36,23 @@ const interpreter = new mpl.Interpreter([]);
 
 // ---------------------------------------------------------------------------
 
+// Params a host supplies to the query rather than the query declaring them.
+// The interpreter has no binding step, so the playground splices the concrete
+// value into the query text before running it; this mirrors SYSTEM_PARAMS and
+// substituteSystemParams in playground/editor.ts, which is what the real
+// playground does with the same wasm build.
+const SYSTEM_PARAMS = [{ name: "__interval", value: "1m" }];
+
+function substituteSystemParams(doc) {
+  let out = doc;
+  for (const { name, value } of SYSTEM_PARAMS) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Bounded on the right so `$__interval_extended` keeps its full name.
+    out = out.replace(new RegExp(`\\$${escaped}\\b`, "g"), value);
+  }
+  return out;
+}
+
 // Errors that mean "parsed OK but the backend doesn't support it yet".
 // These are acceptable in tests/examples/ — same tolerance as tests/parse.rs.
 function isAcceptableError(msg) {
@@ -64,7 +81,7 @@ const examplesDir = join(repoRoot, "tests/examples");
 console.log(`\nExamples (must parse) — ${examplesDir}`);
 
 for (const { name, path } of mplFiles(examplesDir)) {
-  const content = readFileSync(path, "utf8");
+  const content = substituteSystemParams(readFileSync(path, "utf8"));
   try {
     interpreter.run(content);
     console.log(`  PASS  ${name}`);
@@ -87,7 +104,7 @@ const errorsDir = join(repoRoot, "tests/errors");
 console.log(`\nErrors (must throw) — ${errorsDir}`);
 
 for (const { name, path } of mplFiles(errorsDir)) {
-  const content = readFileSync(path, "utf8");
+  const content = substituteSystemParams(readFileSync(path, "utf8"));
   try {
     interpreter.run(content);
     console.error(
