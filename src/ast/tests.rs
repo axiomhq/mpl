@@ -485,7 +485,6 @@ fn a_capped_filter_never_lowers_to_an_empty_operand_list() {
             "a cap of {cap} left the filter uncapped"
         );
         let mut parser = Parser {
-            stdlib: &STDLIB,
             root,
             errors: errors.into_iter().map(ParserError::InvalidSyntax).collect(),
             warnings: Vec::new(),
@@ -547,11 +546,11 @@ fn test_ast_parse() {
         | align to $duration using sum
         | extend a = 1, b = "gobble", c = "hello ${ $world } snot { $badger }"
         "#;
-    let mut parser = Parser::new(input);
-    parser.lower();
-    for error in &parser.errors {
+    let parser = Parser::new(input);
+    let ast = parser.lower();
+    for error in &ast.errors {
         eprintln!("{}", report("test", input, &[error]));
     }
-    assert!(parser.errors.is_empty());
-    dbg!(&parser.parts);
+    assert!(ast.errors.is_empty());
+    dbg!(&ast.parts);
 }

@@ -109,10 +109,9 @@ fn merge(diagnostics: Vec<MietteDiagnostic>) -> Option<MietteDiagnostic> {
 /// of the corpus, which is what a work list has to avoid.
 fn lower(name: &str, content: &str) -> Option<String> {
     let diagnostics = catch_unwind(AssertUnwindSafe(|| {
-        let mut parser = Parser::new(content);
-        let _ = parser.lower();
-        parser
-            .errors()
+        let parser = Parser::new(content);
+        let ast = parser.lower();
+        ast.errors
             .iter()
             .map(ParserError::to_diagnostic)
             .collect::<Vec<_>>()

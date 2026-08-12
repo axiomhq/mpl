@@ -5,8 +5,6 @@ use miette::{Diagnostic, MietteDiagnostic, SourceSpan};
 use rowan::{NodeOrToken, SyntaxElementChildren, SyntaxNodeChildren, SyntaxToken};
 
 use crate::{
-    STDLIB,
-    linker::Module,
     query::{ParamType, TagType, TerminalParamType},
     syntax_tree::{self, Lang, SyntaxError, SyntaxKind, SyntaxNode, SyntaxTree},
     tags::TagValue,
@@ -318,10 +316,26 @@ pub enum Part {
     Query(Query),
 }
 
+/// the parsed AST
+pub struct Ast {
+    /// errors during parsing
+    pub errors: Vec<ParserError>,
+    /// warnings during parsing
+    pub warnings: Vec<ParserWarning>,
+    /// the parsed AST
+    pub parts: Vec<Part>,
+}
+
+impl Ast {
+    /// returns if the AST produced is valid (free of errors)
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.errors.is_empty()
+    }
+}
 /// AST parser.
 pub struct Parser {
     root: SyntaxNode,
-    stdlib: &'static Module,
     errors: Vec<ParserError>,
     warnings: Vec<ParserWarning>,
     parts: Vec<Part>,
@@ -701,7 +715,6 @@ impl Parser {
     pub fn new(input: &str) -> Self {
         let SyntaxTree { root, errors } = syntax_tree::Parser::new(input).parse();
         Parser {
-            stdlib: &STDLIB,
             root,
             errors: errors.into_iter().map(ParserError::InvalidSyntax).collect(),
             warnings: Vec::new(),
@@ -1979,7 +1992,8 @@ impl Parser {
     }
 
     /// Lower the Syntax Tree
-    pub fn lower(&mut self) {
+    #[must_use]
+    pub fn lower(mut self) -> Ast {
         for child in self.root.children() {
             // We do not abort on an error this way we can keep parsing and potentially
             // collect multiple errors before returning.
@@ -2009,6 +2023,11 @@ impl Parser {
                     });
                 }
             }
+        }
+        Ast {
+            parts: self.parts,
+            errors: self.errors,
+            warnings: self.warnings,
         }
     }
 }
