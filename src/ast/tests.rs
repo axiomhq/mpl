@@ -527,7 +527,7 @@ fn a_capped_filter_never_lowers_to_an_empty_operand_list() {
 }
 
 #[test]
-fn test_ast_parse() -> Result<()> {
+fn test_ast_parse() {
     let input = r#"
         // test
         set a = 43;
@@ -548,11 +548,10 @@ fn test_ast_parse() -> Result<()> {
         | extend a = 1, b = "gobble", c = "hello ${ $world } snot { $badger }"
         "#;
     let mut parser = Parser::new(input);
-    parser.lower()?;
+    parser.lower();
     for error in &parser.errors {
         eprintln!("{}", report("test", input, &[error]));
     }
     assert!(parser.errors.is_empty());
     dbg!(&parser.parts);
-    Ok(())
 }

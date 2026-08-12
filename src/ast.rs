@@ -744,13 +744,6 @@ impl Parser {
         Ok(node)
     }
 
-    // fn not_implemented(&mut self, node: &SyntaxNode) {
-    //     self.errors.push(ParserError::NotImplemented {
-    //         span: node.span(),
-    //         kind: node.kind(),
-    //     });
-    // }
-
     fn assert_type(&mut self, node: &SyntaxNode, expected: SyntaxKind) -> Result<()> {
         if node.kind() == expected {
             Ok(())
@@ -880,10 +873,12 @@ impl Parser {
             }
             SyntaxKind::LX_STRING_START => {
                 let s = c.token_string();
-                let Some(s) = s.strip_prefix('"').and_then(|s| s.strip_suffix("${")) else {
+                let s = if let Some(s) = s.strip_prefix('"').and_then(|s| s.strip_suffix("${")) {
+                    s
+                } else {
                     self.errors
                         .push(ParserError::InvalidString { span: c.span() });
-                    return Err(Error("string start must be followed by a string segment"));
+                    "__INVALID__"
                 };
                 let mut parts = vec![StringPart::Const(self.unescape_string(&c, s))];
                 while let Some(c) = children.n() {
@@ -894,9 +889,7 @@ impl Parser {
                             else {
                                 self.errors
                                     .push(ParserError::InvalidString { span: c.span() });
-                                return Err(Error(
-                                    "string start must be followed by a string segment",
-                                ));
+                                continue;
                             };
                             parts.push(StringPart::Const(self.unescape_string(&c, s)));
                         }
@@ -906,20 +899,16 @@ impl Parser {
                             else {
                                 self.errors
                                     .push(ParserError::InvalidString { span: c.span() });
-                                return Err(Error(
-                                    "string start must be followed by a string segment",
-                                ));
+                                continue;
                             };
                             parts.push(StringPart::Const(self.unescape_string(&c, s)));
                             break;
                         }
                         SyntaxKind::EXPR => {
-                            let Some(n) = c.as_node() else {
-                                return Err(Error(
-                                    "expected a node, found a token, this should be unreachable",
-                                ));
-                            };
-                            parts.push(StringPart::Expr(self.expr(n)?));
+                            let Some(n) = c.as_node() else { continue };
+                            if let Ok(e) = self.expr(n) {
+                                parts.push(StringPart::Expr(e));
+                            }
                         }
                         found => {
                             self.errors.push(ParserError::UnexpectedSyntaxRule {
@@ -950,7 +939,9 @@ impl Parser {
         let mut elements = Vec::new();
         let mut children = node.children();
         while let Some(c) = children.n() {
-            elements.push(self.expr(&c)?);
+            if let Ok(e) = self.expr(&c) {
+                elements.push(e);
+            }
         }
         self.assert_end(children);
         Ok(Expr::Array(elements))
@@ -1022,8 +1013,9 @@ impl Parser {
     fn filter_cmp(&mut self, node: &SyntaxNode) -> Result<FilterCmp> {
         self.assert_type(node, SyntaxKind::FILTER_CMP)?;
         let mut children = node.children();
-        let c = self.n(&mut children, node, SyntaxKind::IDENT)?;
-        let lhs = self.ident(&c)?;
+        let lhs = self
+            .n(&mut children, node, SyntaxKind::IDENT)
+            .and_then(|n| self.ident(&n));
         let c = self.n(&mut children, node, SyntaxKind::FILTER_CMP)?;
         let r = match c.kind() {
             SyntaxKind::FILTER_CMP_EQ => {
@@ -1031,10 +1023,10 @@ impl Parser {
                 let c = self.n(&mut children, node, SyntaxKind::EXPR)?;
                 if c.kind() == SyntaxKind::REGEX {
                     let rhs = self.regex(&c)?;
-                    Ok(FilterCmp::EqRe { lhs, rhs })
+                    Ok(FilterCmp::EqRe { lhs: lhs?, rhs })
                 } else {
                     let rhs = self.expr(&c)?;
-                    Ok(FilterCmp::Eq { lhs, rhs })
+                    Ok(FilterCmp::Eq { lhs: lhs?, rhs })
                 }
             }
             SyntaxKind::FILTER_CMP_NEQ => {
@@ -1042,54 +1034,54 @@ impl Parser {
                 let c = self.n(&mut children, &c, SyntaxKind::EXPR)?;
                 if c.kind() == SyntaxKind::REGEX {
                     let rhs = self.regex(&c)?;
-                    Ok(FilterCmp::NeqRe { lhs, rhs })
+                    Ok(FilterCmp::NeqRe { lhs: lhs?, rhs })
                 } else {
                     let rhs = self.expr(&c)?;
-                    Ok(FilterCmp::Neq { lhs, rhs })
+                    Ok(FilterCmp::Neq { lhs: lhs?, rhs })
                 }
             }
             SyntaxKind::FILTER_CMP_LT => {
                 let mut children = c.children();
                 let c = self.n(&mut children, &c, SyntaxKind::EXPR)?;
                 let rhs = self.expr(&c)?;
-                Ok(FilterCmp::Lt { lhs, rhs })
+                Ok(FilterCmp::Lt { lhs: lhs?, rhs })
             }
             SyntaxKind::FILTER_CMP_GT => {
                 let mut children = c.children();
                 let c = self.n(&mut children, &c, SyntaxKind::EXPR)?;
                 let rhs = self.expr(&c)?;
-                Ok(FilterCmp::Gt { lhs, rhs })
+                Ok(FilterCmp::Gt { lhs: lhs?, rhs })
             }
             SyntaxKind::FILTER_CMP_LTE => {
                 let mut children = c.children();
                 let c = self.n(&mut children, &c, SyntaxKind::EXPR)?;
                 let rhs = self.expr(&c)?;
-                Ok(FilterCmp::Lte { lhs, rhs })
+                Ok(FilterCmp::Lte { lhs: lhs?, rhs })
             }
             SyntaxKind::FILTER_CMP_GTE => {
                 let mut children = c.children();
                 let c = self.n(&mut children, &c, SyntaxKind::EXPR)?;
                 let rhs = self.expr(&c)?;
-                Ok(FilterCmp::Gte { lhs, rhs })
+                Ok(FilterCmp::Gte { lhs: lhs?, rhs })
             }
             SyntaxKind::FILTER_CMP_IN => {
                 let mut children = c.children();
                 let c = self.n(&mut children, &c, SyntaxKind::EXPR)?;
                 if c.kind() == SyntaxKind::VARIABLE {
                     Ok(FilterCmp::In {
-                        lhs,
+                        lhs: lhs?,
                         rhs: Expr::Var(self.variable(&c)?),
                     })
                 } else {
                     let rhs = self.expr(&c)?;
-                    Ok(FilterCmp::In { lhs, rhs })
+                    Ok(FilterCmp::In { lhs: lhs?, rhs })
                 }
             }
             SyntaxKind::FILTER_CMP_IS => {
                 let mut children = c.children();
                 let c = self.n(&mut children, &c, SyntaxKind::OTEL_TYPE)?;
                 let rhs = self.otel_typ(&c)?;
-                Ok(FilterCmp::Is { lhs, rhs })
+                Ok(FilterCmp::Is { lhs: lhs?, rhs })
             }
             _ => {
                 self.errors.push(ParserError::UnexpectedSyntaxRule {
@@ -1139,7 +1131,9 @@ impl Parser {
         let mut children = node.children();
         let mut filters = Vec::new();
         while let Some(n) = children.n() {
-            filters.push(self.filter_not(&n)?);
+            if let Ok(f) = self.filter_not(&n) {
+                filters.push(f);
+            }
         }
         self.assert_end(children);
         if filters.is_empty() {
@@ -1156,7 +1150,9 @@ impl Parser {
         let mut children = node.children();
         let mut filters = Vec::new();
         while let Some(n) = children.n() {
-            filters.push(self.filter_and(&n)?);
+            if let Ok(f) = self.filter_and(&n) {
+                filters.push(f);
+            }
         }
         self.assert_end(children);
         if filters.is_empty() {
@@ -1192,7 +1188,9 @@ impl Parser {
                 let mut children = node.children();
                 let mut path = Vec::new();
                 while let Some(n) = children.n() {
-                    path.push(self.ident(&n)?);
+                    if let Ok(p) = self.ident(&n) {
+                        path.push(p);
+                    }
                 }
                 Ok(path)
             }
@@ -1289,10 +1287,12 @@ impl Parser {
         let TagValue::Int(i) = self.integer_const(&n)? else {
             return Err(Error("expected integer (this should be unreachable!)"));
         };
-        let Ok(i) = u64::try_from(i) else {
+        let i = if let Ok(i) = u64::try_from(i) {
+            i
+        } else {
             self.errors
                 .push(ParserError::NegativeDuration { span: n.span() });
-            return Err(Error("invalid integer"));
+            0
         };
         let n = self.n(&mut children, node, SyntaxKind::TIME_UNIT)?;
         let unit = self.time_unit(&n)?;
@@ -1319,7 +1319,9 @@ impl Parser {
         let mut children = node.children();
         let mut tags = Vec::new();
         while let Some(n) = children.n() {
-            tags.push(self.ident(&n)?);
+            if let Ok(tag) = self.ident(&n) {
+                tags.push(tag);
+            }
         }
         Ok(tags)
     }
@@ -1328,20 +1330,22 @@ impl Parser {
         self.assert_type(node, SyntaxKind::ALIGN)?;
         let mut children = node.children();
         let mut n = self.n(&mut children, node, SyntaxKind::KEYWORD)?;
-        let mut duration = None;
+        let mut duration = Ok(None);
         let mut found = self.kw(&n)?;
         if found == "to" {
-            n = self.n(&mut children, node, SyntaxKind::DURATION)?;
-            if let Ok(d) = self.duration(&n) {
-                duration = Some(d);
-            }
+            duration = self
+                .n(&mut children, node, SyntaxKind::DURATION)
+                .and_then(|n| Ok(Some(self.duration(&n)?)));
             n = self.n(&mut children, node, SyntaxKind::KEYWORD)?;
             found = self.kw(&n)?;
         }
         if found == "using" {
             let n = self.n(&mut children, node, SyntaxKind::FUNCTION_PATH)?;
             let func = self.function_path(&n)?;
-            Ok(Rule::Align { duration, func })
+            Ok(Rule::Align {
+                duration: duration?,
+                func,
+            })
         } else {
             self.errors.push(ParserError::UnexpectedKeyword {
                 expected: "using",
@@ -1355,18 +1359,22 @@ impl Parser {
         self.assert_type(node, SyntaxKind::GROUP)?;
         let mut children = node.children();
         let mut n = self.n(&mut children, node, SyntaxKind::KEYWORD)?;
-        let mut groups = Vec::new();
+        let mut groups = Ok(Vec::new());
         let mut found = self.kw(&n)?;
         if found == "by" {
-            n = self.n(&mut children, node, SyntaxKind::TAG_LIST)?;
-            groups = self.tags(&n)?;
+            groups = self
+                .n(&mut children, node, SyntaxKind::TAG_LIST)
+                .and_then(|n| self.tags(&n));
             n = self.n(&mut children, node, SyntaxKind::KEYWORD)?;
             found = self.kw(&n)?;
         }
         if found == "using" {
             let n = self.n(&mut children, node, SyntaxKind::FUNCTION_PATH)?;
             let func = self.function_path(&n)?;
-            Ok(Rule::Group { groups, func })
+            Ok(Rule::Group {
+                groups: groups?,
+                func,
+            })
         } else {
             self.errors.push(ParserError::UnexpectedKeyword {
                 expected: "using",
@@ -1380,20 +1388,20 @@ impl Parser {
         self.assert_type(node, SyntaxKind::BUCKET)?;
         let mut children = node.children();
         let mut n = self.n(&mut children, node, SyntaxKind::KEYWORD)?;
-        let mut groups = Vec::new();
-        let mut duration = None;
+        let mut groups = Ok(Vec::new());
+        let mut duration = Ok(None);
         let mut found = self.kw(&n)?;
         if found == "by" {
-            n = self.n(&mut children, node, SyntaxKind::TAG_LIST)?;
-            groups = self.tags(&n)?;
+            groups = self
+                .n(&mut children, node, SyntaxKind::TAG_LIST)
+                .and_then(|n| self.tags(&n));
             n = self.n(&mut children, node, SyntaxKind::KEYWORD)?;
             found = self.kw(&n)?;
         }
         if found == "to" {
-            n = self.n(&mut children, node, SyntaxKind::DURATION)?;
-            if let Ok(d) = self.duration(&n) {
-                duration = Some(d);
-            }
+            duration = self
+                .n(&mut children, node, SyntaxKind::DURATION)
+                .and_then(|n| Ok(Some(self.duration(&n)?)));
             n = self.n(&mut children, node, SyntaxKind::KEYWORD)?;
             found = self.kw(&n)?;
         }
@@ -1401,8 +1409,8 @@ impl Parser {
             let n = self.n(&mut children, node, SyntaxKind::FUNCTION_PATH)?;
             let func = self.function_path(&n)?;
             Ok(Rule::Bucket {
-                groups,
-                duration,
+                groups: groups?,
+                duration: duration?,
                 func,
             })
         } else {
@@ -1418,20 +1426,22 @@ impl Parser {
     fn rule_ifdef(&mut self, node: &SyntaxNode) -> Result<Rule> {
         self.assert_type(node, SyntaxKind::IFDEF)?;
         let mut children = node.children();
-        let n = self.n(&mut children, node, SyntaxKind::VARIABLE)?;
-        let var = self.variable(&n)?;
-        let n = self.n(&mut children, node, SyntaxKind::FILTER)?;
-        let if_branch = Box::new(self.rule_filter(&n)?);
+        let var = self
+            .n(&mut children, node, SyntaxKind::VARIABLE)
+            .and_then(|n| self.variable(&n));
+        let if_branch = self
+            .n(&mut children, node, SyntaxKind::FILTER)
+            .and_then(|n| Ok(Box::new(self.rule_filter(&n)?)));
         let else_branch = if let Some(n) = children.n() {
-            Some(Box::new(self.rule_filter(&n)?))
+            self.rule_filter(&n).map(Box::new).map(Some)
         } else {
-            None
+            Ok(None)
         };
         self.assert_end(children);
         Ok(Rule::IfDef {
-            var,
-            if_branch,
-            else_branch,
+            var: var?,
+            if_branch: if_branch?,
+            else_branch: else_branch?,
         })
     }
 
@@ -1447,12 +1457,17 @@ impl Parser {
     fn extend_part(&mut self, node: &SyntaxNode) -> Result<ExtendPart> {
         self.assert_type(node, SyntaxKind::EXTEND_PART)?;
         let mut children = node.children();
-        let n = self.n(&mut children, node, SyntaxKind::IDENT)?;
-        let name = self.ident(&n)?;
-        let n = self.n(&mut children, node, SyntaxKind::EXPR)?;
-        let value = self.expr(&n)?;
+        let name = self
+            .n(&mut children, node, SyntaxKind::IDENT)
+            .and_then(|n| self.ident(&n));
+        let value = self
+            .n(&mut children, node, SyntaxKind::EXPR)
+            .and_then(|n| self.expr(&n));
         self.assert_end(children);
-        Ok(ExtendPart { name, value })
+        Ok(ExtendPart {
+            name: name?,
+            value: value?,
+        })
     }
 
     fn rule_extend(&mut self, node: &SyntaxNode) -> Result<Rule> {
@@ -1460,7 +1475,9 @@ impl Parser {
         let mut children = node.children();
         let mut parts = Vec::new();
         while let Some(p) = children.n() {
-            parts.push(self.extend_part(&p)?);
+            if let Ok(part) = self.extend_part(&p) {
+                parts.push(part);
+            }
         }
         self.assert_end(children);
         Ok(Rule::Extern(parts))
@@ -1495,51 +1512,51 @@ impl Parser {
         self.assert_type(node, SyntaxKind::SIMPLE_QUERY)?;
         let mut children = node.children();
 
-        let c = self.n(&mut children, node, SyntaxKind::IDENT)?;
-        let dataset = self.dataset(&c)?;
-        let c = self.n(&mut children, node, SyntaxKind::IDENT)?;
-        let metric = self.ident(&c)?;
+        let dataset = self
+            .n(&mut children, node, SyntaxKind::IDENT)
+            .and_then(|c| self.dataset(&c));
+        let metric = self
+            .n(&mut children, node, SyntaxKind::IDENT)
+            .and_then(|c| self.ident(&c));
 
         let Some(mut c) = children.n() else {
             return Ok(SimpleQuery {
-                dataset,
-                metric,
+                dataset: dataset?,
+                metric: metric?,
                 alias: None,
                 rules: Vec::new(),
             });
         };
-        let mut alias = None;
+        let mut alias = Ok(None);
         if c.kind() == SyntaxKind::KEYWORD {
-            let found = self.kw(&c)?;
-            if found == "as" {
-                let c = self.n(&mut children, node, SyntaxKind::IDENT)?;
-                alias = Some(self.ident(&c)?);
-            } else {
-                self.errors.push(ParserError::UnexpectedKeyword {
-                    expected: "as",
-                    found,
-                    span: c.span(),
-                });
-            }
+            alias = self
+                .n(&mut children, node, SyntaxKind::IDENT)
+                .and_then(|c| Ok(Some(self.ident(&c)?)));
             let Some(n) = children.n() else {
                 return Ok(SimpleQuery {
-                    dataset,
-                    metric,
-                    alias,
+                    dataset: dataset?,
+                    metric: metric?,
+                    alias: alias?,
                     rules: Vec::new(),
                 });
             };
             c = n;
         }
-        let mut rules = vec![self.rule(&c)?];
+        let mut rules = if let Ok(rule) = self.rule(&c) {
+            vec![rule]
+        } else {
+            Vec::new()
+        };
         while let Some(c) = children.n() {
-            rules.push(self.rule(&c)?);
+            if let Ok(rule) = self.rule(&c) {
+                rules.push(rule);
+            }
         }
 
         Ok(SimpleQuery {
-            dataset,
-            metric,
-            alias,
+            dataset: dataset?,
+            metric: metric?,
+            alias: alias?,
             rules,
         })
     }
@@ -1548,12 +1565,15 @@ impl Parser {
         self.assert_type(node, SyntaxKind::COMPUTE_QUERY)?;
         let mut children = node.children();
 
-        let c = self.n(&mut children, node, SyntaxKind::SIMPLE_QUERY)?;
-        let l = self.query(&c)?;
-        let c = self.n(&mut children, node, SyntaxKind::SIMPLE_QUERY)?;
-        let r = self.query(&c)?;
-        let c = self.n(&mut children, node, SyntaxKind::IDENT)?;
-        let name = self.ident(&c)?;
+        let l = self
+            .n(&mut children, node, SyntaxKind::SIMPLE_QUERY)
+            .and_then(|c| self.query(&c));
+        let r = self
+            .n(&mut children, node, SyntaxKind::SIMPLE_QUERY)
+            .and_then(|c| self.query(&c));
+        let name = self
+            .n(&mut children, node, SyntaxKind::IDENT)
+            .and_then(|c| self.ident(&c));
         let Some(c) = children.n() else {
             self.errors.push(ParserError::MissingToken {
                 expected: SyntaxKind::FUNCTION_PATH,
@@ -1562,18 +1582,20 @@ impl Parser {
             return Err(Error("expected compute function"));
         };
 
-        let func = self.function_path(&c)?;
+        let func = self.function_path(&c);
         let mut rules = vec![];
         while let Some(c) = children.n() {
-            rules.push(self.rule(&c)?);
+            if let Ok(rule) = self.rule(&c) {
+                rules.push(rule);
+            }
         }
 
         Ok(ComputeQuery {
-            l,
-            r,
-            name,
+            l: l?,
+            r: r?,
+            name: name?,
             rules,
-            func,
+            func: func?,
         })
     }
     fn query(&mut self, node: &SyntaxNode) -> Result<Query> {
@@ -1957,7 +1979,7 @@ impl Parser {
     }
 
     /// Lower the Syntax Tree
-    pub fn lower(&mut self) -> Result<()> {
+    pub fn lower(&mut self) {
         for child in self.root.children() {
             // We do not abort on an error this way we can keep parsing and potentially
             // collect multiple errors before returning.
@@ -1988,6 +2010,5 @@ impl Parser {
                 }
             }
         }
-        Ok(())
     }
 }
