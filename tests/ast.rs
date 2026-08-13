@@ -20,7 +20,7 @@ use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use miette::{GraphicalReportHandler, GraphicalTheme, MietteDiagnostic, NamedSource, Report};
-use mpl_lang::ast::{Parser, ParserError};
+use mpl_lang::ast::{AstError, Parser};
 use test_case::test_case;
 
 /// Every file under `dir` with the given extension, as `(file name, contents)`.
@@ -113,7 +113,7 @@ fn lower(name: &str, content: &str) -> Option<String> {
         let ast = parser.lower();
         ast.errors
             .iter()
-            .map(ParserError::to_diagnostic)
+            .map(AstError::to_diagnostic)
             .collect::<Vec<_>>()
     }))
     .unwrap_or_else(|payload| vec![bare(format!("panicked: {}", panic_message(&*payload)))]);

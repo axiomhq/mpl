@@ -230,7 +230,7 @@ fn diagnose(
             .lower()
             .errors
             .iter()
-            .map(mpl_lang::ast::ParserError::to_diagnostic)
+            .map(mpl_lang::ast::AstError::to_diagnostic)
             .collect(),
     };
     diagnostics

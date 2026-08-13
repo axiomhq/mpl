@@ -180,7 +180,6 @@ pub enum SyntaxKind {
     AS,
     GROUP,
     BUCKET,
-    BUCKET_ARG,
     BUCKET_ARGS,
 
     /// invalid in the syntax tree but valid as a token
@@ -1056,38 +1055,20 @@ impl Parser<'_> {
             s.keyword("using");
             s.function_path();
             s.structural(TokenType::LParen);
-            if !s.is_structural(TokenType::RParen) {
+            if s.is_structural(TokenType::RParen) {
+                s.node(BUCKET_ARGS, |_| {});
+            } else {
                 s.bucket_args();
             }
             s.structural(TokenType::RParen);
         });
     }
 
-    fn bucket_arg(&mut self) {
-        self.node(BUCKET_ARG, |s| {
-            let tkn = s.peek();
-            match tkn.tpe() {
-                TokenType::Ident | TokenType::EscapedIdent => {
-                    s.ident();
-                }
-                TokenType::Float => {
-                    s.float();
-                }
-                TokenType::Integer => {
-                    s.integer();
-                }
-                _ => {
-                    s.error("expected ident or float in bucket arg");
-                }
-            }
-        });
-    }
-
     fn bucket_args(&mut self) {
         self.node(BUCKET_ARGS, |s| {
-            s.bucket_arg();
+            s.expr();
             while s.try_structural(TokenType::Comma) {
-                s.bucket_arg();
+                s.expr();
             }
         });
     }
