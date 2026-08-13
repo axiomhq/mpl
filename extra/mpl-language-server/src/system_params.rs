@@ -35,7 +35,7 @@ impl SystemParamSpec {
     /// or returns `None` for unknown spellings (silently dropped — invalid
     /// host registrations must not break the editor).
     fn to_query_param_type(&self) -> Option<ParamType> {
-        let terminal = parse_terminal(&self.type_name)?;
+        let terminal = CompletionParamType::from_spelling(&self.type_name)?.into();
         Some(if self.optional {
             ParamType::Optional(terminal)
         } else {
@@ -55,21 +55,23 @@ impl SystemParamSpec {
     }
 }
 
-/// The query-level type a registration names, reached through the completion
-/// type so both sides read the same spellings. `Metric` has no query-level
-/// counterpart, so it cannot be registered as a system param.
-fn parse_terminal(s: &str) -> Option<TerminalParamType> {
-    Some(match CompletionParamType::from_spelling(s)? {
-        CompletionParamType::Dataset => TerminalParamType::Dataset,
-        CompletionParamType::Duration => TerminalParamType::Duration,
-        CompletionParamType::Regex => TerminalParamType::Regex,
-        CompletionParamType::String => TerminalParamType::Tag(TagType::String),
-        CompletionParamType::Int => TerminalParamType::Tag(TagType::Int),
-        CompletionParamType::Float => TerminalParamType::Tag(TagType::Float),
-        CompletionParamType::Bool => TerminalParamType::Tag(TagType::Bool),
-        CompletionParamType::Array => TerminalParamType::Tag(TagType::Array),
-        CompletionParamType::Metric => return None,
-    })
+/// The editor keeps its own param type so completion results can travel as the
+/// flat `{ type, optional }` pair the TypeScript side reads. This is where that
+/// type meets the query-level one, and the mapping is total: every type the
+/// editor offers names a type the parser accepts.
+impl From<CompletionParamType> for TerminalParamType {
+    fn from(typ: CompletionParamType) -> TerminalParamType {
+        match typ {
+            CompletionParamType::Dataset => TerminalParamType::Dataset,
+            CompletionParamType::Duration => TerminalParamType::Duration,
+            CompletionParamType::Regex => TerminalParamType::Regex,
+            CompletionParamType::String => TerminalParamType::Tag(TagType::String),
+            CompletionParamType::Int => TerminalParamType::Tag(TagType::Int),
+            CompletionParamType::Float => TerminalParamType::Tag(TagType::Float),
+            CompletionParamType::Bool => TerminalParamType::Tag(TagType::Bool),
+            CompletionParamType::Array => TerminalParamType::Tag(TagType::Array),
+        }
+    }
 }
 
 /// Param labels in completion results are dollar-prefixed (`$__interval`);
@@ -104,6 +106,21 @@ pub fn to_completion_items(specs: &[SystemParamSpec]) -> Vec<ParamItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The editor's spelling and the query type's `Display` are two renderings
+    /// of one vocabulary. A host registration is written in the first and
+    /// resolved through the second, so the two have to agree character for
+    /// character or a registration silently fails to bind.
+    #[test]
+    fn spellings_agree_with_the_query_types() {
+        for typ in crate::completions::PARAM_TYPES {
+            assert_eq!(
+                typ.spelling(),
+                TerminalParamType::from(typ).to_string(),
+                "{typ:?}"
+            );
+        }
+    }
 
     // Specs without going through the JS bridge — exercises only the
     // type-string decode and the dollar-prefix normalisation.

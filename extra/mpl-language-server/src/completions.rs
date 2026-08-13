@@ -21,7 +21,6 @@ pub struct CompletionArg {
 #[serde(rename_all = "snake_case")]
 pub enum ParamType {
     Dataset,
-    Metric,
     Duration,
     String,
     Int,
@@ -32,9 +31,8 @@ pub enum ParamType {
 }
 
 /// Every param type, in the order the editor offers them.
-pub(crate) const PARAM_TYPES: [ParamType; 9] = [
+pub(crate) const PARAM_TYPES: [ParamType; 8] = [
     ParamType::Dataset,
-    ParamType::Metric,
     ParamType::Duration,
     ParamType::String,
     ParamType::Int,
@@ -50,7 +48,6 @@ impl ParamType {
     pub(crate) fn spelling(self) -> &'static str {
         match self {
             Self::Dataset => "Dataset",
-            Self::Metric => "Metric",
             Self::Duration => "Duration",
             Self::Regex => "Regex",
             Self::String => "string",
@@ -70,8 +67,9 @@ impl ParamType {
         PARAM_TYPES.into_iter().find(|t| t.spelling() == s)
     }
 
-    /// Whether `Option<...>` may wrap this type. A dataset or metric name is
-    /// needed to resolve the query at all, so neither can be omitted.
+    /// Whether `Option<...>` may wrap this type. The grammar allows the wrapper
+    /// only around tag values and `Regex`; a dataset or a duration is needed to
+    /// resolve the query at all, so neither can be omitted.
     pub(crate) fn is_optionable(self) -> bool {
         matches!(
             self,
@@ -853,10 +851,10 @@ pub fn extract_declared_params(text: &str) -> Vec<ParamItem> {
         .collect()
 }
 
-/// The first identifier under `node`, whether or not the parser accepted it: an
-/// unrecognised type is wrapped in an error node, and completions stay lenient
-/// about that on purpose — `Metric` is spelled in queries but is in neither
-/// grammar, so only a lenient read reports it.
+/// The first identifier under `node`, whether or not the syntax tree accepted
+/// it: a type it does not name is wrapped in an error node, and completions read
+/// through that on purpose. The legacy lowercase `duration` alias lands there,
+/// and the editor still has to report the param it declares.
 fn first_ident(node: &SyntaxNode) -> Option<String> {
     node.descendants_with_tokens()
         .filter_map(NodeOrToken::into_token)
@@ -1154,7 +1152,7 @@ fn suggest_for_context(
         // `sample` takes a single numeric argument; no further completions
         "sample" => vec![],
         f if f.starts_with("ifdef") && policy == FilterPolicy::Include => {
-            suggest_ifdef_context(before, span, partial, after_pipe, params)
+            suggest_ifdef_context(before, span, partial, params)
         }
         "group"
             if words.len() >= 2 && words[1] == "by" && (last == "by" || last.ends_with(',')) =>
@@ -1186,27 +1184,56 @@ fn suggest_for_context(
 ///       brace + `where`
 ///   (f) inside the else-body `{ ... }`: same as (c), but scoped to the
 ///       else branch
+///
+/// `before` is the query text up to the cursor, so the delimiters the parser
+/// managed to read are exactly the ones the user has typed, and the case is
+/// decided by counting them. Reading them off the tree is what keeps a brace or
+/// paren written inside a string or an escaped identifier from being mistaken
+/// for one that opens or closes a body.
 fn suggest_ifdef_context(
     before: &str,
     span: Span,
     partial: &str,
-    after_pipe: &str,
     params: &[ParamItem],
 ) -> Vec<CompletionResult> {
-    let open_paren = after_pipe.find('(');
-    let close_paren = after_pipe.rfind(')');
-    // Use `find` (not `rfind`) so a `{` in the else-body doesn't masquerade
-    // as the if-body brace. Filter expressions don't contain `{`, so the
-    // first one is always the if-body opener.
-    let if_open_brace = after_pipe.find('{');
+    let tree = SyntaxParser::new(before).parse().root;
+    let Some(ifdef) = tree
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::IFDEF)
+        .last()
+    else {
+        return vec![];
+    };
+
+    let (mut has_open_paren, mut has_close_paren, mut has_else) = (false, false, false);
+    let mut closed_bodies = 0usize;
+    // Where each body starts, so the text under the cursor can be read back out.
+    let mut body_starts: Vec<usize> = Vec::new();
+    for token in ifdef
+        .children_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+    {
+        match token.kind() {
+            SyntaxKind::LX_L_PAREN => has_open_paren = true,
+            SyntaxKind::LX_R_PAREN => has_close_paren = true,
+            SyntaxKind::LX_L_BRACE => body_starts.push(usize::from(token.text_range().end())),
+            SyntaxKind::LX_R_BRACE => closed_bodies += 1,
+            SyntaxKind::LX_IDENT if token.text() == "else" => has_else = true,
+            _ => {}
+        }
+    }
+
+    if !has_open_paren {
+        return vec![];
+    }
 
     // (a) inside the argument list — `(` seen, no matching `)` yet
-    if open_paren.is_some() && close_paren.is_none() {
+    if !has_close_paren {
         return suggest_optional_params(span, params);
     }
 
     // (b) `)` typed but no `{` yet — suggest opening the body
-    if close_paren.is_some() && if_open_brace.is_none() {
+    if body_starts.is_empty() {
         return vec![CompletionResult::Keywords {
             span,
             options: vec![KeywordItem {
@@ -1217,34 +1244,30 @@ fn suggest_ifdef_context(
         }];
     }
 
-    let Some(if_open) = if_open_brace else {
-        return vec![];
-    };
-    // Gate name (e.g. `"$f"`) scopes optional-param completions inside the
-    // body to *this* ifdef's gate. Falling back to `None` when the argument
-    // is malformed is intentional: with no gate, all optionals are filtered
-    // out, which is the safe direction (compiler would reject either way).
-    let active_gate = open_paren.and_then(|p| extract_ifdef_gate_name(after_pipe, p));
-    // Locate the if-body's closing `}`. Filter exprs don't use `}`, so the
-    // first `}` after the opening brace is the if-body close.
-    let if_close = after_pipe[if_open + 1..].find('}').map(|p| if_open + 1 + p);
+    // The gate (e.g. `"$f"`) scopes optional-param completions inside the body
+    // to *this* ifdef. Falling back to `None` when the argument is malformed is
+    // intentional: with no gate, all optionals are filtered out, which is the
+    // safe direction (compiler would reject either way).
+    let gate = ifdef
+        .children()
+        .find(|n| n.kind() == SyntaxKind::VARIABLE)
+        .map(|n| n.text().to_string());
+    let body_from = |start: usize| before.get(start..).unwrap_or("").trim();
 
     // (c) still inside the if-body — no closing `}` yet
-    let Some(if_close) = if_close else {
+    if closed_bodies == 0 {
         return suggest_inside_filter_body(
             before,
             span,
             partial,
-            after_pipe[if_open + 1..].trim(),
+            body_from(body_starts[0]),
             params,
-            active_gate,
+            gate.as_deref(),
         );
-    };
-
-    let after_if = after_pipe[if_close + 1..].trim_start();
+    }
 
     // (d) after if-body close, no `else` typed yet — suggest `else`
-    if after_if.is_empty() {
+    if !has_else {
         return vec![CompletionResult::Keywords {
             span,
             options: vec![KeywordItem {
@@ -1255,14 +1278,8 @@ fn suggest_ifdef_context(
         }];
     }
 
-    // The only valid continuation after the if-body is the `else` clause.
-    // Anything else is a typo/in-progress edit we can't help with.
-    let Some(after_else_kw) = after_if.strip_prefix("else") else {
-        return vec![];
-    };
-
     // (e) `else` typed but no `{` yet — suggest opening the else body
-    let Some(else_open_rel) = after_else_kw.find('{') else {
+    let Some(&else_body) = body_starts.get(1) else {
         return vec![CompletionResult::Keywords {
             span,
             options: vec![KeywordItem {
@@ -1273,13 +1290,19 @@ fn suggest_ifdef_context(
         }];
     };
 
-    // (f) inside the else-body — bail once the user has typed the closing
-    // `}` since the pipe-keywords logic on the next `|` takes over from there.
-    let else_body = &after_else_kw[else_open_rel + 1..];
-    if else_body.contains('}') {
+    // (f) inside the else-body — once its `}` is typed the pipe-keywords logic
+    // on the next `|` takes over.
+    if closed_bodies > 1 {
         return vec![];
     }
-    suggest_inside_filter_body(before, span, partial, else_body.trim(), params, active_gate)
+    suggest_inside_filter_body(
+        before,
+        span,
+        partial,
+        body_from(else_body),
+        params,
+        gate.as_deref(),
+    )
 }
 
 /// Shared body of cases (c) and (f): cursor sits inside a `{ ... }` filter
@@ -1320,21 +1343,6 @@ fn suggest_inside_filter_body(
     } else {
         vec![]
     }
-}
-
-/// Extracts the gate param name (e.g. `"$f"`) from text like
-/// `ifdef($f) { ... `, given the position of the opening `(`. Returns
-/// `None` when the argument is malformed or absent — the caller should then
-/// fall back to "no active gate," which filters all optional params.
-fn extract_ifdef_gate_name(after_pipe: &str, open_paren: usize) -> Option<&str> {
-    let after = after_pipe.get(open_paren + 1..)?;
-    let close = after.find(')')?;
-    let inner = after[..close].trim();
-    let rest = inner.strip_prefix('$')?;
-    if rest.is_empty() || !rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        return None;
-    }
-    Some(inner)
 }
 
 /// Returns the list of declared optional params, regardless of inner type.
@@ -1425,7 +1433,7 @@ fn suggest_pipe_rule(
                 ],
             }],
         },
-        "bucket" => suggest_bucket_pipe(words, last, span, params),
+        "bucket" => suggest_bucket_pipe(before, words, last, span, params),
         "as" => vec![CompletionResult::Keywords {
             span,
             options: vec![],
@@ -1520,12 +1528,13 @@ fn is_extend_value_literal(tok: &str) -> bool {
 }
 
 fn suggest_bucket_pipe(
+    before: &str,
     words: &[&str],
     last: &str,
     span: Span,
     params: &[ParamItem],
 ) -> Vec<CompletionResult> {
-    let args = suggest_bucket_args(words, span);
+    let args = suggest_bucket_args(before, span);
     if !args.is_empty() {
         return args;
     }
@@ -1584,46 +1593,37 @@ fn extract_enum_values(arg_type: &ArgType) -> Vec<&'static str> {
 /// Detects when the cursor is inside the parentheses of a bucket function
 /// call and returns argument completions derived from the function's
 /// `FunctionTrait::args()` metadata in the stdlib.
-fn suggest_bucket_args(words: &[&str], span: Span) -> Vec<CompletionResult> {
-    let joined: String = words.join(" ");
-
-    // Find an unmatched open paren (depth > 0 at end of string)
-    let mut depth: i32 = 0;
-    let mut last_open: Option<usize> = None;
-    for (i, ch) in joined.char_indices() {
-        match ch {
-            '(' => {
-                depth += 1;
-                if depth == 1 {
-                    last_open = Some(i);
-                }
-            }
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    last_open = None;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let Some(open) = last_open else {
+///
+/// `before` is the query text up to the cursor, so the `BUCKET` the cursor sits
+/// in is the last one the tree names, and the call is still open exactly when
+/// the parser has not yet read its closing `)`.
+fn suggest_bucket_args(before: &str, span: Span) -> Vec<CompletionResult> {
+    let tree = SyntaxParser::new(before).parse().root;
+    let Some(bucket) = tree
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::BUCKET)
+        .last()
+    else {
         return vec![];
     };
-
-    // Extract function name: identifier chars immediately before '('
-    let before_paren = &joined[..open];
-    let Some(fn_name) = before_paren
-        .trim_end()
-        .rsplit(|c: char| !c.is_alphanumeric() && c != '_')
-        .next()
-        .filter(|s| !s.is_empty())
+    let closed = bucket
+        .children_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .any(|t| t.kind() == SyntaxKind::LX_R_PAREN);
+    let Some(arg_list) = bucket
+        .children()
+        .find(|n| n.kind() == SyntaxKind::BUCKET_ARGS)
+        .filter(|_| !closed)
     else {
         return vec![];
     };
 
-    let Some(func) = STDLIB.bucket_function(fn_name) else {
+    let fn_name = bucket
+        .children()
+        .find(|n| n.kind() == SyntaxKind::FUNCTION_PATH)
+        .map(|n| n.text().to_string())
+        .unwrap_or_default();
+    let Some(func) = STDLIB.bucket_function(fn_name.trim()) else {
         return vec![];
     };
     let args = func.args();
@@ -1631,8 +1631,13 @@ fn suggest_bucket_args(words: &[&str], span: Span) -> Vec<CompletionResult> {
         return vec![];
     }
 
-    let inside = &joined[open + 1..];
-    let comma_count = inside.chars().filter(|&c| c == ',').count();
+    // Each comma the parser consumed closes one argument, so the count is the
+    // index of the one the cursor is on.
+    let comma_count = arg_list
+        .children_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .filter(|t| t.kind() == SyntaxKind::LX_COMMA)
+        .count();
 
     // Determine which arg the cursor is on: if past the last positional arg,
     // clamp to the last arg if it is Repeated (variadic).
@@ -1929,15 +1934,10 @@ fn is_preamble_position(text: &str) -> bool {
     })
 }
 
-const PARAM_TYPE_KEYWORDS: [KeywordItem; 15] = [
+const PARAM_TYPE_KEYWORDS: [KeywordItem; 14] = [
     KeywordItem {
         label: "Dataset",
         apply: Some("Dataset;\n"),
-        info: "Parameter type",
-    },
-    KeywordItem {
-        label: "Metric",
-        apply: Some("Metric;\n"),
         info: "Parameter type",
     },
     KeywordItem {
@@ -2034,16 +2034,9 @@ fn suggest_for_source(
         if dataset_raw.is_empty() {
             return vec![];
         }
-        // Metric part after the colon — param mode when it starts with `$`
+        // The metric position takes a name only, so whatever follows the colon
+        // is a partial metric to complete against.
         let metric_part = &partial[colon_idx + 1..];
-        if metric_part.starts_with('$') {
-            return suggest_params(
-                Span::new(span.from + colon_idx + 1, span.to),
-                params,
-                None,
-                |t| t == ParamType::Metric,
-            );
-        }
         let dataset = dataset_raw
             .strip_prefix('`')
             .and_then(|s| s.strip_suffix('`'))

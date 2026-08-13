@@ -413,15 +413,20 @@ fn keyword_bucket_fn() {
     assert_eq!(kw.kind, TokenType::Keyword);
 }
 
+/// A bucket call names a function and passes it arguments. The name is drawn
+/// from a closed vocabulary so it reads as a keyword; the arguments are values
+/// like any other function's, so they read as variables.
 #[test]
-fn keyword_bucket_conversion() {
+fn bucket_argument_is_a_variable() {
     let query = "ds:metric | bucket to 1m using interpolate_cumulative_histogram(rate, count)";
     let tokens = collect_tokens(query);
-    let kw = tokens
-        .iter()
-        .find(|t| &query[t.span.from..t.span.to] == "rate")
-        .expect("should have rate keyword");
-    assert_eq!(kw.kind, TokenType::Keyword);
+    for arg in ["rate", "count"] {
+        let token = tokens
+            .iter()
+            .find(|t| &query[t.span.from..t.span.to] == arg)
+            .unwrap_or_else(|| panic!("should have the {arg} argument"));
+        assert_eq!(token.kind, TokenType::Variable, "argument {arg}");
+    }
 }
 
 #[test]
@@ -617,7 +622,6 @@ fn optional_type_inner_param_native_type() {
 fn optional_type_all_inner_variants_highlighted() {
     // Keep highlighting lenient for optional inners that diagnostics later
     // reject; this avoids flickering while users edit `Option<...>` types.
-    // `Metric` is not an accepted inner type per the grammar — exclude it.
     let inners = [
         "Dataset", "Duration", "Regex", "string", "int", "float", "bool",
     ];

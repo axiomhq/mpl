@@ -16,8 +16,8 @@ use crate::completions::{ParamItem, extract_declared_params};
 /// A single parameter declared in a query, in a JS-friendly shape.
 ///
 /// `name` has no leading `$`, and `type` uses the source-level spelling
-/// (`Dataset`, `Metric`, `Duration`, `Regex`, `string`, `int`, `float`,
-/// `bool`) — the same vocabulary users write in the query and that
+/// (`Dataset`, `Duration`, `Regex`, `string`, `int`, `float`, `bool`,
+/// `array`) — the same vocabulary users write in the query and that
 /// [`crate::SystemParamSpec`] accepts. Optionals are flagged via `optional`
 /// rather than wrapped in `Option<...>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

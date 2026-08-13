@@ -1,12 +1,14 @@
+use std::collections::HashMap;
+
 use regex::Regex;
 use test_case::test_case;
 
 use mpl_lang::STDLIB;
 
 use super::{
-    CompletionResult, ParamItem, ParamType, QueryContext, StringContext, classify_string_context,
-    compute_completions, cursor_in_interpolation, extract_declared_params, extract_partial_word,
-    is_char_escaped, locate_query_context, lookup_function,
+    CompletionResult, PARAM_TYPES, ParamItem, ParamType, QueryContext, StringContext,
+    classify_string_context, compute_completions, cursor_in_interpolation, extract_declared_params,
+    extract_partial_word, is_char_escaped, locate_query_context, lookup_function,
 };
 
 fn tag_info(r: &CompletionResult) -> Option<(&str, &str)> {
@@ -593,7 +595,7 @@ fn parse_param_decl_all_valid_optional_inner_types_recognised() {
 
 #[test]
 fn parse_param_decl_invalid_optional_inner_types_are_dropped() {
-    for inner in ["Dataset", "Metric", "Duration", "duration"] {
+    for inner in ["Dataset", "Duration", "duration"] {
         let query = format!("param $x: Option<{inner}>;\nds:metric");
         let params = extract_declared_params(&query);
         assert!(
@@ -677,7 +679,7 @@ fn completions_param_type_only_valid_option_snippets() {
         assert!(labels.contains(&valid), "should suggest {valid}");
     }
 
-    for invalid in ["Option<Dataset>", "Option<Metric>", "Option<Duration>"] {
+    for invalid in ["Option<Dataset>", "Option<Duration>"] {
         assert!(!labels.contains(&invalid), "should not suggest {invalid}");
     }
 }
@@ -1231,13 +1233,13 @@ fn extract_params_after_directives() {
 fn extract_params_all_types() {
     let text = "\
 param $a: Dataset;\n\
-param $b: Metric;\n\
 param $c: Duration;\n\
 param $d: string;\n\
 param $e: int;\n\
 param $f: float;\n\
 param $g: bool;\n\
 param $h: Regex;\n\
+param $i: array;\n\
 ds:metric";
     let params = extract_declared_params(text);
     assert_eq!(params.len(), 8);
@@ -1246,13 +1248,13 @@ ds:metric";
         types,
         vec![
             ParamType::Dataset,
-            ParamType::Metric,
             ParamType::Duration,
             ParamType::String,
             ParamType::Int,
             ParamType::Float,
             ParamType::Bool,
             ParamType::Regex,
+            ParamType::Array,
         ]
     );
 }
@@ -1271,6 +1273,19 @@ fn extract_params_legacy_lowercase_duration() {
 fn extract_params_none_when_no_params() {
     let params = extract_declared_params("ds:metric | filter tag == \"val\"");
     assert!(params.is_empty());
+}
+
+/// The param type vocabulary the editor reads has to match the one the parser
+/// accepts, or the editor reports params the compiler will reject outright.
+#[test]
+fn extract_params_type_vocabulary_matches_the_parser() {
+    for spelling in PARAM_TYPES.map(ParamType::spelling) {
+        let query = format!("param $x: {spelling};\nds:metric");
+        assert!(
+            mpl_lang::compile(&query, HashMap::new()).is_ok(),
+            "the editor offers `{spelling}`, so the parser has to accept it"
+        );
+    }
 }
 
 #[test]
@@ -1436,19 +1451,27 @@ fn completions_at(input: &str) -> Option<CompletionResult> {
 #[test_case("`my-dataset`:`my-met#"                      => Some("metric")           ; "both backticked partial metric")]
 #[test_case("`my-dataset`:`my-metric` | #"               => Some("keywords")         ; "backtick pipe keywords")]
 #[test_case("param $dataset: Dataset;\n#"                => None                     ; "no dataset after param decl")]
-#[test_case("param $ds: Dataset;\nparam $m: Metric;\n#"  => None                     ; "no dataset after multiple params")]
+#[test_case("param $ds: Dataset;\nparam $s: string;\n#"  => None                     ; "no dataset after multiple params")]
 #[test_case("set foo = bar;\nparam $ds: Dataset;\n#"     => None                     ; "no dataset after directive and params")]
 #[test_case("ds:metric | bucket to 1m using histogram(#" => Some("keywords")         ; "bucket histogram open paren")]
 #[test_case("ds:metric | bucket to 1m using histogram(co#" => Some("keywords")       ; "bucket histogram partial")]
 #[test_case("ds:metric | bucket to 1m using histogram(count, #" => Some("keywords")  ; "bucket histogram after comma")]
 #[test_case("ds:metric | bucket to 1m using interpolate_delta_histogram(#" => Some("keywords") ; "bucket interpolate delta histogram")]
 #[test_case("ds:metric | bucket to 1m using histogram(count) | #" => Some("keywords"); "after bucket closed paren")]
+// A closed argument list has nothing left to complete inside it, and an ifdef
+// whose `(` is not yet typed has no argument position to complete into.
+#[test_case("ds:metric | bucket to 1m using histogram(count) #"  => Some("keywords")  ; "closed bucket call before a pipe")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef #"     => None              ; "ifdef before its open paren")]
+// A word that merely starts with `ifdef` opens no ifdef clause, and a call with
+// no function name in front of it names nothing to look up.
+#[test_case("param $f: Option<string>;\nds:metric | ifdefx #"    => None              ; "word starting with ifdef is not an ifdef")]
+#[test_case("ds:metric | bucket to 1m using (#"                  => Some("keywords")  ; "bucket call with no function name")]
 #[test_case("param $ds: Dataset;\nlo#"                   => Some("dataset")          ; "plain text source with params")]
-#[test_case("param $m: Metric;\nds:met#"                 => Some("metric")           ; "plain metric source with params")]
+#[test_case("param $s: string;\nds:met#"                 => Some("metric")           ; "plain metric source with params")]
 #[test_case("param $foo: string;\nparam $bar: int;\nds:metric | filter tag == $fo#" => Some("params") ; "partial param at filter value")]
 #[test_case("param $ds: Dataset;\n$#"                    => Some("params")           ; "dollar at dataset position")]
 #[test_case("param $ds: Dataset;\nparam $other: string;\n$d#" => Some("params")      ; "partial dollar at dataset position")]
-#[test_case("param $m: Metric;\nds:$#"                   => Some("params")           ; "dollar at metric position")]
+#[test_case("param $s: string;\nds:$#"                   => Some("metric")           ; "dollar at metric position")]
 #[test_case("param $w: duration;\nds:metric | align to #" => Some("params")          ; "align to with duration param")]
 #[test_case("ds:metric | bucket using #"                => Some("bucket_functions") ; "bucket using suggests functions")]
 #[test_case("param $w: duration;\nds:metric | bucket to #" => Some("params")         ; "bucket to with duration param")]
@@ -1509,6 +1532,12 @@ fn completions_at(input: &str) -> Option<CompletionResult> {
 #[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" } else { where #"  => Some("tag")      ; "else body where suggests tag")]
 #[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" } else { where tag == #" => Some("params") ; "else body filter value suggests params")]
 #[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"x\" } else { where tag == \"y\" }#" => None ; "after closed ifdef-else returns none")]
+// A brace inside a string or an escaped ident is literal text, so it must not
+// be read as the delimiter that ends a body.
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"}\" } #"        => Some("keywords") ; "brace in string then else position")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"}\" } else { #" => Some("keywords") ; "brace in string then else body")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == `}` } else { #"   => Some("keywords") ; "brace in escaped ident then else body")]
+#[test_case("param $f: Option<string>;\nds:metric | ifdef($f) { where tag == \"{\" } else { where #" => Some("tag") ; "open brace in string then else body tag")]
 // ── extend ─────────────────────────────────────────────────
 #[test_case("ds:metric | extend #"                                  => None             ; "extend bare expects ident no completions")]
 #[test_case("ds:metric | extend foo #"                              => Some("keywords") ; "extend ident suggests equals")]
@@ -1570,7 +1599,7 @@ fn test_completion_kind(input: &str) -> Option<&'static str> {
 #[test_case("`dev.metrics`:http_requests_total\n| align #", &["to", "using"]           ; "align initially suggests to and using")]
 #[test_case("ds:metric | bucket #", &["by", "to", "using"]                               ; "bucket initially suggests by to using")]
 #[test_case("`dev.metrics`:http_requests_total\n| align to 42s #", &["using"]          ; "align after to suggests using")]
-#[test_case("param $name: #", &["Dataset", "Metric", "Duration", "string", "int", "float", "bool", "array", "Regex", "Option<string>", "Option<int>", "Option<float>", "Option<bool>", "Option<array>", "Option<Regex>"] ; "all param types")]
+#[test_case("param $name: #", &["Dataset", "Duration", "string", "int", "float", "bool", "array", "Regex", "Option<string>", "Option<int>", "Option<float>", "Option<bool>", "Option<array>", "Option<Regex>"] ; "all param types")]
 #[test_case("`my-dataset`:`my-metric` | #", &["sample", "where", "map"]                           ; "backtick pipe keywords")]
 // ── extend keyword in pipe-keywords list ──────────────────────
 #[test_case("ds:metric | #", &["extend"]                                                          ; "extend offered as pipe keyword")]
@@ -1700,7 +1729,7 @@ fn test_completion_source_dataset(input: &str, expected: &str) {
 #[test_case("param $r: Regex;\nds:metric | where tag != #", &["$r"]                         ; "neq includes regex")]
 #[test_case("param $r: Regex;\nparam $i: int;\nds:metric | filter tag < #", &["$i"]          ; "lt includes int")]
 #[test_case("param $r: Regex;\nparam $f: float;\nds:metric | filter tag >= #", &["$f"]       ; "gte includes float")]
-#[test_case("param $d: Dataset;\nparam $m: Metric;\nparam $s: string;\nds:metric | filter tag == #", &["$s"] ; "filter value includes string")]
+#[test_case("param $d: Dataset;\nparam $s: string;\nds:metric | filter tag == #", &["$s"] ; "filter value includes string")]
 #[test_case("param $dur: duration;\nparam $b: bool;\nds:metric | filter tag == #", &["$b"]   ; "filter value includes bool")]
 #[test_case("param $foo: string;\nparam $bar: int;\nds:metric | filter tag == $fo#", &["$foo"] ; "partial param filtered")]
 #[test_case("param $w: duration;\nds:metric | align to #", &["$w"]                           ; "align to duration")]
@@ -1709,8 +1738,6 @@ fn test_completion_source_dataset(input: &str, expected: &str) {
 #[test_case("param $ds: Dataset;\n$#", &["$ds"]                                              ; "source dataset param")]
 #[test_case("param $ds: Dataset;\nparam $other: string;\n$d#", &["$ds"]                      ; "source dataset param partial")]
 #[test_case("param $s: string;\nparam $d: Dataset;\n$#", &["$d"]                             ; "source dataset includes dataset")]
-#[test_case("param $m: Metric;\nds:$#", &["$m"]                                              ; "source metric param")]
-#[test_case("param $s: string;\nparam $m: Metric;\nds:$#", &["$m"]                           ; "source metric includes metric")]
 // ── mid-query cursor ────────────────────────────────────────────
 #[test_case("param $str: string;\nds:metric | filter tag == $s#tr and other == 1", &["$str"] ; "mid param suffix ignored")]
 // ── ifdef arg ───────────────────────────────────────────────────
@@ -1747,13 +1774,11 @@ fn test_completion_params_contain(input: &str, expected: &[&str]) {
 #[test_case("param $r: Regex;\nparam $i: int;\nds:metric | filter tag < #",   &["$r"]  ; "lt excludes regex")]
 #[test_case("param $r: Regex;\nparam $f: float;\nds:metric | where tag >= #", &["$r"]  ; "gte excludes regex")]
 #[test_case("param $d: Dataset;\nparam $s: string;\nds:metric | where tag == #", &["$d"] ; "filter excludes dataset")]
-#[test_case("param $d: Dataset;\nparam $m: Metric;\nparam $s: string;\nds:metric | filter tag == #", &["$d", "$m"] ; "filter excludes dataset and metric")]
 #[test_case("param $dur: duration;\nparam $b: bool;\nds:metric | filter tag == #", &["$dur"] ; "filter excludes duration")]
 #[test_case("param $foo: string;\nparam $bar: int;\nds:metric | filter tag == $fo#", &["$bar"] ; "partial param excludes non-matching")]
 #[test_case("param $s: string;\nparam $w: duration;\nds:metric | align to #", &["$s"]   ; "align excludes non-duration")]
 #[test_case("param $s: string;\nparam $d: Dataset;\n$#", &["$s"]                        ; "source excludes non-dataset")]
 #[test_case("param $ds: Dataset;\nparam $other: string;\n$d#", &["$other"]               ; "source partial excludes non-matching")]
-#[test_case("param $s: string;\nparam $m: Metric;\nds:$#", &["$s"]                      ; "metric excludes non-metric")]
 // ── ifdef arg excludes non-optional ─────────────────────────────
 #[test_case("param $a: string;\nparam $b: Option<int>;\nds:metric | ifdef(#",       &["$a"]   ; "ifdef arg excludes non-optional")]
 // ── filter value position outside ifdef excludes optional params ─
@@ -2199,8 +2224,8 @@ fn param_type_spellings_round_trip() {
 fn every_offered_keyword_is_documented() {
     const NOT_KEYWORDS: &[&str] = &[
         "{", "}", "[", "]", ",", "=", "==", "!=", "<", ">", "<=", ">=", "string", "int", "float",
-        "bool", "array", "Dataset", "Metric", "Duration", "Regex", "count", "avg", "sum", "min",
-        "max", "rate", "increase",
+        "bool", "array", "Dataset", "Duration", "Regex", "count", "avg", "sum", "min", "max",
+        "rate", "increase",
     ];
 
     let queries = [
