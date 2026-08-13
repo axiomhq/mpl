@@ -246,21 +246,21 @@ fn simple_queries(src: &str) -> String {
     "(a:b, c:d) | compute x using /"
     => "COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b))) , \
         QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | compute \
-        IDENT(x) using MATH_FN(/))"
+        IDENT(x) using FUNCTION_CALL(MATH_FN(/) FUNCTION_ARGS()))"
     ; "operator as the compute function"
 )]
 #[test_case(
     "(a:b, c:d,) | compute x using sum"
     => "COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b))) , \
         QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) , ) | compute \
-        IDENT(x) using FUNCTION_PATH(IDENT(sum)))"
+        IDENT(x) using FUNCTION_CALL(FUNCTION_PATH(IDENT(sum)) FUNCTION_ARGS()))"
     ; "trailing comma is allowed"
 )]
 #[test_case(
     "(a:b, c:d) | compute x using a::b"
     => "COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b))) , \
         QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | compute \
-        IDENT(x) using FUNCTION_PATH(IDENT(a) :: IDENT(b)))"
+        IDENT(x) using FUNCTION_CALL(FUNCTION_PATH(IDENT(a) :: IDENT(b)) FUNCTION_ARGS()))"
     ; "module path as the compute function"
 )]
 fn compute_queries(src: &str) -> String {
@@ -276,9 +276,9 @@ fn compute_queries_nest() {
         "ROOT(QUERY(COMPUTE_QUERY(( QUERY(COMPUTE_QUERY(( \
          QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b))) , \
          QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | compute \
-         IDENT(x) using MATH_FN(+))) , \
+         IDENT(x) using FUNCTION_CALL(MATH_FN(+) FUNCTION_ARGS()))) , \
          QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(e)) : IDENT(f))) ) | compute \
-         IDENT(y) using MATH_FN(-))))"
+         IDENT(y) using FUNCTION_CALL(MATH_FN(-) FUNCTION_ARGS()))))"
     );
 }
 
@@ -432,10 +432,15 @@ fn arrays(src: &str) -> String {
 )]
 #[test_case("as x"       => "RULE(AS(as IDENT(x)))"                            ; "as rule")]
 #[test_case("sample 0.5" => "RULE(SAMPLE(sample FLOAT(0.5)))"                  ; "sample")]
-#[test_case("map rate"   => "RULE(MAP(map FUNCTION_PATH(IDENT(rate))))"         ; "map without arguments")]
+#[test_case(
+    "map rate"
+    => "RULE(MAP(map FUNCTION_CALL(FUNCTION_PATH(IDENT(rate)) FUNCTION_ARGS())))"
+    ; "map without arguments"
+)]
 #[test_case(
     "map filter::gt(1)"
-    => "RULE(MAP(map FUNCTION_PATH(IDENT(filter) :: IDENT(gt)) ( EXPR(CONST(INTEGER(1))) )))"
+    => "RULE(MAP(map FUNCTION_CALL(FUNCTION_PATH(IDENT(filter) :: IDENT(gt)) \
+        FUNCTION_ARGS(( EXPR(CONST(INTEGER(1))) )))))"
     ; "map with a module path and an argument"
 )]
 #[test_case(
@@ -450,47 +455,52 @@ fn arrays(src: &str) -> String {
 )]
 #[test_case(
     "align using avg"
-    => "RULE(ALIGN(align KEYWORD(using) FUNCTION_PATH(IDENT(avg))))"
+    => "RULE(ALIGN(align KEYWORD(using) FUNCTION_CALL(FUNCTION_PATH(IDENT(avg)) \
+        FUNCTION_ARGS())))"
     ; "align without a target"
 )]
 #[test_case(
     "align to 7d using avg"
     => "RULE(ALIGN(align KEYWORD(to) DURATION(INTEGER(7) TIME_UNIT(d)) KEYWORD(using) \
-        FUNCTION_PATH(IDENT(avg))))"
+        FUNCTION_CALL(FUNCTION_PATH(IDENT(avg)) FUNCTION_ARGS())))"
     ; "align to a duration"
 )]
 #[test_case(
     "align to $d using avg"
-    => "RULE(ALIGN(align KEYWORD(to) VARIABLE($d) KEYWORD(using) FUNCTION_PATH(IDENT(avg))))"
+    => "RULE(ALIGN(align KEYWORD(to) VARIABLE($d) KEYWORD(using) \
+        FUNCTION_CALL(FUNCTION_PATH(IDENT(avg)) FUNCTION_ARGS())))"
     ; "align to a parameter takes the variable branch"
 )]
 #[test_case(
     "group using max"
-    => "RULE(GROUP(group KEYWORD(using) FUNCTION_PATH(IDENT(max))))"
+    => "RULE(GROUP(group KEYWORD(using) FUNCTION_CALL(FUNCTION_PATH(IDENT(max)) \
+        FUNCTION_ARGS())))"
     ; "group without tags"
 )]
 #[test_case(
     "group by a, b using sum"
     => "RULE(GROUP(group KEYWORD(by) TAG_LIST(IDENT(a) , IDENT(b)) KEYWORD(using) \
-        FUNCTION_PATH(IDENT(sum))))"
+        FUNCTION_CALL(FUNCTION_PATH(IDENT(sum)) FUNCTION_ARGS())))"
     ; "group by a tag list"
 )]
 #[test_case(
     "bucket using histogram()"
-    => "RULE(BUCKET(bucket KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( BUCKET_ARGS() )))"
-    ; "bucket with empty argument list emits no BUCKET_ARGS"
+    => "RULE(BUCKET(bucket KEYWORD(using) FUNCTION_CALL(FUNCTION_PATH(IDENT(histogram)) \
+        FUNCTION_ARGS(( )))))"
+    ; "an empty argument list is the parens and nothing else"
 )]
 #[test_case(
     "bucket by a to 5m using histogram(1.0, 2.0)"
     => "RULE(BUCKET(bucket KEYWORD(by) TAG_LIST(IDENT(a)) KEYWORD(to) \
-        DURATION(INTEGER(5) TIME_UNIT(m)) KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( \
-        BUCKET_ARGS(EXPR(CONST(FLOAT(1.0))) , EXPR(CONST(FLOAT(2.0)))) )))"
+        DURATION(INTEGER(5) TIME_UNIT(m)) KEYWORD(using) \
+        FUNCTION_CALL(FUNCTION_PATH(IDENT(histogram)) \
+        FUNCTION_ARGS(( EXPR(CONST(FLOAT(1.0))) , EXPR(CONST(FLOAT(2.0))) )))))"
     ; "bucket with every clause"
 )]
 #[test_case(
     "bucket using histogram(le)"
-    => "RULE(BUCKET(bucket KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( \
-        BUCKET_ARGS(EXPR(IDENT(le))) )))"
+    => "RULE(BUCKET(bucket KEYWORD(using) FUNCTION_CALL(FUNCTION_PATH(IDENT(histogram)) \
+        FUNCTION_ARGS(( EXPR(IDENT(le)) )))))"
     ; "bucket argument may be an ident"
 )]
 #[test_case(
@@ -1587,7 +1597,6 @@ fn generated_queries_parse_cleanly() {
         SyntaxKind::AS,
         SyntaxKind::GROUP,
         SyntaxKind::BUCKET,
-        SyntaxKind::BUCKET_ARGS,
         SyntaxKind::IFDEF,
         SyntaxKind::EXTEND,
         SyntaxKind::EXTEND_PART,
