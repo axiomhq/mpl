@@ -477,20 +477,20 @@ fn arrays(src: &str) -> String {
 )]
 #[test_case(
     "bucket using histogram()"
-    => "RULE(BUCKET(bucket KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( )))"
+    => "RULE(BUCKET(bucket KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( BUCKET_ARGS() )))"
     ; "bucket with empty argument list emits no BUCKET_ARGS"
 )]
 #[test_case(
     "bucket by a to 5m using histogram(1.0, 2.0)"
     => "RULE(BUCKET(bucket KEYWORD(by) TAG_LIST(IDENT(a)) KEYWORD(to) \
         DURATION(INTEGER(5) TIME_UNIT(m)) KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( \
-        BUCKET_ARGS(BUCKET_ARG(FLOAT(1.0)) , BUCKET_ARG(FLOAT(2.0))) )))"
+        BUCKET_ARGS(EXPR(CONST(FLOAT(1.0))) , EXPR(CONST(FLOAT(2.0)))) )))"
     ; "bucket with every clause"
 )]
 #[test_case(
     "bucket using histogram(le)"
     => "RULE(BUCKET(bucket KEYWORD(using) FUNCTION_PATH(IDENT(histogram)) ( \
-        BUCKET_ARGS(BUCKET_ARG(IDENT(le))) )))"
+        BUCKET_ARGS(EXPR(IDENT(le))) )))"
     ; "bucket argument may be an ident"
 )]
 #[test_case(
@@ -1587,7 +1587,6 @@ fn generated_queries_parse_cleanly() {
         SyntaxKind::AS,
         SyntaxKind::GROUP,
         SyntaxKind::BUCKET,
-        SyntaxKind::BUCKET_ARG,
         SyntaxKind::BUCKET_ARGS,
         SyntaxKind::IFDEF,
         SyntaxKind::EXTEND,

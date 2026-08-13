@@ -360,10 +360,14 @@ pub enum ParamType {
 }
 
 impl ParamType {
-    fn is_optional(self) -> bool {
+    /// if the param type is optional or not
+    #[must_use]
+    pub fn is_optional(self) -> bool {
         matches!(self, ParamType::Optional(_))
     }
-    fn typ(self) -> TerminalParamType {
+    /// The concrete type
+    #[must_use]
+    pub fn typ(self) -> TerminalParamType {
         match self {
             ParamType::Terminal(terminal_param_type) | ParamType::Optional(terminal_param_type) => {
                 terminal_param_type

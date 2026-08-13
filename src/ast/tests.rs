@@ -15,7 +15,7 @@ use test_case::test_case;
 
 /// Renders the parser's errors the way a user would see them, so a failing example prints a
 /// diagnostic rather than a debug dump.
-fn report(name: &str, content: &str, errors: &[&ParserError]) -> String {
+fn report(name: &str, content: &str, errors: &[&AstError]) -> String {
     let handler = GraphicalReportHandler::new_themed(GraphicalTheme::unicode());
     let mut out = String::new();
     for error in errors {
@@ -488,7 +488,7 @@ fn a_capped_filter_never_lowers_to_an_empty_operand_list() {
         );
         let mut parser = Parser {
             root,
-            errors: errors.into_iter().map(ParserError::InvalidSyntax).collect(),
+            errors: errors.into_iter().map(AstError::InvalidSyntax).collect(),
             warnings: Vec::new(),
             parts: Vec::new(),
         };

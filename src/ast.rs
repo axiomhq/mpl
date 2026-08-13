@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use std::ops::Deref;
 
 use miette::{Diagnostic, MietteDiagnostic, SourceSpan};
@@ -42,7 +41,7 @@ pub enum ParserWarning {
 
 #[derive(thiserror::Error, Debug, Diagnostic)]
 /// Represents a parser error.
-pub enum ParserError {
+pub enum AstError {
     /// The input could not be parsed.
     #[error("invalid syntax")]
     #[diagnostic(code(mpl_lang::invalid_syntax))]
@@ -105,7 +104,7 @@ pub enum ParserError {
         span: SourceSpan,
     },
 
-    /// Garbage at the end a rule.
+    /// Missing token
     #[error("Expected token of kind {expected:?} but it's missing")]
     #[diagnostic(code(mpl_lang::garbage_at_end))]
     MissingToken {
@@ -271,11 +270,11 @@ pub enum ParserError {
     },
 }
 
-impl ParserError {
+impl AstError {
     /// Converts this error into a [`MietteDiagnostic`].
     #[must_use]
     pub fn to_diagnostic(&self) -> MietteDiagnostic {
-        if let ParserError::InvalidSyntax(error) = self {
+        if let AstError::InvalidSyntax(error) = self {
             error.to_diagnostic()
         } else {
             MietteDiagnostic {
@@ -293,7 +292,7 @@ impl ParserError {
 // NOTE: This error isn't user facing it's just for internal aborts.
 /// Represents a parser error.
 #[derive(Debug)]
-pub struct Error(&'static str);
+pub struct Error(pub &'static str);
 
 /// AST parser result type.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -301,6 +300,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// a function call
 #[derive(Debug)]
 pub struct FunctionCall {
+    /// The syntax node of the function call
+    pub node: SyntaxNode,
     /// The function name, split into parts for nested functions.
     pub name: Vec<Ident>,
     /// The function arguments.
@@ -310,6 +311,8 @@ pub struct FunctionCall {
 /// A `param` declaration.
 #[derive(Debug)]
 pub struct Param {
+    /// The corresponding syntax node
+    pub node: SyntaxNode,
     /// The parameter name, without the leading `$`.
     pub name: Variable,
     /// The declared type.
@@ -319,6 +322,8 @@ pub struct Param {
 /// A `set` directive.
 #[derive(Debug, Clone)]
 pub struct Directive {
+    /// The corresponding syntax node
+    pub node: SyntaxNode,
     /// The directive name.
     pub name: Ident,
     /// The assigned constant, absent for a bare `set name;`.
@@ -339,7 +344,7 @@ pub enum Part {
 /// the parsed AST
 pub struct Ast {
     /// errors during parsing
-    pub errors: Vec<ParserError>,
+    pub errors: Vec<AstError>,
     /// warnings during parsing
     pub warnings: Vec<ParserWarning>,
     /// the parsed AST
@@ -356,7 +361,7 @@ impl Ast {
 /// AST parser.
 pub struct Parser {
     root: SyntaxNode,
-    errors: Vec<ParserError>,
+    errors: Vec<AstError>,
     warnings: Vec<ParserWarning>,
     parts: Vec<Part>,
 }
@@ -364,7 +369,6 @@ pub struct Parser {
 trait NonTrivalItem {
     fn span(&self) -> SourceSpan;
     fn token_string(&self) -> String;
-    fn kind(&self) -> SyntaxKind;
 }
 
 impl NonTrivalItem for SyntaxNode {
@@ -385,9 +389,6 @@ impl NonTrivalItem for SyntaxNode {
             })
             .collect::<String>()
     }
-    fn kind(&self) -> SyntaxKind {
-        self.kind()
-    }
 }
 impl NonTrivalItem for NodeOrToken<SyntaxNode, SyntaxToken<Lang>> {
     fn span(&self) -> SourceSpan {
@@ -401,9 +402,6 @@ impl NonTrivalItem for NodeOrToken<SyntaxNode, SyntaxToken<Lang>> {
             NodeOrToken::Node(node) => node.token_string(),
             NodeOrToken::Token(token) => token.to_string(),
         }
-    }
-    fn kind(&self) -> SyntaxKind {
-        self.kind()
     }
 }
 
@@ -443,6 +441,31 @@ impl Nontrivial for SyntaxElementChildren<Lang> {
 /// Regular expression or variable.
 #[derive(Debug)]
 pub struct Regex(String);
+impl std::fmt::Display for Regex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl Deref for Regex {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<str> for Regex {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq<&str> for Regex {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == **other
+    }
+}
 
 /// Identifier.
 #[derive(Debug, Clone)]
@@ -620,10 +643,26 @@ pub enum FilterNot {
 }
 /// A filter and rule.
 #[derive(Debug)]
-pub struct FilterAnd(Vec<FilterNot>);
+pub struct FilterAnd(pub Vec<FilterNot>);
+impl Deref for FilterAnd {
+    type Target = [FilterNot];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 /// A filter or rule.
 #[derive(Debug)]
 pub struct FilterOr(Vec<FilterAnd>);
+
+impl Deref for FilterOr {
+    type Target = [FilterAnd];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// A parsed duration.
 #[derive(Debug)]
 pub enum Duration {
@@ -637,9 +676,9 @@ pub enum Duration {
 #[derive(Debug)]
 pub struct ExtendPart {
     /// The name of the extend part.
-    name: Ident,
+    pub name: Ident,
     /// The body of the extend part.
-    value: Expr,
+    pub value: Expr,
 }
 
 /// A parsed rule.
@@ -656,14 +695,14 @@ pub enum Rule {
         /// The duration to align by.
         duration: Option<Duration>,
         /// The function to align by.
-        func: Vec<Ident>,
+        func: FunctionCall,
     },
     /// A parsed group rule.
     Group {
         /// The groups to bucket by.
         groups: Vec<Ident>,
         /// The function to bucket by.
-        func: Vec<Ident>,
+        func: FunctionCall,
     },
     /// A parsed bucket rule.
     Bucket {
@@ -672,7 +711,7 @@ pub enum Rule {
         /// The duration to bucket by.
         duration: Option<Duration>,
         /// The function to bucket by.
-        func: Vec<Ident>,
+        func: FunctionCall,
     },
     /// A parsed ifdef rule.
     IfDef {
@@ -689,27 +728,53 @@ pub enum Rule {
     As(Ident),
 }
 
+/// A rule with attatched syntax node
+#[derive(Debug)]
+pub struct SyntaxRule {
+    /// the corresponding syntax node
+    pub node: SyntaxNode,
+    /// The actual rule
+    pub rule: Rule,
+}
+
+impl Deref for SyntaxRule {
+    type Target = Rule;
+
+    fn deref(&self) -> &Self::Target {
+        &self.rule
+    }
+}
+
 /// A parsed simple query.
 #[derive(Debug)]
 pub struct SimpleQuery {
+    /// the corresponding syntax node
+    pub node: SyntaxNode,
     /// The dataset to compute on.
-    dataset: IdentOrVariable,
+    pub dataset: IdentOrVariable,
     /// The metric to compute.
-    metric: Ident,
+    pub metric: Ident,
     /// The alias to use for the metric.
-    alias: Option<Ident>,
+    pub alias: Option<Ident>,
     /// The rules to apply.
-    rules: Vec<Rule>,
+    pub rules: Vec<SyntaxRule>,
 }
 
 /// A parsed compute query.
 #[derive(Debug)]
 pub struct ComputeQuery {
-    l: Query,
-    r: Query,
-    name: Ident,
-    rules: Vec<Rule>,
-    func: Vec<Ident>,
+    /// the corresponding syntax node
+    pub node: SyntaxNode,
+    /// left query
+    pub l: Query,
+    /// right query
+    pub r: Query,
+    /// metric name of the resulting combined series
+    pub name: Ident,
+    /// Combination function
+    pub func: Vec<Ident>,
+    /// rules following the compute statement
+    pub rules: Vec<Rule>,
 }
 
 /// A parsed query.
@@ -736,7 +801,7 @@ impl Parser {
         let SyntaxTree { root, errors } = syntax_tree::Parser::new(input).parse();
         Parser {
             root,
-            errors: errors.into_iter().map(ParserError::InvalidSyntax).collect(),
+            errors: errors.into_iter().map(AstError::InvalidSyntax).collect(),
             warnings: Vec::new(),
             parts: Vec::new(),
         }
@@ -744,7 +809,7 @@ impl Parser {
 
     /// errors that occurred during parsing.
     #[must_use]
-    pub fn errors(&self) -> &[ParserError] {
+    pub fn errors(&self) -> &[AstError] {
         &self.errors
     }
 
@@ -768,7 +833,7 @@ impl Parser {
         error_kind: SyntaxKind,
     ) -> Result<T::Item> {
         let Some(node) = children.n() else {
-            self.errors.push(ParserError::MissingToken {
+            self.errors.push(AstError::MissingToken {
                 expected: error_kind,
                 span: node.span(),
             });
@@ -781,7 +846,7 @@ impl Parser {
         if node.kind() == expected {
             Ok(())
         } else {
-            self.errors.push(ParserError::UnexpectedSyntaxRuleOne {
+            self.errors.push(AstError::UnexpectedSyntaxRuleOne {
                 expected,
                 found: node.kind(),
                 span: node.span(),
@@ -795,7 +860,7 @@ impl Parser {
             return;
         };
         self.errors
-            .push(ParserError::GarbageAtEndOfRule { span: node.span() });
+            .push(AstError::GarbageAtEndOfRule { span: node.span() });
     }
     fn ident_or_variable(&mut self, node: &SyntaxNode) -> Result<IdentOrVariable> {
         self.assert_type(node, SyntaxKind::IDENT_OR_VARIABLE)?;
@@ -805,7 +870,7 @@ impl Parser {
             SyntaxKind::IDENT => self.ident(&c).map(IdentOrVariable::Ident),
             SyntaxKind::VARIABLE => self.variable(&c).map(IdentOrVariable::Var),
             _ => {
-                self.errors.push(ParserError::UnexpectedSyntaxRule {
+                self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[SyntaxKind::IDENT, SyntaxKind::VARIABLE],
                     found: node.kind(),
                     span: node.span(),
@@ -835,7 +900,7 @@ impl Parser {
                     '\\' => out.push('\\'),
                     '`' => out.push('`'),
                     'u' => {
-                        self.errors.push(ParserError::UnicodeEscape { span });
+                        self.errors.push(AstError::UnicodeEscape { span });
                         out.push('u');
                     }
                     char => {
@@ -869,7 +934,7 @@ impl Parser {
                     '"' => out.push('"'),
                     '$' => out.push('$'),
                     'u' => {
-                        self.errors.push(ParserError::UnicodeEscape { span });
+                        self.errors.push(AstError::UnicodeEscape { span });
                         out.push('u');
                     }
                     char => {
@@ -909,8 +974,7 @@ impl Parser {
                 let s = if let Some(s) = s.strip_prefix('"').and_then(|s| s.strip_suffix("${")) {
                     s
                 } else {
-                    self.errors
-                        .push(ParserError::InvalidString { span: c.span() });
+                    self.errors.push(AstError::InvalidString { span: c.span() });
                     "__INVALID__"
                 };
                 let mut parts = vec![StringPart::Const(self.unescape_string(&c, s))];
@@ -920,8 +984,7 @@ impl Parser {
                             let s = c.token_string();
                             let Some(s) = s.strip_prefix('}').and_then(|s| s.strip_suffix("${"))
                             else {
-                                self.errors
-                                    .push(ParserError::InvalidString { span: c.span() });
+                                self.errors.push(AstError::InvalidString { span: c.span() });
                                 continue;
                             };
                             parts.push(StringPart::Const(self.unescape_string(&c, s)));
@@ -930,8 +993,7 @@ impl Parser {
                             let s = c.token_string();
                             let Some(s) = s.strip_prefix('}').and_then(|s| s.strip_suffix('"'))
                             else {
-                                self.errors
-                                    .push(ParserError::InvalidString { span: c.span() });
+                                self.errors.push(AstError::InvalidString { span: c.span() });
                                 continue;
                             };
                             parts.push(StringPart::Const(self.unescape_string(&c, s)));
@@ -944,7 +1006,7 @@ impl Parser {
                             }
                         }
                         found => {
-                            self.errors.push(ParserError::UnexpectedSyntaxRule {
+                            self.errors.push(AstError::UnexpectedSyntaxRule {
                                 expected: &[SyntaxKind::LX_STRING, SyntaxKind::LX_STRING_START],
                                 found,
                                 span: node.span(),
@@ -957,7 +1019,7 @@ impl Parser {
                 Ok(Expr::String(parts))
             }
             found => {
-                self.errors.push(ParserError::UnexpectedSyntaxRule {
+                self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[SyntaxKind::LX_STRING, SyntaxKind::LX_STRING_START],
                     found,
                     span: node.span(),
@@ -993,7 +1055,7 @@ impl Parser {
             SyntaxKind::STRING => self.string_expr(&c)?,
             SyntaxKind::ARRAY => self.array_expr(&c)?,
             found => {
-                self.errors.push(ParserError::UnexpectedSyntaxRule {
+                self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[
                         SyntaxKind::INTEGER,
                         SyntaxKind::FLOAT,
@@ -1021,7 +1083,7 @@ impl Parser {
             SyntaxKind::IDENT => Expr::Ident(self.ident(&n)?),
             SyntaxKind::VARIABLE => Expr::Var(self.variable(&n)?),
             found => {
-                self.errors.push(ParserError::UnexpectedSyntaxRule {
+                self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[SyntaxKind::CONST, SyntaxKind::IDENT, SyntaxKind::VARIABLE],
                     found,
                     span: n.span(),
@@ -1037,7 +1099,7 @@ impl Parser {
         let s = node.token_string();
         let Some(r) = s.strip_prefix("#/").and_then(|s| s.strip_suffix('/')) else {
             self.errors
-                .push(ParserError::InvalidRegex { span: node.span() });
+                .push(AstError::InvalidRegex { span: node.span() });
             return Err(Error("string start must be followed by a string segment"));
         };
         Ok(Regex(self.unescape_regex(node, r)))
@@ -1117,7 +1179,7 @@ impl Parser {
                 Ok(FilterCmp::Is { lhs: lhs?, rhs })
             }
             _ => {
-                self.errors.push(ParserError::UnexpectedSyntaxRule {
+                self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[
                         SyntaxKind::FILTER_CMP_EQ,
                         SyntaxKind::FILTER_CMP_NEQ,
@@ -1171,7 +1233,7 @@ impl Parser {
         self.assert_end(children);
         if filters.is_empty() {
             self.errors
-                .push(ParserError::EmptyFilter { span: node.span() });
+                .push(AstError::EmptyFilter { span: node.span() });
             Err(Error("empty filter"))
         } else {
             Ok(FilterAnd(filters))
@@ -1190,7 +1252,7 @@ impl Parser {
         self.assert_end(children);
         if filters.is_empty() {
             self.errors
-                .push(ParserError::EmptyFilter { span: node.span() });
+                .push(AstError::EmptyFilter { span: node.span() });
             Err(Error("empty filter"))
         } else {
             Ok(FilterOr(filters))
@@ -1232,7 +1294,7 @@ impl Parser {
                 Ident(node.token_string()),
             ]),
             _ => {
-                self.errors.push(ParserError::UnexpectedSyntaxRule {
+                self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[SyntaxKind::FUNCTION_PATH, SyntaxKind::MATH_FN],
                     found: node.kind(),
                     span: node.span(),
@@ -1251,6 +1313,7 @@ impl Parser {
                 let e = self.n(&mut children, &n, SyntaxKind::MAP_MUL)?;
                 let expr = self.expr(&e)?;
                 FunctionCall {
+                    node: n,
                     name: vec![Ident("*".to_string())],
                     args: vec![expr],
                 }
@@ -1260,6 +1323,7 @@ impl Parser {
                 let e = self.n(&mut children, &n, SyntaxKind::MAP_DIV)?;
                 let expr = self.expr(&e)?;
                 FunctionCall {
+                    node: n,
                     name: vec![Ident("/".to_string())],
                     args: vec![expr],
                 }
@@ -1269,6 +1333,7 @@ impl Parser {
                 let e = self.n(&mut children, &n, SyntaxKind::MAP_PLUS)?;
                 let expr = self.expr(&e)?;
                 FunctionCall {
+                    node: n,
                     name: vec![Ident("+".to_string())],
                     args: vec![expr],
                 }
@@ -1278,6 +1343,7 @@ impl Parser {
                 let e = self.n(&mut children, &n, SyntaxKind::MAP_MINUS)?;
                 let expr = self.expr(&e)?;
                 FunctionCall {
+                    node: n,
                     name: vec![Ident("-".to_string())],
                     args: vec![expr],
                 }
@@ -1289,10 +1355,14 @@ impl Parser {
                 while let Some(n) = children.n() {
                     args.push(self.expr(&n)?);
                 }
-                FunctionCall { name, args }
+                FunctionCall {
+                    node: n,
+                    name,
+                    args,
+                }
             }
             found => {
-                self.errors.push(ParserError::UnexpectedSyntaxRule {
+                self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[
                         SyntaxKind::MAP_PLUS,
                         SyntaxKind::MAP_MINUS,
@@ -1324,14 +1394,14 @@ impl Parser {
             i
         } else {
             self.errors
-                .push(ParserError::NegativeDuration { span: n.span() });
+                .push(AstError::NegativeDuration { span: n.span() });
             0
         };
         let n = self.n(&mut children, node, SyntaxKind::TIME_UNIT)?;
         let unit = self.time_unit(&n)?;
         let duration = match unit.as_str() {
             "ms" if i < 1000 => {
-                self.errors.push(ParserError::TimeTooSmall {
+                self.errors.push(AstError::TimeTooSmall {
                     time: i,
                     span: n.span(),
                 });
@@ -1354,7 +1424,7 @@ impl Parser {
             "y" => i * 60 * 60 * 24 * 365,
             _ => {
                 self.errors
-                    .push(ParserError::InvalidTimeUnit { span: n.span() });
+                    .push(AstError::InvalidTimeUnit { span: n.span() });
 
                 return Err(Error("invalid time unit"));
             }
@@ -1390,16 +1460,22 @@ impl Parser {
         if found == "using" {
             let n = self.n(&mut children, node, SyntaxKind::FUNCTION_PATH)?;
             let func = self.function_path(&n)?;
+            self.assert_end(children);
             Ok(Rule::Align {
                 duration: duration?,
-                func,
+                func: FunctionCall {
+                    node: n,
+                    name: func,
+                    args: vec![],
+                },
             })
         } else {
-            self.errors.push(ParserError::UnexpectedKeyword {
+            self.errors.push(AstError::UnexpectedKeyword {
                 expected: "using",
                 found,
                 span: n.span(),
             });
+            self.assert_end(children);
             Err(Error("expected 'using'"))
         }
     }
@@ -1419,18 +1495,36 @@ impl Parser {
         if found == "using" {
             let n = self.n(&mut children, node, SyntaxKind::FUNCTION_PATH)?;
             let func = self.function_path(&n)?;
+            self.assert_end(children);
             Ok(Rule::Group {
                 groups: groups?,
-                func,
+                func: FunctionCall {
+                    node: n,
+                    name: func,
+                    args: vec![],
+                },
             })
         } else {
-            self.errors.push(ParserError::UnexpectedKeyword {
+            self.errors.push(AstError::UnexpectedKeyword {
                 expected: "using",
                 found,
                 span: n.span(),
             });
+            self.assert_end(children);
             Err(Error("expected 'using'"))
         }
+    }
+    fn bucket_args(&mut self, node: &SyntaxNode) -> Result<Vec<Expr>> {
+        self.assert_type(node, SyntaxKind::BUCKET_ARGS)?;
+        let mut res = Vec::new();
+        let mut children = node.children();
+        while let Some(c) = children.n() {
+            if let Ok(arg) = self.expr(&c) {
+                res.push(arg);
+            }
+        }
+        self.assert_end(children);
+        Ok(res)
     }
     fn rule_bucket(&mut self, node: &SyntaxNode) -> Result<Rule> {
         self.assert_type(node, SyntaxKind::BUCKET)?;
@@ -1454,15 +1548,22 @@ impl Parser {
             found = self.kw(&n)?;
         }
         if found == "using" {
-            let n = self.n(&mut children, node, SyntaxKind::FUNCTION_PATH)?;
-            let func = self.function_path(&n)?;
+            let call = self.n(&mut children, node, SyntaxKind::FUNCTION_PATH)?;
+            let func = self.function_path(&call);
+            let n = self.n(&mut children, node, SyntaxKind::BUCKET_ARGS)?;
+            let args = self.bucket_args(&n)?;
+            self.assert_end(children);
             Ok(Rule::Bucket {
                 groups: groups?,
                 duration: duration?,
-                func,
+                func: FunctionCall {
+                    node: call,
+                    name: func?,
+                    args,
+                },
             })
         } else {
-            self.errors.push(ParserError::UnexpectedKeyword {
+            self.errors.push(AstError::UnexpectedKeyword {
                 expected: "using",
                 found,
                 span: n.span(),
@@ -1547,7 +1648,7 @@ impl Parser {
             SyntaxKind::AS => self.rule_as(&r),
             SyntaxKind::EXTEND => self.rule_extend(&r),
             kind => {
-                self.errors.push(ParserError::UnknownRule {
+                self.errors.push(AstError::UnknownRule {
                     kind,
                     span: r.span(),
                 });
@@ -1556,19 +1657,20 @@ impl Parser {
         }
     }
 
-    fn simple_query(&mut self, node: &SyntaxNode) -> Result<SimpleQuery> {
-        self.assert_type(node, SyntaxKind::SIMPLE_QUERY)?;
+    fn simple_query(&mut self, node: SyntaxNode) -> Result<SimpleQuery> {
+        self.assert_type(&node, SyntaxKind::SIMPLE_QUERY)?;
         let mut children = node.children();
 
         let dataset = self
-            .n(&mut children, node, SyntaxKind::IDENT)
+            .n(&mut children, &node, SyntaxKind::IDENT)
             .and_then(|c| self.dataset(&c));
         let metric = self
-            .n(&mut children, node, SyntaxKind::IDENT)
+            .n(&mut children, &node, SyntaxKind::IDENT)
             .and_then(|c| self.ident(&c));
 
         let Some(mut c) = children.n() else {
             return Ok(SimpleQuery {
+                node,
                 dataset: dataset?,
                 metric: metric?,
                 alias: None,
@@ -1578,10 +1680,11 @@ impl Parser {
         let mut alias = Ok(None);
         if c.kind() == SyntaxKind::KEYWORD {
             alias = self
-                .n(&mut children, node, SyntaxKind::IDENT)
+                .n(&mut children, &node, SyntaxKind::IDENT)
                 .and_then(|c| Ok(Some(self.ident(&c)?)));
             let Some(n) = children.n() else {
                 return Ok(SimpleQuery {
+                    node,
                     dataset: dataset?,
                     metric: metric?,
                     alias: alias?,
@@ -1591,17 +1694,18 @@ impl Parser {
             c = n;
         }
         let mut rules = if let Ok(rule) = self.rule(&c) {
-            vec![rule]
+            vec![SyntaxRule { rule, node: c }]
         } else {
             Vec::new()
         };
-        while let Some(c) = children.n() {
-            if let Ok(rule) = self.rule(&c) {
-                rules.push(rule);
+        while let Some(node) = children.n() {
+            if let Ok(rule) = self.rule(&node) {
+                rules.push(SyntaxRule { node, rule });
             }
         }
 
         Ok(SimpleQuery {
+            node,
             dataset: dataset?,
             metric: metric?,
             alias: alias?,
@@ -1609,21 +1713,21 @@ impl Parser {
         })
     }
 
-    fn compute_query(&mut self, node: &SyntaxNode) -> Result<ComputeQuery> {
-        self.assert_type(node, SyntaxKind::COMPUTE_QUERY)?;
+    fn compute_query(&mut self, node: SyntaxNode) -> Result<ComputeQuery> {
+        self.assert_type(&node, SyntaxKind::COMPUTE_QUERY)?;
         let mut children = node.children();
 
         let l = self
-            .n(&mut children, node, SyntaxKind::SIMPLE_QUERY)
+            .n(&mut children, &node, SyntaxKind::SIMPLE_QUERY)
             .and_then(|c| self.query(&c));
         let r = self
-            .n(&mut children, node, SyntaxKind::SIMPLE_QUERY)
+            .n(&mut children, &node, SyntaxKind::SIMPLE_QUERY)
             .and_then(|c| self.query(&c));
         let name = self
-            .n(&mut children, node, SyntaxKind::IDENT)
+            .n(&mut children, &node, SyntaxKind::IDENT)
             .and_then(|c| self.ident(&c));
         let Some(c) = children.n() else {
-            self.errors.push(ParserError::MissingToken {
+            self.errors.push(AstError::MissingToken {
                 expected: SyntaxKind::FUNCTION_PATH,
                 span: node.span(),
             });
@@ -1639,6 +1743,7 @@ impl Parser {
         }
 
         Ok(ComputeQuery {
+            node,
             l: l?,
             r: r?,
             name: name?,
@@ -1653,10 +1758,10 @@ impl Parser {
         let c = self.n(&mut children, node, SyntaxKind::SIMPLE_QUERY)?;
 
         let r = match c.kind() {
-            SyntaxKind::SIMPLE_QUERY => Query::Simple(self.simple_query(&c)?),
-            SyntaxKind::COMPUTE_QUERY => Query::Compute(Box::new(self.compute_query(&c)?)),
+            SyntaxKind::SIMPLE_QUERY => Query::Simple(self.simple_query(c)?),
+            SyntaxKind::COMPUTE_QUERY => Query::Compute(Box::new(self.compute_query(c)?)),
             found => {
-                self.errors.push(ParserError::UnexpectedSyntaxRule {
+                self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[SyntaxKind::SIMPLE_QUERY, SyntaxKind::COMPUTE_QUERY],
                     found,
                     span: c.span(),
@@ -1678,14 +1783,14 @@ impl Parser {
                 let s = node.to_string();
                 let Some(s) = s.strip_prefix('`').and_then(|s| s.strip_suffix('`')) else {
                     self.errors
-                        .push(ParserError::InvalidIdent { span: node.span() });
+                        .push(AstError::InvalidIdent { span: node.span() });
                     return Err(Error("string start must be followed by a string segment"));
                 };
 
                 self.unescape_ident(&node, s)
             }
             found => {
-                self.errors.push(ParserError::UnexpectedSyntaxRule {
+                self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[SyntaxKind::LX_IDENT, SyntaxKind::LX_ESCAPED_IDENT],
                     found,
                     span: node.span(),
@@ -1710,7 +1815,7 @@ impl Parser {
                 let s = node.token_string();
                 let Some(s) = s.strip_prefix('$') else {
                     self.errors
-                        .push(ParserError::InvalidVariable { span: node.span() });
+                        .push(AstError::InvalidVariable { span: node.span() });
                     return Err(Error("string start must be followed by a string segment"));
                 };
 
@@ -1720,13 +1825,13 @@ impl Parser {
                 let s = node.token_string();
                 let Some(s) = s.strip_prefix("$`").and_then(|s| s.strip_suffix('`')) else {
                     self.errors
-                        .push(ParserError::InvalidVariable { span: node.span() });
+                        .push(AstError::InvalidVariable { span: node.span() });
                     return Err(Error("string start must be followed by a string segment"));
                 };
                 self.unescape_ident(&node, s)
             }
             found => {
-                self.errors.push(ParserError::UnexpectedSyntaxRule {
+                self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[SyntaxKind::LX_VARIABLE, SyntaxKind::LX_ESCAPED_VARIABLE],
                     found,
                     span: node.span(),
@@ -1751,7 +1856,7 @@ impl Parser {
             "false" => Ok(TagValue::Bool(false)),
             _ => {
                 self.errors
-                    .push(ParserError::InvalidBoolConstant { span: node.span() });
+                    .push(AstError::InvalidBoolConstant { span: node.span() });
                 Err(Error("unexpected syntax"))
             }
         }
@@ -1768,7 +1873,7 @@ impl Parser {
         let r = match c.kind() {
             k if k == kind => Ok(c.token_string()),
             found => {
-                self.errors.push(ParserError::UnexpectedSyntaxRuleOne {
+                self.errors.push(AstError::UnexpectedSyntaxRuleOne {
                     expected: kind,
                     found,
                     span: c.span(),
@@ -1787,7 +1892,7 @@ impl Parser {
             Ok(TagValue::Int(value))
         } else {
             self.errors
-                .push(ParserError::InvalidIntegerConstant { span: node.span() });
+                .push(AstError::InvalidIntegerConstant { span: node.span() });
             Err(Error("invalid integer"))
         }
     }
@@ -1808,13 +1913,13 @@ impl Parser {
                     Ok(TagValue::Float(value))
                 } else {
                     self.errors
-                        .push(ParserError::InvalidFloatConstant { span: node.span() });
+                        .push(AstError::InvalidFloatConstant { span: node.span() });
                     Err(Error("invalid integer"))
                 }
             }
             SyntaxKind::LX_INF => Ok(TagValue::Float(f64::INFINITY)),
             found => {
-                self.errors.push(ParserError::UnexpectedSyntaxRule {
+                self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[SyntaxKind::LX_FLOAT, SyntaxKind::LX_INF],
                     found,
                     span: c.span(),
@@ -1831,7 +1936,7 @@ impl Parser {
         let s = node.token_string();
         let Some(s) = s.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
             self.errors
-                .push(ParserError::InvalidString { span: node.span() });
+                .push(AstError::InvalidString { span: node.span() });
             return Err(Error("string start must be followed by a string segment"));
         };
 
@@ -1839,7 +1944,7 @@ impl Parser {
         match s.try_into() {
             Ok(s) => Ok(TagValue::String(s)),
             Err(e) => {
-                self.errors.push(ParserError::FailedToCreateString {
+                self.errors.push(AstError::FailedToCreateString {
                     error: e,
                     span: node.span(),
                 });
@@ -1855,8 +1960,7 @@ impl Parser {
         let r = if n.kind() == SyntaxKind::CONST {
             self.constant(&n)
         } else {
-            self.errors
-                .push(ParserError::ExpectedConst { span: n.span() });
+            self.errors.push(AstError::ExpectedConst { span: n.span() });
             Err(Error("expected const"))
         };
         self.assert_end(children);
@@ -1887,7 +1991,7 @@ impl Parser {
             SyntaxKind::ARRAY => self.array_const(&c),
             SyntaxKind::NULL => self.null_const(&c),
             found => {
-                self.errors.push(ParserError::UnexpectedSyntaxRule {
+                self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[
                         SyntaxKind::INTEGER,
                         SyntaxKind::FLOAT,
@@ -1935,7 +2039,7 @@ impl Parser {
             "array" => Ok(TagType::Array),
             "null" => Ok(TagType::Null),
             _ => {
-                self.errors.push(ParserError::InvalidType {
+                self.errors.push(AstError::InvalidType {
                     span: node.span(),
                     t,
                 });
@@ -1960,7 +2064,7 @@ impl Parser {
                     "Regex" => Ok(ParamType::Terminal(TerminalParamType::Regex)),
                     // "Timestamp" => Ok(ParamType::Terminal(TerminalParamType::Timestamp)),
                     _ => {
-                        self.errors.push(ParserError::InvalidType {
+                        self.errors.push(AstError::InvalidType {
                             span: node.span(),
                             t,
                         });
@@ -1971,7 +2075,7 @@ impl Parser {
             SyntaxKind::OPTION_TYPE => {
                 let mut children = c.children();
                 let Some(inner) = children.n() else {
-                    self.errors.push(ParserError::MissingToken {
+                    self.errors.push(AstError::MissingToken {
                         expected: SyntaxKind::TYPE,
                         span: node.span(),
                     });
@@ -1979,13 +2083,13 @@ impl Parser {
                 };
                 let ParamType::Terminal(inner) = self.typ(&inner)? else {
                     self.errors
-                        .push(ParserError::NestedOption { span: inner.span() });
+                        .push(AstError::NestedOption { span: inner.span() });
                     return Err(Error("invalid option type"));
                 };
                 Ok(ParamType::Optional(inner))
             }
             _ => {
-                self.errors.push(ParserError::InvalidType {
+                self.errors.push(AstError::InvalidType {
                     span: node.span(),
                     t: c.token_string(),
                 });
@@ -1994,28 +2098,28 @@ impl Parser {
         }
     }
 
-    fn param(&mut self, node: &SyntaxNode) -> Result<Param> {
-        self.assert_type(node, SyntaxKind::PARAM)?;
+    fn param(&mut self, node: SyntaxNode) -> Result<Param> {
+        self.assert_type(&node, SyntaxKind::PARAM)?;
         let mut children = node.children();
-        let name = self.require_variable(node, &mut children)?;
+        let name = self.require_variable(&node, &mut children)?;
 
         let ty = if let Some(c) = children.n() {
             self.typ(&c)?
         } else {
-            self.errors.push(ParserError::MissingToken {
+            self.errors.push(AstError::MissingToken {
                 expected: SyntaxKind::TYPE,
                 span: node.span(),
             });
             return Err(Error("missing type"));
         };
         self.assert_end(children);
-        Ok(Param { name, ty })
+        Ok(Param { node, name, ty })
     }
 
-    fn directive(&mut self, node: &SyntaxNode) -> Result<Directive> {
-        self.assert_type(node, SyntaxKind::DIRECTIVE)?;
+    fn directive(&mut self, node: SyntaxNode) -> Result<Directive> {
+        self.assert_type(&node, SyntaxKind::DIRECTIVE)?;
         let mut children = node.children();
-        let name = self.require_ident(node, &mut children)?;
+        let name = self.require_ident(&node, &mut children)?;
 
         let value = if let Some(c) = children.n() {
             Some(self.constant(&c)?)
@@ -2023,7 +2127,7 @@ impl Parser {
             None
         };
         self.assert_end(children);
-        Ok(Directive { name, value })
+        Ok(Directive { node, name, value })
     }
 
     /// Lower the Syntax Tree
@@ -2034,13 +2138,13 @@ impl Parser {
             // collect multiple errors before returning.
             match child.kind() {
                 SyntaxKind::DIRECTIVE => {
-                    if let Ok(d) = self.directive(&child) {
+                    if let Ok(d) = self.directive(child) {
                         self.parts.push(Part::Directive(d));
                     }
                 }
 
                 SyntaxKind::PARAM => {
-                    if let Ok(p) = self.param(&child) {
+                    if let Ok(p) = self.param(child) {
                         self.parts.push(Part::Param(p));
                     }
                 }
@@ -2051,7 +2155,7 @@ impl Parser {
                 }
                 k if k.is_trivia() => {}
                 k => {
-                    self.errors.push(ParserError::UnexpectedSyntaxRule {
+                    self.errors.push(AstError::UnexpectedSyntaxRule {
                         expected: &[SyntaxKind::DIRECTIVE, SyntaxKind::PARAM, SyntaxKind::QUERY],
                         found: k,
                         span: child.span(),
