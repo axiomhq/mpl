@@ -142,7 +142,9 @@ pub enum SyntaxKind {
     FILTER_CMP_GTE,
     FILTER_CMP_IN,
     FILTER_CMP_IS,
+    FUNCTION_CALL,
     FUNCTION_PATH,
+    FUNCTION_ARGS,
     MATH_FN,
     DURATION,
     TIME_UNIT,
@@ -180,7 +182,6 @@ pub enum SyntaxKind {
     AS,
     GROUP,
     BUCKET,
-    BUCKET_ARGS,
 
     /// invalid in the syntax tree but valid as a token
     INVALID,
@@ -541,11 +542,31 @@ impl Parser<'_> {
             s.keyword_token("using");
             let tkn = s.peek();
             match tkn.tpe() {
-                TokenType::Ident | TokenType::EscapedIdent => s.function_path(),
-                TokenType::Plus => s.node(MATH_FN, |s| s.eat_token_type(TokenType::Plus)),
-                TokenType::Minus => s.node(MATH_FN, |s| s.eat_token_type(TokenType::Minus)),
-                TokenType::Mul => s.node(MATH_FN, |s| s.eat_token_type(TokenType::Mul)),
-                TokenType::Div => s.node(MATH_FN, |s| s.eat_token_type(TokenType::Div)),
+                TokenType::Ident | TokenType::EscapedIdent => s.function_call(),
+                TokenType::Plus => s.node(FUNCTION_CALL, |s| {
+                    s.node(MATH_FN, |s| {
+                        s.eat_token_type(TokenType::Plus);
+                    });
+                    s.node(FUNCTION_ARGS, |_| {});
+                }),
+                TokenType::Minus => s.node(FUNCTION_CALL, |s| {
+                    s.node(MATH_FN, |s| {
+                        s.eat_token_type(TokenType::Minus);
+                    });
+                    s.node(FUNCTION_ARGS, |_| {});
+                }),
+                TokenType::Mul => s.node(FUNCTION_CALL, |s| {
+                    s.node(MATH_FN, |s| {
+                        s.eat_token_type(TokenType::Mul);
+                    });
+                    s.node(FUNCTION_ARGS, |_| {});
+                }),
+                TokenType::Div => s.node(FUNCTION_CALL, |s| {
+                    s.node(MATH_FN, |s| {
+                        s.eat_token_type(TokenType::Div);
+                    });
+                    s.node(FUNCTION_ARGS, |_| {});
+                }),
                 _ => s.error("expected compute function"),
             }
             s.rules();
@@ -977,13 +998,8 @@ impl Parser<'_> {
                         s.expr();
                     });
                 }
-
                 _ => {
-                    s.function_path();
-                    if s.try_structural(TokenType::LParen) {
-                        s.expr();
-                        s.structural(TokenType::RParen);
-                    }
+                    s.function_call();
                 }
             }
         });
@@ -1007,7 +1023,7 @@ impl Parser<'_> {
                 s.duration();
             }
             s.keyword("using");
-            s.function_path();
+            s.function_call();
         });
     }
 
@@ -1039,7 +1055,7 @@ impl Parser<'_> {
                 s.tag_list();
             }
             s.keyword("using");
-            s.function_path();
+            s.function_call();
         });
     }
 
@@ -1053,23 +1069,7 @@ impl Parser<'_> {
                 s.duration();
             }
             s.keyword("using");
-            s.function_path();
-            s.structural(TokenType::LParen);
-            if s.is_structural(TokenType::RParen) {
-                s.node(BUCKET_ARGS, |_| {});
-            } else {
-                s.bucket_args();
-            }
-            s.structural(TokenType::RParen);
-        });
-    }
-
-    fn bucket_args(&mut self) {
-        self.node(BUCKET_ARGS, |s| {
-            s.expr();
-            while s.try_structural(TokenType::Comma) {
-                s.expr();
-            }
+            s.function_call();
         });
     }
 
@@ -1130,6 +1130,21 @@ impl Parser<'_> {
             } else {
                 s.error("expected otel type ident");
             }
+        });
+    }
+
+    fn function_call(&mut self) {
+        self.node(FUNCTION_CALL, |s| {
+            s.function_path();
+            s.node(FUNCTION_ARGS, |s| {
+                if s.try_structural(TokenType::LParen) && !s.try_structural(TokenType::RParen) {
+                    s.expr();
+                    while s.try_structural(TokenType::Comma) {
+                        s.expr();
+                    }
+                    s.structural(TokenType::RParen);
+                }
+            });
         });
     }
 }

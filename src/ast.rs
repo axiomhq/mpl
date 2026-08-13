@@ -772,7 +772,7 @@ pub struct ComputeQuery {
     /// metric name of the resulting combined series
     pub name: Ident,
     /// Combination function
-    pub func: Vec<Ident>,
+    pub func: FunctionCall,
     /// rules following the compute statement
     pub rules: Vec<Rule>,
 }
@@ -1277,6 +1277,7 @@ impl Parser {
         self.assert_end(children);
         Ok(Rule::Sample(f))
     }
+
     fn function_path(&mut self, node: &SyntaxNode) -> Result<Vec<Ident>> {
         match node.kind() {
             SyntaxKind::FUNCTION_PATH => {
@@ -1349,18 +1350,7 @@ impl Parser {
                 }
             }
 
-            SyntaxKind::FUNCTION_PATH => {
-                let name = self.function_path(&n)?;
-                let mut args = Vec::new();
-                while let Some(n) = children.n() {
-                    args.push(self.expr(&n)?);
-                }
-                FunctionCall {
-                    node: n,
-                    name,
-                    args,
-                }
-            }
+            SyntaxKind::FUNCTION_CALL => self.function_call(n)?,
             found => {
                 self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[
@@ -1458,16 +1448,12 @@ impl Parser {
             found = self.kw(&n)?;
         }
         if found == "using" {
-            let n = self.n(&mut children, node, SyntaxKind::FUNCTION_PATH)?;
-            let func = self.function_path(&n)?;
+            let n = self.n(&mut children, node, SyntaxKind::FUNCTION_CALL)?;
+            let func = self.function_call(n)?;
             self.assert_end(children);
             Ok(Rule::Align {
                 duration: duration?,
-                func: FunctionCall {
-                    node: n,
-                    name: func,
-                    args: vec![],
-                },
+                func,
             })
         } else {
             self.errors.push(AstError::UnexpectedKeyword {
@@ -1493,16 +1479,12 @@ impl Parser {
             found = self.kw(&n)?;
         }
         if found == "using" {
-            let n = self.n(&mut children, node, SyntaxKind::FUNCTION_PATH)?;
-            let func = self.function_path(&n)?;
+            let n = self.n(&mut children, node, SyntaxKind::FUNCTION_CALL)?;
+            let func = self.function_call(n)?;
             self.assert_end(children);
             Ok(Rule::Group {
                 groups: groups?,
-                func: FunctionCall {
-                    node: n,
-                    name: func,
-                    args: vec![],
-                },
+                func,
             })
         } else {
             self.errors.push(AstError::UnexpectedKeyword {
@@ -1514,8 +1496,8 @@ impl Parser {
             Err(Error("expected 'using'"))
         }
     }
-    fn bucket_args(&mut self, node: &SyntaxNode) -> Result<Vec<Expr>> {
-        self.assert_type(node, SyntaxKind::BUCKET_ARGS)?;
+    fn function_args(&mut self, node: &SyntaxNode) -> Result<Vec<Expr>> {
+        self.assert_type(node, SyntaxKind::FUNCTION_ARGS)?;
         let mut res = Vec::new();
         let mut children = node.children();
         while let Some(c) = children.n() {
@@ -1525,6 +1507,21 @@ impl Parser {
         }
         self.assert_end(children);
         Ok(res)
+    }
+    fn function_call(&mut self, node: SyntaxNode) -> Result<FunctionCall> {
+        self.assert_type(&node, SyntaxKind::FUNCTION_CALL)?;
+        let mut children = node.children();
+        let name = self
+            .n(&mut children, &node, SyntaxKind::FUNCTION_PATH)
+            .and_then(|node| self.function_path(&node));
+        let n = self.n(&mut children, &node, SyntaxKind::FUNCTION_PATH)?;
+        let args = self.function_args(&n)?;
+        self.assert_end(children);
+        Ok(FunctionCall {
+            node,
+            name: name?,
+            args,
+        })
     }
     fn rule_bucket(&mut self, node: &SyntaxNode) -> Result<Rule> {
         self.assert_type(node, SyntaxKind::BUCKET)?;
@@ -1548,19 +1545,13 @@ impl Parser {
             found = self.kw(&n)?;
         }
         if found == "using" {
-            let call = self.n(&mut children, node, SyntaxKind::FUNCTION_PATH)?;
-            let func = self.function_path(&call);
-            let n = self.n(&mut children, node, SyntaxKind::BUCKET_ARGS)?;
-            let args = self.bucket_args(&n)?;
+            let call = self.n(&mut children, node, SyntaxKind::FUNCTION_CALL)?;
+            let func = self.function_call(call)?;
             self.assert_end(children);
             Ok(Rule::Bucket {
                 groups: groups?,
                 duration: duration?,
-                func: FunctionCall {
-                    node: call,
-                    name: func?,
-                    args,
-                },
+                func,
             })
         } else {
             self.errors.push(AstError::UnexpectedKeyword {
@@ -1728,13 +1719,13 @@ impl Parser {
             .and_then(|c| self.ident(&c));
         let Some(c) = children.n() else {
             self.errors.push(AstError::MissingToken {
-                expected: SyntaxKind::FUNCTION_PATH,
+                expected: SyntaxKind::FUNCTION_CALL,
                 span: node.span(),
             });
             return Err(Error("expected compute function"));
         };
 
-        let func = self.function_path(&c);
+        let func = self.function_call(c);
         let mut rules = vec![];
         while let Some(c) = children.n() {
             if let Ok(rule) = self.rule(&c) {
