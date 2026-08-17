@@ -105,8 +105,8 @@ fn unknown_escapes<T>(
         .warnings
         .iter()
         .filter_map(|w| match w {
-            ParserWarning::UnknownEscapeSequence { char, .. } => Some(*char),
-            ParserWarning::TimeNotSecondAligned { .. } => None,
+            AstWarning::UnknownEscapeSequence { char, .. } => Some(*char),
+            AstWarning::TimeNotSecondAligned { .. } => None,
         })
         .collect()
 }

@@ -14,6 +14,8 @@ pub mod ast;
 /// The lexer for the MPL query language.
 pub mod lexer;
 mod parser;
+/// new v2 parser
+pub mod parser2;
 /// rowan syntax tree for the MPL query language.
 pub mod syntax_tree;
 pub use parser::{MPLParser, Rule};
