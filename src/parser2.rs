@@ -13,7 +13,7 @@ use crate::{
     query::{
         self, Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter,
         FilterOrIfDef, GroupBy, MetricId, ParamDeclaration, ParamType, Params, RelativeTime,
-        Source, TagExtend, TagType, TimeUnit,
+        Source, TagExtend, TagType, TerminalParamType, TimeUnit,
     },
     tags::TagValue,
     types::{BucketSpec, Dataset, Metric, Parameterized},
@@ -767,10 +767,65 @@ impl QueryParser {
     }
     fn filter_cmp(&self, f: FilterCmp) -> Result<Filter> {
         let r = match f {
+            FilterCmp::Eq {
+                lhs,
+                rhs:
+                    SyntaxExpr {
+                        node,
+                        expr: ast::Expr::Var(v),
+                    },
+            } => {
+                let decl = self.get_param_decl(&v)?;
+                if decl.typ() == TerminalParamType::Regex {
+                    Filter::Cmp {
+                        field: lhs.into_string(),
+                        rhs: Cmp::RegEx(Parameterized::Param {
+                            span: node.span(),
+                            param: decl,
+                        }),
+                    }
+                } else {
+                    Filter::Cmp {
+                        field: lhs.into_string(),
+                        rhs: Cmp::Eq(self.parse_expr(SyntaxExpr {
+                            node,
+                            expr: ast::Expr::Var(v),
+                        })?),
+                    }
+                }
+            }
             FilterCmp::Eq { lhs, rhs } => Filter::Cmp {
                 field: lhs.into_string(),
                 rhs: Cmp::Eq(self.parse_expr(rhs)?),
             },
+            FilterCmp::Neq {
+                lhs,
+                rhs:
+                    SyntaxExpr {
+                        node,
+                        expr: ast::Expr::Var(v),
+                    },
+            } => {
+                let decl = self.get_param_decl(&v)?;
+                if decl.typ() == TerminalParamType::Regex {
+                    Filter::Cmp {
+                        field: lhs.into_string(),
+                        rhs: Cmp::RegExNot(Parameterized::Param {
+                            span: node.span(),
+                            param: decl,
+                        }),
+                    }
+                } else {
+                    Filter::Cmp {
+                        field: lhs.into_string(),
+                        rhs: Cmp::Ne(self.parse_expr(SyntaxExpr {
+                            node,
+                            expr: ast::Expr::Var(v),
+                        })?),
+                    }
+                }
+            }
+
             FilterCmp::Neq { lhs, rhs } => Filter::Cmp {
                 field: lhs.into_string(),
                 rhs: Cmp::Ne(self.parse_expr(rhs)?),
