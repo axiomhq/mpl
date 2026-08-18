@@ -1,0 +1,256 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "MPL",
+  "scopeName": "source.mpl",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#regexes" },
+    { "include": "#parameters" },
+    { "include": "#numbers" },
+    { "include": "#types" },
+    { "include": "#keywords" },
+    { "include": "#operators" },
+    { "include": "#metric-names" },
+    { "include": "#identifiers" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.mpl",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.escaped.mpl",
+          "begin": "`",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.variable.begin.mpl" }
+          },
+          "end": "`",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.variable.end.mpl" }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.mpl",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "entity.name.function.mpl",
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*(::[a-zA-Z_][a-zA-Z0-9_]*)*\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.mpl",
+          "match": "\\b(ifdef|else)\\b"
+        },
+        {
+          "name": "keyword.operator.word.mpl",
+          "match": "\\b(and|or|not|is)\\b"
+        },
+        {
+          "name": "keyword.other.mpl",
+          "match": "\\b(align|as|bucket|by|compute|extend|filter|from|group|join|map|over|param|replace|sample|set|to|using|where)\\b"
+        },
+        {
+          "name": "support.function.mpl",
+          "match": "\\b(histogram|interpolate_delta_histogram|interpolate_cumulative_histogram|rate|increase)\\b"
+        }
+      ]
+    },
+    "metric-names": {
+      "patterns": [
+        {
+          "name": "meta.metric-name.escaped.mpl",
+          "begin": "(:)(`)",
+          "beginCaptures": {
+            "1": { "name": "punctuation.separator.metric.mpl" },
+            "2": { "name": "punctuation.definition.variable.begin.mpl" }
+          },
+          "end": "`",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.variable.end.mpl" }
+          },
+          "patterns": [
+            {
+              "name": "entity.name.type.metric.mpl",
+              "match": "[^`\\\\]+"
+            },
+            {
+              "name": "constant.character.escape.mpl",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "meta.metric-name.mpl",
+          "match": "(:)([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "punctuation.separator.metric.mpl" },
+            "2": { "name": "entity.name.type.metric.mpl" }
+          }
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.mpl",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.numeric.time.mpl",
+          "match": "\\b[0-9]+(ms|s|m|h|d|w|M|y)\\b"
+        },
+        {
+          "name": "constant.numeric.datetime.mpl",
+          "match": "\\b[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z?\\b"
+        },
+        {
+          "name": "constant.numeric.mpl",
+          "match": "\\b[-+]?[0-9]+(\\.[0-9]*)?([eE][-+]?[0-9]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.infinity.mpl",
+          "match": "\\b[-+]?inf\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.comparison.mpl",
+          "match": "==|!=|<=|>=|<|>"
+        },
+        {
+          "name": "keyword.operator.assignment.mpl",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.arithmetic.mpl",
+          "match": "\\+|-|\\*|/|~"
+        },
+        {
+          "name": "keyword.operator.pipe.mpl",
+          "match": "\\|"
+        }
+      ]
+    },
+    "parameters": {
+      "patterns": [
+        {
+          "name": "variable.parameter.mpl",
+          "match": "\\$[a-zA-Z_][a-zA-Z0-9_]*"
+        },
+        {
+          "name": "variable.parameter.escaped.mpl",
+          "begin": "\\$`",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.variable.begin.mpl" }
+          },
+          "end": "`",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.variable.end.mpl" }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.mpl",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.mpl",
+          "match": ",|:|;"
+        },
+        {
+          "name": "punctuation.section.mpl",
+          "match": "\\(|\\)|\\{|\\}|\\[|\\]"
+        },
+        {
+          "name": "keyword.operator.range.mpl",
+          "match": "\\.\\."
+        }
+      ]
+    },
+    "regexes": {
+      "patterns": [
+        {
+          "name": "string.regexp.replace.mpl",
+          "begin": "#s/",
+          "end": "/",
+          "patterns": [
+            {
+              "name": "constant.character.escape.mpl",
+              "match": "\\\\."
+            },
+            {
+              "name": "punctuation.separator.regex-replace.mpl",
+              "match": "/"
+            }
+          ]
+        },
+        {
+          "name": "string.regexp.mpl",
+          "begin": "#/",
+          "end": "/",
+          "patterns": [
+            {
+              "name": "constant.character.escape.mpl",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.mpl",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.mpl",
+              "match": "\\\\."
+            },
+            {
+              "name": "meta.interpolation.mpl",
+              "begin": "\\$\\{",
+              "end": "\\}",
+              "patterns": [
+                { "include": "#parameters" },
+                { "include": "#numbers" },
+                { "include": "#operators" },
+                { "include": "#identifiers" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.mpl",
+          "match": "\\b(Dataset|Duration|Regex|Option|string|int|float|bool|duration)\\b"
+        }
+      ]
+    }
+  }
+}

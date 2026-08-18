@@ -6,7 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 # Make sure release jobs are only ever run once at a time (and are never
@@ -25,12 +25,21 @@ jobs:
 
           export RELEASE_VERSION="${GITHUB_REF#refs/*/v}"
           export CRATE_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r .packages[0].version)"
+          export LSP_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "mpl-language-server") | .version')"
           export CODEMIRROR_VERSION="$(jq -r .version packages/mpl-codemirror/package.json)"
           if [ "$CRATE_VERSION" != "$RELEASE_VERSION" ]; then
             echo "Version mismatch! Release is at $RELEASE_VERSION, crate is at $CRATE_VERSION"
             exit 1
+          elif [ "$LSP_VERSION" != "$RELEASE_VERSION" ]; then
+            echo "Version mismatch! Release is at $RELEASE_VERSION, mpl-language-server is at $LSP_VERSION"
+            exit 1
           elif [ "$CODEMIRROR_VERSION" != "$RELEASE_VERSION" ]; then
             echo "Version mismatch! Release is at $RELEASE_VERSION, mpl-codemirror is at $CODEMIRROR_VERSION"
+            exit 1
+          fi
+          export VSCODE_VERSION="$(jq -r .version packages/mpl-vscode/package.json)"
+          if [ "$VSCODE_VERSION" != "$RELEASE_VERSION" ]; then
+            echo "Version mismatch! Release is at $RELEASE_VERSION, mpl-vscode is at $VSCODE_VERSION"
             exit 1
           fi
   publish-npm:
@@ -84,3 +93,189 @@ jobs:
       - run: cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+  package-vscode:
+    name: package VS Code (${{ matrix.vscode-target }})
+    needs: [check-versions]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            vscode-target: linux-x64
+            rust-target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            vscode-target: linux-arm64
+            rust-target: aarch64-unknown-linux-gnu
+          - os: ubuntu-latest
+            vscode-target: linux-armhf
+            rust-target: armv7-unknown-linux-gnueabihf
+          - os: ubuntu-latest
+            vscode-target: alpine-x64
+            rust-target: x86_64-unknown-linux-musl
+          - os: ubuntu-latest
+            vscode-target: alpine-arm64
+            rust-target: aarch64-unknown-linux-musl
+          - os: macos-15-intel
+            vscode-target: darwin-x64
+            rust-target: x86_64-apple-darwin
+          - os: macos-14
+            vscode-target: darwin-arm64
+            rust-target: aarch64-apple-darwin
+          - os: windows-2022
+            vscode-target: win32-x64
+            rust-target: x86_64-pc-windows-msvc
+          - os: windows-2022
+            vscode-target: win32-arm64
+            rust-target: aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.rust-target }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - name: Install Linux ARMHF linker
+        if: matrix.rust-target == 'armv7-unknown-linux-gnueabihf'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf
+      - name: Build language server
+        id: build-lsp
+        run: |
+          set -euo pipefail
+
+          cargo build \
+            --release \
+            -p mpl-language-server \
+            --features lsp-bin \
+            --bin mpl-lsp \
+            --target "${{ matrix.rust-target }}" \
+            --message-format=json \
+            | tee cargo-build.jsonl
+
+          binary="$(
+            jq -r '
+              select(.reason == "compiler-artifact")
+              | select(.target.name == "mpl-lsp")
+              | select(.executable != null)
+              | .executable
+            ' cargo-build.jsonl | tail -n 1
+          )"
+
+          if [ -z "$binary" ] || [ ! -f "$binary" ]; then
+            echo "Could not find built mpl-lsp executable in Cargo JSON output" >&2
+            exit 1
+          fi
+
+          echo "binary=$binary" >> "$GITHUB_OUTPUT"
+        shell: bash
+        env:
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+      - name: Type-check extension
+        run: npm run check -w mpl-vscode
+      - name: Build extension
+        run: npm run build -w mpl-vscode
+      - name: Stage language server
+        run: npm run stage -w mpl-vscode -- "${{ steps.build-lsp.outputs.binary }}"
+        shell: bash
+      - name: Package language server binary
+        run: |
+          set -euo pipefail
+
+          binary="$(find packages/mpl-vscode/server -maxdepth 1 -type f -name 'mpl-lsp*' | head -n 1)"
+          if [ -z "$binary" ]; then
+            echo "Could not find staged mpl-lsp binary" >&2
+            exit 1
+          fi
+
+          asset_name="mpl-lsp-${{ matrix.vscode-target }}"
+          if [[ "$binary" == *.exe ]]; then
+            asset_name="${asset_name}.exe"
+          fi
+
+          mkdir -p lsp-release
+          cp "$binary" "lsp-release/$asset_name"
+        shell: bash
+      - name: Package VSIX
+        working-directory: packages/mpl-vscode
+        run: |
+          npx vsce package \
+            --target "${{ matrix.vscode-target }}" \
+            --no-dependencies \
+            --out "mpl-vscode-${{ matrix.vscode-target }}.vsix"
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        id: upload-vsix
+        with:
+          name: mpl-vscode-${{ matrix.vscode-target }}
+          path: packages/mpl-vscode/mpl-vscode-${{ matrix.vscode-target }}.vsix
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        id: upload-lsp
+        with:
+          name: mpl-lsp-${{ matrix.vscode-target }}
+          path: lsp-release/*
+          if-no-files-found: error
+      - name: Add artifact links to summary
+        if: steps.upload-vsix.outputs.artifact-url != '' || steps.upload-lsp.outputs.artifact-url != ''
+        run: |
+          echo "### ${{ matrix.vscode-target }} artifacts" >> "$GITHUB_STEP_SUMMARY"
+          echo "- [VSIX](${{ steps.upload-vsix.outputs.artifact-url }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "- [mpl-lsp](${{ steps.upload-lsp.outputs.artifact-url }})" >> "$GITHUB_STEP_SUMMARY"
+  upload-vscode-release:
+    name: upload VS Code VSIXes and LSP binaries to GitHub Release
+    runs-on: ubuntu-latest
+    needs: [package-vscode]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          path: vscode-vsix
+          pattern: mpl-vscode-*
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          path: lsp-release
+          pattern: mpl-lsp-*
+          merge-multiple: true
+      - name: Create GitHub Release
+        run: |
+          set -euo pipefail
+
+          if gh release view "$GITHUB_REF_NAME"; then
+            echo "GitHub Release $GITHUB_REF_NAME already exists"
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes ""
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+
+          mkdir -p release-assets
+          cp vscode-vsix/*.vsix release-assets/
+          cp lsp-release/* release-assets/
+          (
+            cd release-assets
+            sha256sum * | sort -k2
+          ) > SHA256SUMS
+      - name: Upload VSIX files to GitHub Release
+        run: gh release upload "$GITHUB_REF_NAME" vscode-vsix/*.vsix --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Upload LSP binaries to GitHub Release
+        run: gh release upload "$GITHUB_REF_NAME" lsp-release/* --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Upload checksums to GitHub Release
+        run: gh release upload "$GITHUB_REF_NAME" SHA256SUMS --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
