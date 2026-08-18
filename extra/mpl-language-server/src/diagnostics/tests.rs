@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use mpl_lang::query::{WarningReason, Warnings};
-use mpl_lang::{CompileError, compile};
+use mpl_lang::{CompileError, compile, compile2};
 
 use crate::diagnostics::{DiagnosticItem, Severity, maybe_rewrite_escaped_dataset_error};
 
@@ -12,6 +12,7 @@ fn diagnostic_items(q: &str) -> Vec<DiagnosticItem> {
         Err(CompileError::Type(error)) => crate::diagnostics::type_error_diagnostic_items(&error),
         Err(CompileError::Group(error)) => crate::diagnostics::group_error_diagnostic_items(&error),
         Err(CompileError::Ifdef(error)) => crate::diagnostics::ifdef_error_diagnostic_items(&error),
+        Err(CompileError::ParserV2(_)) => panic!("`compile` does not run the v2 parser"),
     }
 }
 
@@ -97,6 +98,7 @@ fn type_error_puts_error_on_use_and_info_on_declaration() {
         Err(CompileError::Type(error)) => crate::diagnostics::type_error_diagnostic_items(&error),
         Err(CompileError::Group(error)) => crate::diagnostics::group_error_diagnostic_items(&error),
         Err(CompileError::Ifdef(_)) => panic!("should be a type error, not ifdef error"),
+        Err(CompileError::ParserV2(_)) => panic!("`compile` does not run the v2 parser"),
     };
 
     assert_eq!(items.len(), 2, "should produce two diagnostics");
@@ -350,6 +352,7 @@ fn assert_parse_error(query: &str, expected_from: usize, expected_to: usize) {
         Err(CompileError::Type(_) | CompileError::Group(_) | CompileError::Ifdef(_)) => {
             panic!("'{query}' should be a parse error, not type/group/ifdef error")
         }
+        Err(CompileError::ParserV2(_)) => panic!("`compile` does not run the v2 parser"),
     };
     assert_eq!(
         items.len(),
@@ -430,6 +433,7 @@ fn diagnostics_for(query: &str) -> Vec<DiagnosticItem> {
         Err(CompileError::Type(_) | CompileError::Group(_) | CompileError::Ifdef(_)) => {
             panic!("'{query}' should be a parse error, not type/group/ifdef error")
         }
+        Err(CompileError::ParserV2(_)) => panic!("`compile` does not run the v2 parser"),
     }
 }
 
@@ -500,6 +504,7 @@ fn diagnostic_items_with_params(
         Err(CompileError::Type(error)) => crate::diagnostics::type_error_diagnostic_items(&error),
         Err(CompileError::Group(error)) => crate::diagnostics::group_error_diagnostic_items(&error),
         Err(CompileError::Ifdef(error)) => crate::diagnostics::ifdef_error_diagnostic_items(&error),
+        Err(CompileError::ParserV2(_)) => panic!("`compile` does not run the v2 parser"),
     }
 }
 
@@ -577,5 +582,81 @@ fn system_param_missing_prefix_is_reported() {
         items.iter().any(|i| i.message.contains("interval")),
         "missing-prefix error should mention the offending name, got messages: {:?}",
         items.iter().map(|i| &i.message).collect::<Vec<_>>()
+    );
+}
+
+// ── v2 parser errors and warnings ────────────────────────────────
+
+/// A v2 parser error reaches the editor anchored to the token it is about.
+/// Driven through `compile2` rather than a hand-built error, so the offsets
+/// asserted here are the ones a user would see highlighted.
+#[test]
+fn a_parser_v2_error_is_anchored_to_its_token() {
+    let query = "d:m | map unknownfn()";
+    let Err(CompileError::ParserV2(errors)) = compile2(query, HashMap::new()) else {
+        panic!("{query:?} should fail in the v2 parser")
+    };
+
+    let items = crate::diagnostics::parser_v2_error_diagnostic_items(&errors);
+
+    assert_eq!(items.len(), 1, "one error should yield one diagnostic");
+    assert!(matches!(items[0].severity, Severity::Error));
+    assert_eq!(
+        (items[0].span.from, items[0].span.to),
+        (10, 21),
+        "the diagnostic should cover `unknownfn()`"
+    );
+    assert!(
+        items[0].message.contains("unknownfn"),
+        "the message should name the function: {:?}",
+        items[0].message
+    );
+}
+
+/// Every error reported produces at least one diagnostic, and one that
+/// labels nothing is anchored at the start of the query. Stated as a count
+/// relation rather than an exact list, because what matters is that a
+/// failure is never swallowed on the way to the editor.
+#[test]
+fn no_parser_v2_error_is_dropped() {
+    let Err(CompileError::ParserV2(errors)) = compile2("", HashMap::new()) else {
+        panic!("an empty query should fail in the v2 parser")
+    };
+
+    let items = crate::diagnostics::parser_v2_error_diagnostic_items(&errors);
+
+    assert!(
+        items.len() >= errors.len(),
+        "{} errors collapsed into {} diagnostics",
+        errors.len(),
+        items.len()
+    );
+    assert!(
+        items
+            .iter()
+            .any(|i| i.message.contains("No query") && (i.span.from, i.span.to) == (0, 0)),
+        "the unlabelled error should still be surfaced, at the start of the query"
+    );
+}
+
+/// A warning the v2 parser raised is surfaced as a warning, at the span it
+/// was raised for — `"x\qy"` flags the unknown escape at the string.
+#[test]
+fn a_parser_v2_warning_keeps_its_span() {
+    let query = r#"d:m | where a == "x\qy""#;
+    let (_, warnings) = compile2(query, HashMap::new()).expect("the query should compile");
+
+    let items: Vec<_> = warnings
+        .as_slice()
+        .iter()
+        .map(crate::diagnostics::warning_to_diagnostic_item)
+        .collect();
+
+    assert_eq!(items.len(), 1, "the unknown escape should warn once");
+    assert!(matches!(items[0].severity, Severity::Warning));
+    assert_eq!(
+        (items[0].span.from, items[0].span.to),
+        (17, 23),
+        "the warning should cover the string literal"
     );
 }

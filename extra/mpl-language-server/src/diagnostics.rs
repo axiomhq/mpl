@@ -83,6 +83,7 @@ pub fn compute_diagnostics(
         Err(CompileError::Type(error)) => type_error_diagnostic_items(&error),
         Err(CompileError::Group(error)) => group_error_diagnostic_items(&error),
         Err(CompileError::Ifdef(error)) => ifdef_error_diagnostic_items(&error),
+        Err(CompileError::ParserV2(errors)) => parser_v2_error_diagnostic_items(&errors),
     }
 }
 
@@ -122,15 +123,15 @@ pub fn warning_to_diagnostic_item(w: &Warning) -> DiagnosticItem {
                     insert: "Duration".to_string(),
                 }],
             },
-            WarningReason::ParamNotDeclared(_) | WarningReason::ParamUsingSystemPrefix { .. } => {
-                DiagnosticItem {
-                    span,
-                    severity: Severity::Warning,
-                    message: w.warning().to_string(),
-                    help: None,
-                    actions: vec![],
-                }
-            }
+            WarningReason::ParamNotDeclared(_)
+            | WarningReason::ParamUsingSystemPrefix { .. }
+            | WarningReason::ParserV2(_) => DiagnosticItem {
+                span,
+                severity: Severity::Warning,
+                message: w.warning().to_string(),
+                help: None,
+                actions: vec![],
+            },
         }
     }
 }
@@ -301,6 +302,52 @@ pub fn group_error_diagnostic_items(e: &GroupError) -> Vec<DiagnosticItem> {
             },
         ]
     }
+}
+
+/// Convert the errors the v2 parser reported to `DiagnosticItem`s.
+///
+/// The spans come from each error's own miette labels rather than from a
+/// match over the variants: every variant already labels the token it is
+/// about, so an error added to the parser reaches the editor without a
+/// second place to update. An error that labels nothing is still surfaced,
+/// anchored at the start of the query.
+pub fn parser_v2_error_diagnostic_items(
+    errors: &[mpl_lang::parser2::ParseError],
+) -> Vec<DiagnosticItem> {
+    errors
+        .iter()
+        .flat_map(|e| {
+            let message = e.to_string();
+            let help = e.help().map(|h| h.to_string());
+            let items: Vec<_> = e
+                .labels()
+                .into_iter()
+                .flatten()
+                .map(|label| {
+                    let src = label.inner();
+                    DiagnosticItem {
+                        span: Span::new(src.offset(), src.offset() + src.len()),
+                        severity: Severity::Error,
+                        message: message.clone(),
+                        help: help.clone(),
+                        actions: vec![],
+                    }
+                })
+                .collect();
+
+            if items.is_empty() {
+                vec![DiagnosticItem {
+                    span: Span::new(0, 0),
+                    severity: Severity::Error,
+                    message,
+                    help,
+                    actions: vec![],
+                }]
+            } else {
+                items
+            }
+        })
+        .collect()
 }
 
 pub fn parse_error_diagnostic_items(e: &ParseError) -> Vec<DiagnosticItem> {
