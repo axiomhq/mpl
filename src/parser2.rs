@@ -30,9 +30,6 @@ mod tests;
 /// `MPL` parsing error
 #[derive(thiserror::Error, Debug, Diagnostic)]
 pub enum ParseError {
-    /// This part is unimplemented
-    #[error("Not implemented")]
-    Unimplemented,
     /// AST errors
     #[error(transparent)]
     #[diagnostic(transparent)]
@@ -314,6 +311,7 @@ impl Parser {
                 continue;
             }
             if name.starts_with(SYSTEM_PARAM_PREFIX) {
+                // TODO: make this an error
                 warnings.push(Warning::ReservedPrefix {
                     name: name.clone(),
                     span: p.node.span(),
@@ -457,6 +455,7 @@ impl QueryParser {
                     });
                 }
 
+                // TODO: Remove pipe as
                 Rule::As(alias) => {
                     let name = Metric::new(&alias).map_err(|_| ParseError::InvalidMetric {
                         metric: alias.to_string(),
@@ -528,6 +527,7 @@ impl QueryParser {
                 Rule::IfDef { .. } | Rule::Sample(_) | Rule::Filter(_) => {
                     return Err(ParseError::RuleNotSupportedAfterCompute { span: node.span() });
                 }
+                // TODO: remove me maybe
                 Rule::As(alias) => {
                     let name = Metric::new(&alias).map_err(|_| ParseError::InvalidMetric {
                         metric: alias.to_string(),
@@ -670,6 +670,7 @@ impl QueryParser {
                     span: node.span(),
                     n: n + base,
                 }),
+                // TODO: what if we did?
                 ast::Expr::Var(_) => Err(ParseError::VariablesNotSupported { span: node.span() }),
             })
             .collect::<Result<Vec<_>>>()?;

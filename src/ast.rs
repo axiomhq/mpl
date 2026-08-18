@@ -1651,7 +1651,7 @@ impl Parser {
         self.assert_end(children);
         Ok(FunctionCall {
             node,
-            name: name?,
+            name: name?, // check err late for more parse go brr
             args,
         })
     }
