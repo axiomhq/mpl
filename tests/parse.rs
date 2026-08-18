@@ -1,7 +1,46 @@
 use std::collections::HashMap;
 use std::fs;
 
+use miette::{GraphicalReportHandler, GraphicalTheme, NamedSource, Report};
 use mpl_lang::query::{ParamType, TerminalParamType};
+use mpl_lang::{CompileError, ParseError};
+
+/// Renders `err` the way a user would see it: the labels point into the
+/// example and the report is named for the file it came from, so a failure
+/// says where in the query it happened rather than only what went wrong.
+/// An error carrying related reports renders all of them.
+///
+/// The theme is pinned to the colour one, so the rendering is the same
+/// whichever terminal the test runs in.
+fn report(file_name: &str, content: &str, err: CompileError) -> String {
+    let report =
+        Report::new(err).with_source_code(NamedSource::new(file_name, content.to_string()));
+    let mut out = String::new();
+    let handler = GraphicalReportHandler::new_themed(GraphicalTheme::unicode());
+    if handler.render_report(&mut out, report.as_ref()).is_err() {
+        out = report.to_string();
+    }
+    out
+}
+
+/// Asserts one entry point compiled `content`, reporting a rejection as the
+/// rendered diagnostic. `label` names the entry point, so an example that
+/// only one of them rejects says which one.
+fn check<T>(label: &str, file_name: &str, content: &str, r: Result<T, CompileError>) {
+    match r {
+        Ok(_) => println!("  {label}: parsed successfully"),
+        Err(CompileError::Parse(ParseError::NotSupported { span, rule })) => {
+            println!("  {label}: parsed, unsupported by the backend: {span:?}, {rule:?}");
+        }
+        Err(CompileError::Parse(ParseError::NotImplemented(feature))) => {
+            println!("  {label}: parsed, not yet implemented: {feature}");
+        }
+        Err(e) => panic!(
+            "{label} rejected {file_name}:\n{}",
+            report(file_name, content, e)
+        ),
+    }
+}
 
 #[test]
 fn parse_examples() {
@@ -13,44 +52,24 @@ fn parse_examples() {
             let path = entry.path();
             let file_name = path.file_name().unwrap().to_str().unwrap();
             println!("Running example: {file_name}");
-            let content = fs::read_to_string(path).unwrap();
+            let content = fs::read_to_string(&path).unwrap();
             let mut params = HashMap::new();
             params.insert(
                 "__interval".to_string(),
                 ParamType::Terminal(TerminalParamType::Duration),
             );
-            let r = mpl_lang::compile(&content, params.clone());
-            match r {
-                Ok(_) => println!("Parsed successfully"),
-                Err(mpl_lang::CompileError::Parse(mpl_lang::ParseError::NotSupported {
-                    span,
-                    rule,
-                })) => {
-                    println!("Parsed but not supported by the backend: {span:?}, {rule:?}")
-                }
-                Err(mpl_lang::CompileError::Parse(mpl_lang::ParseError::NotImplemented(
-                    feature,
-                ))) => {
-                    println!("Parsed but not yet implemented: {feature}")
-                }
-                Err(e) => panic!("Error parsing {:?}: {e} {e:?}", entry.file_name()),
-            };
-            let r2 = mpl_lang::compile2(&content, params);
-            match r2 {
-                Ok(_) => println!("Parsed successfully"),
-                Err(mpl_lang::CompileError::Parse(mpl_lang::ParseError::NotSupported {
-                    span,
-                    rule,
-                })) => {
-                    println!("Parsed but not supported by the backend: {span:?}, {rule:?}")
-                }
-                Err(mpl_lang::CompileError::Parse(mpl_lang::ParseError::NotImplemented(
-                    feature,
-                ))) => {
-                    println!("Parsed but not yet implemented: {feature}")
-                }
-                Err(e) => panic!("Error parsing {:?}: {e} {e:?}", entry.file_name()),
-            };
+            check(
+                "compile",
+                file_name,
+                &content,
+                mpl_lang::compile(&content, params.clone()),
+            );
+            check(
+                "compile2",
+                file_name,
+                &content,
+                mpl_lang::compile2(&content, params),
+            );
         });
 }
 
@@ -69,16 +88,13 @@ fn parse_unimplemented_examples() {
             let path = entry.path();
             let file_name = path.file_name().unwrap().to_str().unwrap();
             println!("Running example: {file_name}");
-            let content = fs::read_to_string(path).unwrap();
+            let content = fs::read_to_string(&path).unwrap();
             match mpl_lang::compile(&content, HashMap::new()) {
-                Ok(_) => panic!("Unexpected successfully parsing"),
-                Err(mpl_lang::CompileError::Parse(mpl_lang::ParseError::NotSupported {
-                    span,
-                    rule,
-                })) => {
-                    panic!("Unexpected parse but unsupported: {span:?}, {rule:?}")
+                Ok(_) => panic!("{file_name} compiled but is expected to fail"),
+                Err(CompileError::Parse(ParseError::NotSupported { span, rule })) => {
+                    panic!("{file_name} parsed but is unsupported: {span:?}, {rule:?}")
                 }
-                Err(_) => println!("Failing as expected."),
+                Err(e) => println!("Failing as expected:\n{}", report(file_name, &content, e)),
             }
         });
 }
@@ -93,10 +109,10 @@ fn parse_error_examples() {
             let path = entry.path();
             let file_name = path.file_name().unwrap().to_str().unwrap();
             println!("Running error case: {file_name}");
-            let content = fs::read_to_string(path).unwrap();
+            let content = fs::read_to_string(&path).unwrap();
             match mpl_lang::compile(&content, HashMap::new()) {
-                Ok(_) => panic!("Unexpected successfully parsing"),
-                Err(_) => println!("Failing as expected."),
+                Ok(_) => panic!("{file_name} compiled but is expected to fail"),
+                Err(e) => println!("Failing as expected:\n{}", report(file_name, &content, e)),
             }
         });
 }
