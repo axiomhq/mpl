@@ -42,7 +42,7 @@ mod mpl_parser_impl {
 }
 pub use mpl_parser_impl::{MPLParser, Rule};
 
-const SYSTEM_PARAM_PREFIX: &str = "__";
+pub(crate) const SYSTEM_PARAM_PREFIX: &str = "__";
 
 type Result<T> = std::result::Result<T, ParseError>;
 

@@ -10,6 +10,7 @@ use crate::{
         Rule, SimpleQuery, SyntaxExpr, SyntaxRule, Variable,
     },
     linker::{Function, FunctionId, FunctionTrait, Module, ModuleId},
+    parser::SYSTEM_PARAM_PREFIX,
     query::{
         self, Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter,
         FilterOrIfDef, GroupBy, MetricId, ParamDeclaration, ParamType, Params, RelativeTime,
@@ -22,6 +23,9 @@ use crate::{
 use super::ast::Ident;
 
 type Result<T, E = ParseError> = std::result::Result<T, E>;
+
+#[cfg(test)]
+mod tests;
 
 /// `MPL` parsing error
 #[derive(thiserror::Error, Debug, Diagnostic)]
@@ -183,6 +187,34 @@ pub enum ParseError {
         #[label("Parameter declared here")]
         decl_span: SourceSpan,
     },
+    /// Missing bucket spec for function
+    #[error("Missing bucket spec for function: {function}")]
+    MissingBucketSpec {
+        /// The function name
+        function: String,
+        /// The location
+        #[label("Missing bucket spec for function: {function}")]
+        span: SourceSpan,
+    },
+    /// Parameter declared twice
+    #[error("Parameter declared twice: {name}")]
+    ParamDeclaredTwice {
+        /// The name of the parameter
+        name: String,
+        /// The location of the first declaration
+        #[label("Parameter first declared here")]
+        first_span: SourceSpan,
+        /// The location of the second declaration
+        #[label("Parameter re-declared here")]
+        span: SourceSpan,
+    },
+    /// Sample declared twice
+    #[error("Sample declared twice")]
+    SampleDeclaredTwice {
+        /// The location of the second declaration
+        #[label("Sample re-declared here")]
+        span: SourceSpan,
+    },
 }
 /// A warning
 #[derive(thiserror::Error, Debug, Diagnostic)]
@@ -191,12 +223,22 @@ pub enum Warning {
     #[error(transparent)]
     #[diagnostic(transparent)]
     Ast(AstWarning),
+    /// A reserved prefix was used for a parameter name
+    #[error("Reserved prefix {SYSTEM_PARAM_PREFIX} is not allowed for parameter names: {name}")]
+    ReservedPrefix {
+        /// The name of the parameter
+        name: String,
+        /// The location of the parameter
+        #[label("Parameter declared here")]
+        span: SourceSpan,
+    },
 }
 
 impl Warning {
     pub(crate) fn span(&self) -> SourceSpan {
         match self {
             Warning::Ast(ast_warning) => ast_warning.span(),
+            Warning::ReservedPrefix { span, .. } => *span,
         }
     }
 }
@@ -227,7 +269,7 @@ impl Parser {
             mut parts,
         } = self.ast;
         let mut errors: Vec<_> = errors.into_iter().map(ParseError::AST).collect();
-        let warnings: Vec<_> = warnings.into_iter().map(Warning::Ast).collect();
+        let mut warnings: Vec<_> = warnings.into_iter().map(Warning::Ast).collect();
         let mut directives = HashMap::new();
         // we rever so we can pop the content
         parts.reverse();
@@ -262,9 +304,24 @@ impl Parser {
         while parts.last().is_some_and(Part::is_param)
             && let Some(Part::Param(p)) = parts.pop()
         {
+            let name = p.name.to_string();
+            if let Some(old) = params.iter().find(|f| f.name == name) {
+                errors.push(ParseError::ParamDeclaredTwice {
+                    name,
+                    first_span: old.span,
+                    span: p.node.span(),
+                });
+                continue;
+            }
+            if name.starts_with(SYSTEM_PARAM_PREFIX) {
+                warnings.push(Warning::ReservedPrefix {
+                    name: name.clone(),
+                    span: p.node.span(),
+                });
+            }
             params.push(ParamDeclaration {
                 span: p.node.span(),
-                name: p.name.to_string(),
+                name,
                 typ: p.ty,
             });
         }
@@ -280,12 +337,15 @@ impl Parser {
                     directives: directives.clone(),
                     params: params.clone(),
                 };
-                p.query(q)
-                    .map_err(|e| {
-                        errors.push(e);
-                        errors
-                    })
-                    .map(|q| (q, warnings))
+                let q = p.query(q).map(|q| (q, warnings));
+                match q {
+                    Ok(q) if errors.is_empty() => Ok(q),
+                    Ok(_) => Err(errors),
+                    Err(error) => {
+                        errors.push(error);
+                        Err(errors)
+                    }
+                }
             }
             Some(Part::Directive(d)) => {
                 errors.push(ParseError::DirectiveInWongPlace {
@@ -359,7 +419,10 @@ impl QueryParser {
         let mut sample = None;
         for SyntaxRule { node, rule } in rules {
             match rule {
-                Rule::Sample(s) => sample = Some(s),
+                Rule::Sample(s) if sample.is_none() => sample = Some(s),
+                Rule::Sample(_) => {
+                    return Err(ParseError::SampleDeclaredTwice { span: node.span() });
+                }
                 Rule::Filter(f) => filters.push(FilterOrIfDef::Filter(self.filter(f)?)),
                 Rule::IfDef {
                     var,
@@ -538,33 +601,37 @@ impl QueryParser {
         let mut itr = func.args.into_iter();
         // This is really hacky, but we need it for compatibility with the old parser
         // we can clean this up once we drop support for the old parser
-        if let BucketType::InterpolateCumulativeHistogram(conversion_method) = &mut function {
-            let Some(SyntaxExpr { node, expr }) = itr.next() else {
-                return Err(ParseError::InvalidArgumentCount {
-                    function: f.name.name().to_string(),
-                    span,
-                    expected: 2,
-                    actual: 0,
-                });
-            };
-            match expr {
-                ast::Expr::Ident(ident) if ident.name() == "increase" => {
-                    *conversion_method = ConversionMethod::Increase;
-                }
-
-                ast::Expr::Ident(ident) if ident.name() == "rate" => {
-                    *conversion_method = ConversionMethod::Rate;
-                }
-                _ => {
-                    return Err(ParseError::InvalidBucketSpec {
+        let base =
+            if let BucketType::InterpolateCumulativeHistogram(conversion_method) = &mut function {
+                let Some(SyntaxExpr { node, expr }) = itr.next() else {
+                    return Err(ParseError::InvalidArgumentCount {
                         function: f.name.name().to_string(),
-                        span: node.span(),
-                        spec: "not increase or rate".to_string(),
-                        n: 1,
+                        span,
+                        expected: 2,
+                        actual: 0,
                     });
+                };
+                match expr {
+                    ast::Expr::Ident(ident) if ident.name() == "increase" => {
+                        *conversion_method = ConversionMethod::Increase;
+                    }
+
+                    ast::Expr::Ident(ident) if ident.name() == "rate" => {
+                        *conversion_method = ConversionMethod::Rate;
+                    }
+                    _ => {
+                        return Err(ParseError::InvalidBucketSpec {
+                            function: f.name.name().to_string(),
+                            span: node.span(),
+                            spec: "not increase or rate".to_string(),
+                            n: 1,
+                        });
+                    }
                 }
-            }
-        }
+                2
+            } else {
+                1
+            };
         let spec = itr
             .enumerate()
             .map(|(n, SyntaxExpr { expr, node })| match expr {
@@ -577,7 +644,7 @@ impl QueryParser {
                     function: f.name.name().to_string(),
                     spec: ident.into_string(),
                     span: node.span(),
-                    n: n + 1,
+                    n: n + base,
                 }),
                 ast::Expr::Const(TagValue::Float(f)) => Ok(BucketSpec::Percentile(f)),
                 ast::Expr::Const(TagValue::Int(1)) => Ok(BucketSpec::Percentile(1.0)),
@@ -587,33 +654,40 @@ impl QueryParser {
                     expected: TagType::Float,
                     actual: c.tpe(),
                     span: node.span(),
-                    n: n + 1,
+                    n: n + base,
                 }),
                 ast::Expr::String(_) => Err(ParseError::InvalidArgumentType {
                     function: f.name.name().to_string(),
                     expected: TagType::Float,
                     actual: TagType::String,
                     span: node.span(),
-                    n: n + 1,
+                    n: n + base,
                 }),
                 ast::Expr::Array(_) => Err(ParseError::InvalidArgumentType {
                     function: f.name.name().to_string(),
                     expected: TagType::Float,
                     actual: TagType::Array,
                     span: node.span(),
-                    n: n + 1,
+                    n: n + base,
                 }),
                 ast::Expr::Var(_) => Err(ParseError::VariablesNotSupported { span: node.span() }),
             })
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Aggregate::Bucket(BucketBy {
-            span,
-            function,
-            time,
-            tags,
-            spec,
-        }))
+        if spec.is_empty() {
+            Err(ParseError::MissingBucketSpec {
+                function: f.name.name().to_string(),
+                span,
+            })
+        } else {
+            Ok(Aggregate::Bucket(BucketBy {
+                span,
+                function,
+                time,
+                tags,
+                spec,
+            }))
+        }
     }
     fn get_param_typed<T>(&self, variable: &Variable, ty: ParamType) -> Result<Parameterized<T>> {
         let Some(param) = self.params.iter().find(|v| v.name == variable.name()) else {
@@ -660,6 +734,14 @@ impl QueryParser {
                 span: func.node.span(),
             })?
             .clone();
+        if func.args.len() != function.args().len() || !func.args.is_empty() {
+            return Err(ParseError::InvalidArgumentCount {
+                function: f.name.name().to_string(),
+                expected: function.args().len(),
+                actual: func.args.len(),
+                span: func.node.span(),
+            });
+        }
         let tags = groups
             .into_iter()
             .map(|g| g.to_string())
@@ -697,6 +779,15 @@ impl QueryParser {
                 ),
             })
             .transpose()?;
+
+        if func.args.len() != function.args().len() || !func.args.is_empty() {
+            return Err(ParseError::InvalidArgumentCount {
+                function: f.name.name().to_string(),
+                expected: function.args().len(),
+                actual: func.args.len(),
+                span: func.node.span(),
+            });
+        }
 
         Ok(Aggregate::Align(Align { function, time }))
     }

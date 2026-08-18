@@ -148,14 +148,9 @@ fn a_parameter_declared_twice_is_reported() {
 fn a_user_parameter_using_the_reserved_prefix_warns() {
     let src = "param $__foo: string; a:b";
     let (_, warnings) = lower(src).unwrap_or_else(|e| panic!("`{src}` did not lower: {e:?}"));
-    warnings.first().unwrap_or_else(|| {
-        panic!(
-            "`{src}` warned about nothing.\n\
-             NOTE: saying so needs a warning `parser2` raises itself. `Warning` carries one \
-             variant, `Ast(AstWarning)`, and the reserved prefix is a rule `parser2` owns, so \
-             there is nothing to report with."
-        )
-    });
+    warnings
+        .first()
+        .unwrap_or_else(|| panic!("`{src}` warned about nothing."));
 }
 
 /// A query samples at one rate. Two `sample` clauses have to be reported, because taking either
