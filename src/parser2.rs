@@ -229,13 +229,22 @@ pub enum Warning {
         #[label("Parameter declared here")]
         span: SourceSpan,
     },
+    /// Duplicated group declaration
+    #[error("Duplicated group declaration: {name}")]
+    DuplicatedGroup {
+        /// The name of the group
+        name: String,
+        /// The location of the first declaration
+        #[label("The group {name} is declared multiple times")]
+        span: SourceSpan,
+    },
 }
 
 impl Warning {
     pub(crate) fn span(&self) -> SourceSpan {
         match self {
             Warning::Ast(ast_warning) => ast_warning.span(),
-            Warning::ReservedPrefix { span, .. } => *span,
+            Warning::DuplicatedGroup { span, .. } | Warning::ReservedPrefix { span, .. } => *span,
         }
     }
 }
@@ -334,8 +343,12 @@ impl Parser {
                     stdlib: self.stdlib,
                     directives: directives.clone(),
                     params: params.clone(),
+                    warnings: Vec::new(),
                 };
-                let q = p.query(q).map(|q| (q, warnings));
+                let q = p.parse(q).map(|(q, mut w)| {
+                    w.extend(warnings);
+                    (q, w)
+                });
                 match q {
                     Ok(q) if errors.is_empty() => Ok(q),
                     Ok(_) => Err(errors),
@@ -366,10 +379,16 @@ struct QueryParser {
     stdlib: &'static Module,
     directives: Directives,
     params: Params,
+    warnings: Vec<Warning>,
 }
 
 impl QueryParser {
-    fn query(&self, q: AstQuery) -> Result<crate::Query> {
+    fn parse(mut self, q: AstQuery) -> Result<(crate::Query, Vec<Warning>)> {
+        let q = self.query(q)?;
+        Ok((q, self.warnings))
+    }
+
+    fn query(&mut self, q: AstQuery) -> Result<crate::Query> {
         match q {
             AstQuery::Compute(c) => self.compute_query(*c),
             AstQuery::Simple(s) => self.simple_query(s),
@@ -377,7 +396,7 @@ impl QueryParser {
     }
 
     fn simple_query(
-        &self,
+        &mut self,
         SimpleQuery {
             node: _,
             dataset,
@@ -473,7 +492,7 @@ impl QueryParser {
                     duration,
                     func,
                 } => aggregates.push(self.bucket_to_aggr(groups, duration, func)?),
-                Rule::Extern(extend_parts) => extends.append(&mut self.parse_extend(extend_parts)?),
+                Rule::Extern(extend_parts) => extends.append(&mut self.extend(extend_parts)?),
             }
         }
 
@@ -489,7 +508,7 @@ impl QueryParser {
     }
 
     fn compute_query(
-        &self,
+        &mut self,
         ComputeQuery {
             node: _,
             l,
@@ -545,7 +564,7 @@ impl QueryParser {
                     duration,
                     func,
                 } => aggregates.push(self.bucket_to_aggr(groups, duration, func)?),
-                Rule::Extern(extend_parts) => extends.append(&mut self.parse_extend(extend_parts)?),
+                Rule::Extern(extend_parts) => extends.append(&mut self.extend(extend_parts)?),
             }
         }
         let name = Metric::new(&name).map_err(|_| ParseError::InvalidMetric {
@@ -567,7 +586,7 @@ impl QueryParser {
 
     #[allow(clippy::too_many_lines)]
     fn bucket_to_aggr(
-        &self,
+        &mut self,
         groups: Vec<ast::Ident>,
         duration: Option<ast::Duration>,
         func: FunctionCall,
@@ -594,10 +613,7 @@ impl QueryParser {
                 ),
             })
             .transpose()?;
-        let tags = groups
-            .into_iter()
-            .map(Ident::into_string)
-            .collect::<Vec<_>>();
+        let tags = self.groups_to_tags(groups);
         let mut itr = func.args.into_iter();
         // This is really hacky, but we need it for compatibility with the old parser
         // we can clean this up once we drop support for the old parser
@@ -724,7 +740,7 @@ impl QueryParser {
         Ok(param.clone())
     }
 
-    fn group_to_aggr(&self, groups: Vec<ast::Ident>, func: &FunctionCall) -> Result<Aggregate> {
+    fn group_to_aggr(&mut self, groups: Vec<ast::Ident>, func: &FunctionCall) -> Result<Aggregate> {
         let span = func.node.span();
         let f = call_to_function(func)?;
         let function = self
@@ -743,15 +759,26 @@ impl QueryParser {
                 span: func.node.span(),
             });
         }
-        let tags = groups
-            .into_iter()
-            .map(|g| g.to_string())
-            .collect::<Vec<_>>();
+        let tags = self.groups_to_tags(groups);
         Ok(Aggregate::GroupBy(GroupBy {
             span,
             function,
             tags,
         }))
+    }
+
+    fn groups_to_tags(&mut self, groups: Vec<Ident>) -> Vec<String> {
+        let mut res = Vec::new();
+        for g in groups {
+            if res.iter().any(|i| i == g.name()) {
+                self.warnings.push(Warning::DuplicatedGroup {
+                    name: g.to_string(),
+                    span: g.span(),
+                });
+            }
+            res.push(g.to_string());
+        }
+        res
     }
 
     fn align_to_aggr(
@@ -852,19 +879,19 @@ impl QueryParser {
         }))
     }
 
-    fn parse_extend(&self, extend_parts: Vec<ast::ExtendPart>) -> Result<Vec<TagExtend>> {
+    fn extend(&self, extend_parts: Vec<ast::ExtendPart>) -> Result<Vec<TagExtend>> {
         extend_parts
             .into_iter()
             .map(|p| {
                 Ok(TagExtend {
                     tag: p.name.to_string(),
-                    value: self.parse_expr(p.value)?,
+                    value: self.expr(p.value)?,
                 })
             })
             .collect()
     }
 
-    fn parse_expr(&self, SyntaxExpr { node, expr }: SyntaxExpr) -> Result<query::Expr> {
+    fn expr(&self, SyntaxExpr { node, expr }: SyntaxExpr) -> Result<query::Expr> {
         match expr {
             ast::Expr::Ident(ident) => Ok(query::Expr::Tag(ident.to_string())),
             ast::Expr::String(string_parts) => Ok(query::Expr::String(
@@ -872,9 +899,7 @@ impl QueryParser {
                     .into_iter()
                     .map(|p| match p {
                         ast::StringPart::Const(s) => Ok(query::StringFragment::Text(s)),
-                        ast::StringPart::Expr(e) => {
-                            Ok(query::StringFragment::Expr(self.parse_expr(e)?))
-                        }
+                        ast::StringPart::Expr(e) => Ok(query::StringFragment::Expr(self.expr(e)?)),
                     })
                     .collect::<Result<Vec<query::StringFragment>>>()?,
             )),
@@ -886,7 +911,7 @@ impl QueryParser {
             ast::Expr::Array(syntax_exprs) => Ok(query::Expr::Array(
                 syntax_exprs
                     .into_iter()
-                    .map(|e| self.parse_expr(e))
+                    .map(|e| self.expr(e))
                     .collect::<Result<Vec<query::Expr>>>()?,
             )),
         }
@@ -952,7 +977,7 @@ impl QueryParser {
                 } else {
                     Filter::Cmp {
                         field: lhs.into_string(),
-                        rhs: Cmp::Eq(self.parse_expr(SyntaxExpr {
+                        rhs: Cmp::Eq(self.expr(SyntaxExpr {
                             node,
                             expr: ast::Expr::Var(v),
                         })?),
@@ -961,7 +986,7 @@ impl QueryParser {
             }
             FilterCmp::Eq { lhs, rhs } => Filter::Cmp {
                 field: lhs.into_string(),
-                rhs: Cmp::Eq(self.parse_expr(rhs)?),
+                rhs: Cmp::Eq(self.expr(rhs)?),
             },
             FilterCmp::Neq {
                 lhs,
@@ -983,7 +1008,7 @@ impl QueryParser {
                 } else {
                     Filter::Cmp {
                         field: lhs.into_string(),
-                        rhs: Cmp::Ne(self.parse_expr(SyntaxExpr {
+                        rhs: Cmp::Ne(self.expr(SyntaxExpr {
                             node,
                             expr: ast::Expr::Var(v),
                         })?),
@@ -993,27 +1018,27 @@ impl QueryParser {
 
             FilterCmp::Neq { lhs, rhs } => Filter::Cmp {
                 field: lhs.into_string(),
-                rhs: Cmp::Ne(self.parse_expr(rhs)?),
+                rhs: Cmp::Ne(self.expr(rhs)?),
             },
             FilterCmp::Lt { lhs, rhs } => Filter::Cmp {
                 field: lhs.into_string(),
-                rhs: Cmp::Lt(self.parse_expr(rhs)?),
+                rhs: Cmp::Lt(self.expr(rhs)?),
             },
             FilterCmp::Gt { lhs, rhs } => Filter::Cmp {
                 field: lhs.into_string(),
-                rhs: Cmp::Gt(self.parse_expr(rhs)?),
+                rhs: Cmp::Gt(self.expr(rhs)?),
             },
             FilterCmp::Lte { lhs, rhs } => Filter::Cmp {
                 field: lhs.into_string(),
-                rhs: Cmp::Le(self.parse_expr(rhs)?),
+                rhs: Cmp::Le(self.expr(rhs)?),
             },
             FilterCmp::Gte { lhs, rhs } => Filter::Cmp {
                 field: lhs.into_string(),
-                rhs: Cmp::Ge(self.parse_expr(rhs)?),
+                rhs: Cmp::Ge(self.expr(rhs)?),
             },
             FilterCmp::In { lhs, rhs } => Filter::Cmp {
                 field: lhs.into_string(),
-                rhs: Cmp::In(self.parse_expr(rhs)?),
+                rhs: Cmp::In(self.expr(rhs)?),
             },
             FilterCmp::EqRe { lhs, rhs } => Filter::Cmp {
                 field: lhs.into_string(),
