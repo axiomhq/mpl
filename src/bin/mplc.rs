@@ -59,6 +59,8 @@ enum CorpusMode {
     SyntaxTree,
     /// v2 lexer -> syntax tree -> ast
     Ast,
+    /// Parse v2 the AST
+    Parse,
 }
 
 impl CorpusMode {
@@ -69,6 +71,7 @@ impl CorpusMode {
             CorpusMode::Lex => "lex",
             CorpusMode::SyntaxTree => "syntax-tree",
             CorpusMode::Ast => "ast",
+            CorpusMode::Parse => "parse",
         }
     }
 }
@@ -178,6 +181,26 @@ fn flatten(error: &dyn Diagnostic) -> MietteDiagnostic {
     }
 }
 
+/// Expands `error` into the diagnostics a report should carry. An error that
+/// wraps others says only that something went wrong; what it wraps says what,
+/// and where, so the wrapped errors are what a row is counted and rendered
+/// under. A wrapper that labels the source in its own right is kept alongside
+/// them, and an error that wraps nothing stands for itself.
+fn leaves(error: &dyn Diagnostic, out: &mut Vec<MietteDiagnostic>) {
+    let diagnostic = flatten(error);
+    let mut related = error.related().into_iter().flatten().peekable();
+    let labels_the_source = diagnostic
+        .labels
+        .as_ref()
+        .is_some_and(|labels| !labels.is_empty());
+    if related.peek().is_none() || labels_the_source {
+        out.push(diagnostic);
+    }
+    for inner in related {
+        leaves(inner, out);
+    }
+}
+
 /// Widens a label that covers nothing to the character it sits on, so it draws a
 /// caret: an error at the end of input spans zero bytes and would otherwise render
 /// as a bare source line with nothing pointing into it.
@@ -215,14 +238,31 @@ fn diagnose(
         CorpusMode::Full => mpl_lang::compile(&entry.query, system_params.clone())
             .err()
             .iter()
-            .map(|error| flatten(error))
+            .flat_map(|error| {
+                let mut out = Vec::new();
+                leaves(error, &mut out);
+                out
+            })
+            .collect(),
+        CorpusMode::Parse => mpl_lang::compile2(&entry.query, system_params.clone())
+            .err()
+            .iter()
+            .flat_map(|error| {
+                let mut out = Vec::new();
+                leaves(error, &mut out);
+                out
+            })
             .collect(),
         CorpusMode::Lex => invalid_tokens(&entry.query).into_iter().collect(),
         CorpusMode::SyntaxTree => mpl_lang::syntax_tree::Parser::new(&entry.query)
             .parse()
             .errors
             .iter()
-            .map(|error| flatten(error))
+            .flat_map(|error| {
+                let mut out = Vec::new();
+                leaves(error, &mut out);
+                out
+            })
             .collect(),
         // `to_diagnostic` flattens the syntax error a `ParserError` may wrap, which is
         // what carries the label pointing into the source.
@@ -633,12 +673,38 @@ mod tests {
         );
     }
 
+    /// The parse mode reports through an error that only wraps the ones the
+    /// parser raised: its own sentence names no query and labels no source, so
+    /// a report that counted it would say a query failed without saying what
+    /// about it failed. What it wraps is what reaches the report.
+    #[test]
+    fn a_wrapping_error_reports_what_it_wraps() {
+        let entry = entry("a:b | map nosuchfn()");
+        let found = diagnose(&entry, CorpusMode::Parse, &system_params());
+
+        assert!(
+            !found.is_empty(),
+            "the parse mode accepted an unknown function"
+        );
+        for diagnostic in &found {
+            assert!(
+                diagnostic
+                    .labels
+                    .as_ref()
+                    .is_some_and(|labels| !labels.is_empty()),
+                "{:?} points into no source",
+                diagnostic.message
+            );
+        }
+    }
+
     /// Every mode reports through the same path, so none of them can regress to a
     /// bare debug dump while the others render properly.
     #[test]
     fn every_mode_points_into_the_source() {
         let modes = [
             (CorpusMode::Full, "a:b | filter"),
+            (CorpusMode::Parse, "a:b | map nosuchfn()"),
             (CorpusMode::Lex, "a:b | filter x == \"unterminated"),
             (CorpusMode::SyntaxTree, "a:b | filter"),
             (CorpusMode::Ast, "a:b | filter"),

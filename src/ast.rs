@@ -14,7 +14,7 @@ mod tests;
 
 /// Represents a parser warning.
 #[derive(thiserror::Error, Debug, Diagnostic)]
-pub enum ParserWarning {
+pub enum AstWarning {
     /// The parser encountered an unknown escape sequence.
     #[error("Unknown escape sequence")]
     UnknownEscapeSequence {
@@ -38,7 +38,14 @@ pub enum ParserWarning {
         span: SourceSpan,
     },
 }
-
+impl AstWarning {
+    pub(crate) fn span(&self) -> SourceSpan {
+        match self {
+            AstWarning::UnknownEscapeSequence { span, .. }
+            | AstWarning::TimeNotSecondAligned { span, .. } => *span,
+        }
+    }
+}
 #[derive(thiserror::Error, Debug, Diagnostic)]
 /// Represents a parser error.
 pub enum AstError {
@@ -149,7 +156,7 @@ pub enum AstError {
         /// The expected keyword.
         expected: &'static str,
         /// The found keyword.
-        found: Ident,
+        found: String,
         /// The source span of the found keyword.
         #[label("unexpected keyword {found} expected {expected}")]
         span: SourceSpan,
@@ -228,12 +235,14 @@ pub enum AstError {
     },
 
     /// The regex is invalid.
-    #[error("invalid regex")]
+    #[error("invalid regex: {message}")]
     #[diagnostic(code(mpl_lang::invalid_regex))]
     InvalidRegex {
         /// The source span of the invalid regex.
-        #[label("invalid regex")]
+        #[label("invalid regex: {message}")]
         span: SourceSpan,
+        /// The error message from the regex parser.
+        message: String,
     },
     /// The identifier is invalid.
     #[error("invalid ident")]
@@ -305,7 +314,12 @@ pub struct FunctionCall {
     /// The function name, split into parts for nested functions.
     pub name: Vec<Ident>,
     /// The function arguments.
-    pub args: Vec<Expr>,
+    pub args: Vec<SyntaxExpr>,
+}
+impl FunctionCall {
+    pub(crate) fn span(&self) -> SourceSpan {
+        self.node.span()
+    }
 }
 
 /// A `param` declaration.
@@ -340,13 +354,21 @@ pub enum Part {
     /// The query itself.
     Query(Query),
 }
+impl Part {
+    pub(crate) fn is_directive(&self) -> bool {
+        matches!(self, Part::Directive(_))
+    }
+    pub(crate) fn is_param(&self) -> bool {
+        matches!(self, Part::Param(_))
+    }
+}
 
 /// the parsed AST
 pub struct Ast {
     /// errors during parsing
     pub errors: Vec<AstError>,
     /// warnings during parsing
-    pub warnings: Vec<ParserWarning>,
+    pub warnings: Vec<AstWarning>,
     /// the parsed AST
     pub parts: Vec<Part>,
 }
@@ -362,11 +384,11 @@ impl Ast {
 pub struct Parser {
     root: SyntaxNode,
     errors: Vec<AstError>,
-    warnings: Vec<ParserWarning>,
+    warnings: Vec<AstWarning>,
     parts: Vec<Part>,
 }
 
-trait NonTrivalItem {
+pub(crate) trait NonTrivalItem {
     fn span(&self) -> SourceSpan;
     fn token_string(&self) -> String;
 }
@@ -440,7 +462,14 @@ impl Nontrivial for SyntaxElementChildren<Lang> {
 
 /// Regular expression or variable.
 #[derive(Debug)]
-pub struct Regex(String);
+pub struct Regex(regex::Regex);
+
+impl From<Regex> for regex::Regex {
+    fn from(regex: Regex) -> Self {
+        regex.0
+    }
+}
+
 impl std::fmt::Display for Regex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
@@ -448,7 +477,7 @@ impl std::fmt::Display for Regex {
 }
 
 impl Deref for Regex {
-    type Target = String;
+    type Target = regex::Regex;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -457,23 +486,49 @@ impl Deref for Regex {
 
 impl AsRef<str> for Regex {
     fn as_ref(&self) -> &str {
-        &self.0
+        self.0.as_str()
     }
 }
 
 impl PartialEq<&str> for Regex {
     fn eq(&self, other: &&str) -> bool {
-        self.0 == **other
+        self.0.as_str() == *other
     }
 }
 
 /// Identifier.
 #[derive(Debug, Clone)]
-pub struct Ident(String);
+pub struct Ident {
+    node: SyntaxNode,
+    name: String,
+}
+
+impl Ident {
+    /// Returns the name of the identifier.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    /// Returns the node of the identifier.
+    #[must_use]
+    pub fn node(&self) -> &SyntaxNode {
+        &self.node
+    }
+    /// Returns the span of the identifier.
+    #[must_use]
+    pub fn span(&self) -> SourceSpan {
+        self.node.span()
+    }
+    /// Converts the identifier to a string.
+    #[must_use]
+    pub fn into_string(self) -> String {
+        self.name
+    }
+}
 
 impl std::fmt::Display for Ident {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+        self.name.fmt(f)
     }
 }
 
@@ -481,29 +536,44 @@ impl Deref for Ident {
     type Target = String;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.name
     }
 }
 
 impl AsRef<str> for Ident {
     fn as_ref(&self) -> &str {
-        &self.0
+        &self.name
     }
 }
 
 impl PartialEq<&str> for Ident {
     fn eq(&self, other: &&str) -> bool {
-        self.0 == **other
+        self.name == **other
     }
 }
 
 /// Identifier.
 #[derive(Debug, Clone)]
-pub struct Variable(String);
+pub struct Variable {
+    node: SyntaxNode,
+    name: String,
+}
+impl Variable {
+    /// Returns the span of the variable.
+    #[must_use]
+    pub fn span(&self) -> SourceSpan {
+        self.node.span()
+    }
+    /// Returns the name of the variable.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
 
 impl std::fmt::Display for Variable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+        self.name.fmt(f)
     }
 }
 
@@ -511,19 +581,19 @@ impl Deref for Variable {
     type Target = String;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.name
     }
 }
 
 impl AsRef<str> for Variable {
     fn as_ref(&self) -> &str {
-        &self.0
+        &self.name
     }
 }
 
 impl PartialEq<&str> for Variable {
     fn eq(&self, other: &&str) -> bool {
-        self.0 == **other
+        self.name == **other
     }
 }
 
@@ -533,7 +603,15 @@ pub enum StringPart {
     /// A constant string value.
     Const(String),
     /// An expression that evaluates to a string value.
-    Expr(Expr),
+    Expr(SyntaxExpr),
+}
+/// A parsed expression with its syntax node.
+#[derive(Debug)]
+pub struct SyntaxExpr {
+    /// The syntax node of the expression.
+    pub node: SyntaxNode,
+    /// The expression.
+    pub expr: Expr,
 }
 /// A filter expression.
 #[derive(Debug)]
@@ -547,7 +625,7 @@ pub enum Expr {
     /// A constant value.
     Const(TagValue),
     /// An array value.
-    Array(Vec<Expr>),
+    Array(Vec<SyntaxExpr>),
 }
 
 /// A filter comparison rule.
@@ -558,14 +636,14 @@ pub enum FilterCmp {
         /// The left-hand side of the equality.
         lhs: Ident,
         /// The right-hand side of the equality.
-        rhs: Expr,
+        rhs: SyntaxExpr,
     },
     /// A not equality
     Neq {
         /// The left-hand side of the not equality.
         lhs: Ident,
         /// The right-hand side of the not equality.
-        rhs: Expr,
+        rhs: SyntaxExpr,
     },
     /// A regex equality
     EqRe {
@@ -587,35 +665,35 @@ pub enum FilterCmp {
         /// The left-hand side of the less than comparison.
         lhs: Ident,
         /// The right-hand side of the less than comparison.
-        rhs: Expr,
+        rhs: SyntaxExpr,
     },
     /// A greater than comparison
     Gt {
         /// The left-hand side of the greater than comparison.
         lhs: Ident,
         /// The right-hand side of the greater than comparison.
-        rhs: Expr,
+        rhs: SyntaxExpr,
     },
     /// A less than or equal comparison
     Lte {
         /// The left-hand side of the less than or equal comparison.
         lhs: Ident,
         /// The right-hand side of the less than or equal comparison.
-        rhs: Expr,
+        rhs: SyntaxExpr,
     },
     /// A greater than or equal comparison
     Gte {
         /// The left-hand side of the greater than or equal comparison.
         lhs: Ident,
         /// The right-hand side of the greater than or equal comparison.
-        rhs: Expr,
+        rhs: SyntaxExpr,
     },
     /// An in comparison
     In {
         /// The left-hand side of the in comparison.
         lhs: Ident,
         /// The right-hand side of the in comparison.
-        rhs: Expr,
+        rhs: SyntaxExpr,
     },
     /// An is comparison
     Is {
@@ -653,7 +731,7 @@ impl Deref for FilterAnd {
 }
 /// A filter or rule.
 #[derive(Debug)]
-pub struct FilterOr(Vec<FilterAnd>);
+pub struct FilterOr(pub Vec<FilterAnd>);
 
 impl Deref for FilterOr {
     type Target = [FilterAnd];
@@ -678,7 +756,7 @@ pub struct ExtendPart {
     /// The name of the extend part.
     pub name: Ident,
     /// The body of the extend part.
-    pub value: Expr,
+    pub value: SyntaxExpr,
 }
 
 /// A parsed rule.
@@ -772,9 +850,9 @@ pub struct ComputeQuery {
     /// metric name of the resulting combined series
     pub name: Ident,
     /// Combination function
-    pub func: Vec<Ident>,
+    pub func: FunctionCall,
     /// rules following the compute statement
-    pub rules: Vec<Rule>,
+    pub rules: Vec<SyntaxRule>,
 }
 
 /// A parsed query.
@@ -815,7 +893,7 @@ impl Parser {
 
     /// warnings that occurred during parsing.
     #[must_use]
-    pub fn warnings(&self) -> &[ParserWarning] {
+    pub fn warnings(&self) -> &[AstWarning] {
         &self.warnings
     }
 
@@ -867,8 +945,8 @@ impl Parser {
         let mut children = node.children();
         let c = self.n(&mut children, node, SyntaxKind::IDENT)?;
         let r = match c.kind() {
-            SyntaxKind::IDENT => self.ident(&c).map(IdentOrVariable::Ident),
-            SyntaxKind::VARIABLE => self.variable(&c).map(IdentOrVariable::Var),
+            SyntaxKind::IDENT => self.ident(c).map(IdentOrVariable::Ident),
+            SyntaxKind::VARIABLE => self.variable(c).map(IdentOrVariable::Var),
             _ => {
                 self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[SyntaxKind::IDENT, SyntaxKind::VARIABLE],
@@ -905,7 +983,7 @@ impl Parser {
                     }
                     char => {
                         self.warnings
-                            .push(ParserWarning::UnknownEscapeSequence { char, span });
+                            .push(AstWarning::UnknownEscapeSequence { char, span });
                         out.push(c);
                     }
                 }
@@ -939,7 +1017,7 @@ impl Parser {
                     }
                     char => {
                         self.warnings
-                            .push(ParserWarning::UnknownEscapeSequence { char, span });
+                            .push(AstWarning::UnknownEscapeSequence { char, span });
                         out.push(c);
                     }
                 }
@@ -955,19 +1033,22 @@ impl Parser {
 
     /// This is just `to_string` with a nice name, the reason  is rusts regex
     /// engine already take scare of un-escaping
-    fn unescape_regex(&self, _node: &impl NonTrivalItem, s: &str) -> String {
+    fn unescape_regex<'s>(&self, _node: &impl NonTrivalItem, s: &'s str) -> &'s str {
         let _ = self;
-        s.to_string()
+        s
     }
 
-    fn string_expr(&mut self, node: &SyntaxNode) -> Result<Expr> {
-        self.assert_type(node, SyntaxKind::STRING)?;
+    fn string_expr(&mut self, node: SyntaxNode) -> Result<SyntaxExpr> {
+        self.assert_type(&node, SyntaxKind::STRING)?;
         let mut children = node.children_with_tokens();
-        let c = self.n(&mut children, node, SyntaxKind::LX_STRING)?;
+        let c = self.n(&mut children, &node, SyntaxKind::LX_STRING)?;
         match c.kind() {
             SyntaxKind::LX_STRING => {
-                let s = self.string_const(node)?;
-                Ok(Expr::Const(s))
+                let s = self.string_const(&node)?;
+                Ok(SyntaxExpr {
+                    node,
+                    expr: Expr::Const(s),
+                })
             }
             SyntaxKind::LX_STRING_START => {
                 let s = c.token_string();
@@ -1000,7 +1081,7 @@ impl Parser {
                             break;
                         }
                         SyntaxKind::EXPR => {
-                            let Some(n) = c.as_node() else { continue };
+                            let Some(n) = c.into_node() else { continue };
                             if let Ok(e) = self.expr(n) {
                                 parts.push(StringPart::Expr(e));
                             }
@@ -1016,7 +1097,10 @@ impl Parser {
                     }
                 }
                 self.assert_end(children);
-                Ok(Expr::String(parts))
+                Ok(SyntaxExpr {
+                    node,
+                    expr: Expr::String(parts),
+                })
             }
             found => {
                 self.errors.push(AstError::UnexpectedSyntaxRule {
@@ -1029,31 +1113,46 @@ impl Parser {
         }
     }
 
-    fn array_expr(&mut self, node: &SyntaxNode) -> Result<Expr> {
-        self.assert_type(node, SyntaxKind::ARRAY)?;
+    fn array_expr(&mut self, node: SyntaxNode) -> Result<SyntaxExpr> {
+        self.assert_type(&node, SyntaxKind::ARRAY)?;
         let mut elements = Vec::new();
         let mut children = node.children();
         while let Some(c) = children.n() {
-            if let Ok(e) = self.expr(&c) {
+            if let Ok(e) = self.expr(c) {
                 elements.push(e);
             }
         }
         self.assert_end(children);
-        Ok(Expr::Array(elements))
+        Ok(SyntaxExpr {
+            node,
+            expr: Expr::Array(elements),
+        })
     }
 
-    fn expr_value(&mut self, node: &SyntaxNode) -> Result<Expr> {
-        self.assert_type(node, SyntaxKind::CONST)?;
+    fn expr_value(&mut self, node: SyntaxNode) -> Result<SyntaxExpr> {
+        self.assert_type(&node, SyntaxKind::CONST)?;
         let mut children = node.children();
-        let c = self.n(&mut children, node, SyntaxKind::CONST)?;
+        let c = self.n(&mut children, &node, SyntaxKind::CONST)?;
 
         let r = match c.kind() {
-            SyntaxKind::INTEGER => Expr::Const(self.integer_const(&c)?),
-            SyntaxKind::FLOAT => Expr::Const(self.float_const(&c)?),
-            SyntaxKind::BOOL => Expr::Const(self.bool_const(&c)?),
-            SyntaxKind::NULL => Expr::Const(self.null_const(&c)?),
-            SyntaxKind::STRING => self.string_expr(&c)?,
-            SyntaxKind::ARRAY => self.array_expr(&c)?,
+            SyntaxKind::INTEGER => SyntaxExpr {
+                node,
+                expr: Expr::Const(self.integer_const(&c)?),
+            },
+            SyntaxKind::FLOAT => SyntaxExpr {
+                node,
+                expr: Expr::Const(self.float_const(&c)?),
+            },
+            SyntaxKind::BOOL => SyntaxExpr {
+                node,
+                expr: Expr::Const(self.bool_const(&c)?),
+            },
+            SyntaxKind::NULL => SyntaxExpr {
+                node,
+                expr: Expr::Const(self.null_const(&c)?),
+            },
+            SyntaxKind::STRING => self.string_expr(c)?,
+            SyntaxKind::ARRAY => self.array_expr(c)?,
             found => {
                 self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[
@@ -1074,14 +1173,20 @@ impl Parser {
         Ok(r)
     }
 
-    fn expr(&mut self, node: &SyntaxNode) -> Result<Expr> {
-        self.assert_type(node, SyntaxKind::EXPR)?;
+    fn expr(&mut self, node: SyntaxNode) -> Result<SyntaxExpr> {
+        self.assert_type(&node, SyntaxKind::EXPR)?;
         let mut children = node.children();
-        let n = self.n(&mut children, node, SyntaxKind::EXPR)?;
-        let r = match n.kind() {
-            SyntaxKind::CONST => self.expr_value(&n)?,
-            SyntaxKind::IDENT => Expr::Ident(self.ident(&n)?),
-            SyntaxKind::VARIABLE => Expr::Var(self.variable(&n)?),
+        let n = self.n(&mut children, &node, SyntaxKind::EXPR)?;
+        let expr = match n.kind() {
+            SyntaxKind::CONST => self.expr_value(n)?,
+            SyntaxKind::IDENT => SyntaxExpr {
+                node,
+                expr: Expr::Ident(self.ident(n)?),
+            },
+            SyntaxKind::VARIABLE => SyntaxExpr {
+                node,
+                expr: Expr::Var(self.variable(n)?),
+            },
             found => {
                 self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[SyntaxKind::CONST, SyntaxKind::IDENT, SyntaxKind::VARIABLE],
@@ -1091,18 +1196,30 @@ impl Parser {
                 return Err(Error("unexpected syntax"));
             }
         };
-        Ok(r)
+        Ok(expr)
     }
 
     fn regex(&mut self, node: &SyntaxNode) -> Result<Regex> {
         self.assert_type(node, SyntaxKind::REGEX)?;
         let s = node.token_string();
         let Some(r) = s.strip_prefix("#/").and_then(|s| s.strip_suffix('/')) else {
-            self.errors
-                .push(AstError::InvalidRegex { span: node.span() });
-            return Err(Error("string start must be followed by a string segment"));
+            self.errors.push(AstError::InvalidRegex {
+                span: node.span(),
+                message: "invalid boundaries".to_string(),
+            });
+            return Err(Error("invalid regex boundaries"));
         };
-        Ok(Regex(self.unescape_regex(node, r)))
+        let r = regex::Regex::new(self.unescape_regex(node, r));
+        match r {
+            Ok(r) => Ok(Regex(r)),
+            Err(e) => {
+                self.errors.push(AstError::InvalidRegex {
+                    span: node.span(),
+                    message: e.to_string(),
+                });
+                Err(Error("invalid regex"))
+            }
+        }
     }
 
     fn filter_cmp(&mut self, node: &SyntaxNode) -> Result<FilterCmp> {
@@ -1110,7 +1227,7 @@ impl Parser {
         let mut children = node.children();
         let lhs = self
             .n(&mut children, node, SyntaxKind::IDENT)
-            .and_then(|n| self.ident(&n));
+            .and_then(|n| self.ident(n));
         let c = self.n(&mut children, node, SyntaxKind::FILTER_CMP)?;
         let r = match c.kind() {
             SyntaxKind::FILTER_CMP_EQ => {
@@ -1120,7 +1237,7 @@ impl Parser {
                     let rhs = self.regex(&c)?;
                     Ok(FilterCmp::EqRe { lhs: lhs?, rhs })
                 } else {
-                    let rhs = self.expr(&c)?;
+                    let rhs = self.expr(c)?;
                     Ok(FilterCmp::Eq { lhs: lhs?, rhs })
                 }
             }
@@ -1131,32 +1248,32 @@ impl Parser {
                     let rhs = self.regex(&c)?;
                     Ok(FilterCmp::NeqRe { lhs: lhs?, rhs })
                 } else {
-                    let rhs = self.expr(&c)?;
+                    let rhs = self.expr(c)?;
                     Ok(FilterCmp::Neq { lhs: lhs?, rhs })
                 }
             }
             SyntaxKind::FILTER_CMP_LT => {
                 let mut children = c.children();
                 let c = self.n(&mut children, &c, SyntaxKind::EXPR)?;
-                let rhs = self.expr(&c)?;
+                let rhs = self.expr(c)?;
                 Ok(FilterCmp::Lt { lhs: lhs?, rhs })
             }
             SyntaxKind::FILTER_CMP_GT => {
                 let mut children = c.children();
                 let c = self.n(&mut children, &c, SyntaxKind::EXPR)?;
-                let rhs = self.expr(&c)?;
+                let rhs = self.expr(c)?;
                 Ok(FilterCmp::Gt { lhs: lhs?, rhs })
             }
             SyntaxKind::FILTER_CMP_LTE => {
                 let mut children = c.children();
                 let c = self.n(&mut children, &c, SyntaxKind::EXPR)?;
-                let rhs = self.expr(&c)?;
+                let rhs = self.expr(c)?;
                 Ok(FilterCmp::Lte { lhs: lhs?, rhs })
             }
             SyntaxKind::FILTER_CMP_GTE => {
                 let mut children = c.children();
                 let c = self.n(&mut children, &c, SyntaxKind::EXPR)?;
-                let rhs = self.expr(&c)?;
+                let rhs = self.expr(c)?;
                 Ok(FilterCmp::Gte { lhs: lhs?, rhs })
             }
             SyntaxKind::FILTER_CMP_IN => {
@@ -1165,10 +1282,13 @@ impl Parser {
                 if c.kind() == SyntaxKind::VARIABLE {
                     Ok(FilterCmp::In {
                         lhs: lhs?,
-                        rhs: Expr::Var(self.variable(&c)?),
+                        rhs: SyntaxExpr {
+                            node: c.clone(),
+                            expr: Expr::Var(self.variable(c)?),
+                        },
                     })
                 } else {
-                    let rhs = self.expr(&c)?;
+                    let rhs = self.expr(c)?;
                     Ok(FilterCmp::In { lhs: lhs?, rhs })
                 }
             }
@@ -1277,22 +1397,23 @@ impl Parser {
         self.assert_end(children);
         Ok(Rule::Sample(f))
     }
-    fn function_path(&mut self, node: &SyntaxNode) -> Result<Vec<Ident>> {
+
+    fn function_path(&mut self, node: SyntaxNode) -> Result<Vec<Ident>> {
         match node.kind() {
             SyntaxKind::FUNCTION_PATH => {
                 let mut children = node.children();
                 let mut path = Vec::new();
                 while let Some(n) = children.n() {
-                    if let Ok(p) = self.ident(&n) {
+                    if let Ok(p) = self.ident(n) {
                         path.push(p);
                     }
                 }
                 Ok(path)
             }
-            SyntaxKind::MATH_FN => Ok(vec![
-                Ident("__MATH__".to_string()),
-                Ident(node.token_string()),
-            ]),
+            SyntaxKind::MATH_FN => {
+                let name = node.token_string();
+                Ok(vec![Ident { node, name }])
+            }
             _ => {
                 self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[SyntaxKind::FUNCTION_PATH, SyntaxKind::MATH_FN],
@@ -1311,56 +1432,57 @@ impl Parser {
             SyntaxKind::MAP_MUL => {
                 let mut children = n.children();
                 let e = self.n(&mut children, &n, SyntaxKind::MAP_MUL)?;
-                let expr = self.expr(&e)?;
+                let expr = self.expr(e)?;
                 FunctionCall {
-                    node: n,
-                    name: vec![Ident("*".to_string())],
+                    node: n.clone(),
+                    name: vec![Ident {
+                        node: n,
+                        name: "*".to_string(),
+                    }],
                     args: vec![expr],
                 }
             }
             SyntaxKind::MAP_DIV => {
                 let mut children = n.children();
                 let e = self.n(&mut children, &n, SyntaxKind::MAP_DIV)?;
-                let expr = self.expr(&e)?;
+                let expr = self.expr(e)?;
                 FunctionCall {
-                    node: n,
-                    name: vec![Ident("/".to_string())],
+                    node: n.clone(),
+                    name: vec![Ident {
+                        node: n,
+                        name: "/".to_string(),
+                    }],
                     args: vec![expr],
                 }
             }
             SyntaxKind::MAP_PLUS => {
                 let mut children = n.children();
                 let e = self.n(&mut children, &n, SyntaxKind::MAP_PLUS)?;
-                let expr = self.expr(&e)?;
+                let expr = self.expr(e)?;
                 FunctionCall {
-                    node: n,
-                    name: vec![Ident("+".to_string())],
+                    node: n.clone(),
+                    name: vec![Ident {
+                        node: n,
+                        name: "+".to_string(),
+                    }],
                     args: vec![expr],
                 }
             }
             SyntaxKind::MAP_MINUS => {
                 let mut children = n.children();
                 let e = self.n(&mut children, &n, SyntaxKind::MAP_MINUS)?;
-                let expr = self.expr(&e)?;
+                let expr = self.expr(e)?;
                 FunctionCall {
-                    node: n,
-                    name: vec![Ident("-".to_string())],
+                    node: n.clone(),
+                    name: vec![Ident {
+                        node: n,
+                        name: "-".to_string(),
+                    }],
                     args: vec![expr],
                 }
             }
 
-            SyntaxKind::FUNCTION_PATH => {
-                let name = self.function_path(&n)?;
-                let mut args = Vec::new();
-                while let Some(n) = children.n() {
-                    args.push(self.expr(&n)?);
-                }
-                FunctionCall {
-                    node: n,
-                    name,
-                    args,
-                }
-            }
+            SyntaxKind::FUNCTION_CALL => self.function_call(n)?,
             found => {
                 self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[
@@ -1379,14 +1501,14 @@ impl Parser {
         Ok(Rule::Map(f))
     }
 
-    fn duration(&mut self, node: &SyntaxNode) -> Result<Duration> {
+    fn duration(&mut self, node: SyntaxNode) -> Result<Duration> {
         if node.kind() == SyntaxKind::VARIABLE {
             let v = self.variable(node)?;
             return Ok(Duration::Var(v));
         }
-        self.assert_type(node, SyntaxKind::DURATION)?;
+        self.assert_type(&node, SyntaxKind::DURATION)?;
         let mut children = node.children();
-        let n = self.n(&mut children, node, SyntaxKind::INTEGER)?;
+        let n = self.n(&mut children, &node, SyntaxKind::INTEGER)?;
         let TagValue::Int(i) = self.integer_const(&n)? else {
             return Err(Error("expected integer (this should be unreachable!)"));
         };
@@ -1397,7 +1519,7 @@ impl Parser {
                 .push(AstError::NegativeDuration { span: n.span() });
             0
         };
-        let n = self.n(&mut children, node, SyntaxKind::TIME_UNIT)?;
+        let n = self.n(&mut children, &node, SyntaxKind::TIME_UNIT)?;
         let unit = self.time_unit(&n)?;
         let duration = match unit.as_str() {
             "ms" if i < 1000 => {
@@ -1408,7 +1530,7 @@ impl Parser {
                 1
             }
             "ms" if !i.is_multiple_of(1000) => {
-                self.warnings.push(ParserWarning::TimeNotSecondAligned {
+                self.warnings.push(AstWarning::TimeNotSecondAligned {
                     time: i,
                     span: n.span(),
                 });
@@ -1437,7 +1559,7 @@ impl Parser {
         let mut children = node.children();
         let mut tags = Vec::new();
         while let Some(n) = children.n() {
-            if let Ok(tag) = self.ident(&n) {
+            if let Ok(tag) = self.ident(n) {
                 tags.push(tag);
             }
         }
@@ -1449,30 +1571,26 @@ impl Parser {
         let mut children = node.children();
         let mut n = self.n(&mut children, node, SyntaxKind::KEYWORD)?;
         let mut duration = Ok(None);
-        let mut found = self.kw(&n)?;
+        let mut found = self.kw(n.clone())?;
         if found == "to" {
             duration = self
                 .n(&mut children, node, SyntaxKind::DURATION)
-                .and_then(|n| Ok(Some(self.duration(&n)?)));
+                .and_then(|n| Ok(Some(self.duration(n)?)));
             n = self.n(&mut children, node, SyntaxKind::KEYWORD)?;
-            found = self.kw(&n)?;
+            found = self.kw(n.clone())?;
         }
         if found == "using" {
-            let n = self.n(&mut children, node, SyntaxKind::FUNCTION_PATH)?;
-            let func = self.function_path(&n)?;
+            let n = self.n(&mut children, node, SyntaxKind::FUNCTION_CALL)?;
+            let func = self.function_call(n)?;
             self.assert_end(children);
             Ok(Rule::Align {
                 duration: duration?,
-                func: FunctionCall {
-                    node: n,
-                    name: func,
-                    args: vec![],
-                },
+                func,
             })
         } else {
             self.errors.push(AstError::UnexpectedKeyword {
                 expected: "using",
-                found,
+                found: found.into_string(),
                 span: n.span(),
             });
             self.assert_end(children);
@@ -1484,47 +1602,58 @@ impl Parser {
         let mut children = node.children();
         let mut n = self.n(&mut children, node, SyntaxKind::KEYWORD)?;
         let mut groups = Ok(Vec::new());
-        let mut found = self.kw(&n)?;
+        let mut found = self.kw(n.clone())?;
         if found == "by" {
             groups = self
                 .n(&mut children, node, SyntaxKind::TAG_LIST)
                 .and_then(|n| self.tags(&n));
             n = self.n(&mut children, node, SyntaxKind::KEYWORD)?;
-            found = self.kw(&n)?;
+            found = self.kw(n.clone())?;
         }
         if found == "using" {
-            let n = self.n(&mut children, node, SyntaxKind::FUNCTION_PATH)?;
-            let func = self.function_path(&n)?;
+            let n = self.n(&mut children, node, SyntaxKind::FUNCTION_CALL)?;
+            let func = self.function_call(n)?;
             self.assert_end(children);
             Ok(Rule::Group {
                 groups: groups?,
-                func: FunctionCall {
-                    node: n,
-                    name: func,
-                    args: vec![],
-                },
+                func,
             })
         } else {
             self.errors.push(AstError::UnexpectedKeyword {
                 expected: "using",
-                found,
+                found: found.into_string(),
                 span: n.span(),
             });
             self.assert_end(children);
             Err(Error("expected 'using'"))
         }
     }
-    fn bucket_args(&mut self, node: &SyntaxNode) -> Result<Vec<Expr>> {
-        self.assert_type(node, SyntaxKind::BUCKET_ARGS)?;
+    fn function_args(&mut self, node: &SyntaxNode) -> Result<Vec<SyntaxExpr>> {
+        self.assert_type(node, SyntaxKind::FUNCTION_ARGS)?;
         let mut res = Vec::new();
         let mut children = node.children();
         while let Some(c) = children.n() {
-            if let Ok(arg) = self.expr(&c) {
+            if let Ok(arg) = self.expr(c) {
                 res.push(arg);
             }
         }
         self.assert_end(children);
         Ok(res)
+    }
+    fn function_call(&mut self, node: SyntaxNode) -> Result<FunctionCall> {
+        self.assert_type(&node, SyntaxKind::FUNCTION_CALL)?;
+        let mut children = node.children();
+        let name = self
+            .n(&mut children, &node, SyntaxKind::FUNCTION_PATH)
+            .and_then(|node| self.function_path(node));
+        let n = self.n(&mut children, &node, SyntaxKind::FUNCTION_ARGS)?;
+        let args = self.function_args(&n)?;
+        self.assert_end(children);
+        Ok(FunctionCall {
+            node,
+            name: name?, // check err late for more parse go brr
+            args,
+        })
     }
     fn rule_bucket(&mut self, node: &SyntaxNode) -> Result<Rule> {
         self.assert_type(node, SyntaxKind::BUCKET)?;
@@ -1532,40 +1661,34 @@ impl Parser {
         let mut n = self.n(&mut children, node, SyntaxKind::KEYWORD)?;
         let mut groups = Ok(Vec::new());
         let mut duration = Ok(None);
-        let mut found = self.kw(&n)?;
+        let mut found = self.kw(n.clone())?;
         if found == "by" {
             groups = self
                 .n(&mut children, node, SyntaxKind::TAG_LIST)
                 .and_then(|n| self.tags(&n));
             n = self.n(&mut children, node, SyntaxKind::KEYWORD)?;
-            found = self.kw(&n)?;
+            found = self.kw(n.clone())?;
         }
         if found == "to" {
             duration = self
                 .n(&mut children, node, SyntaxKind::DURATION)
-                .and_then(|n| Ok(Some(self.duration(&n)?)));
+                .and_then(|n| Ok(Some(self.duration(n)?)));
             n = self.n(&mut children, node, SyntaxKind::KEYWORD)?;
-            found = self.kw(&n)?;
+            found = self.kw(n.clone())?;
         }
         if found == "using" {
-            let call = self.n(&mut children, node, SyntaxKind::FUNCTION_PATH)?;
-            let func = self.function_path(&call);
-            let n = self.n(&mut children, node, SyntaxKind::BUCKET_ARGS)?;
-            let args = self.bucket_args(&n)?;
+            let call = self.n(&mut children, node, SyntaxKind::FUNCTION_CALL)?;
+            let func = self.function_call(call)?;
             self.assert_end(children);
             Ok(Rule::Bucket {
                 groups: groups?,
                 duration: duration?,
-                func: FunctionCall {
-                    node: call,
-                    name: func?,
-                    args,
-                },
+                func,
             })
         } else {
             self.errors.push(AstError::UnexpectedKeyword {
                 expected: "using",
-                found,
+                found: found.into_string(),
                 span: n.span(),
             });
             Err(Error("expected 'using'"))
@@ -1577,7 +1700,7 @@ impl Parser {
         let mut children = node.children();
         let var = self
             .n(&mut children, node, SyntaxKind::VARIABLE)
-            .and_then(|n| self.variable(&n));
+            .and_then(|n| self.variable(n));
         let if_branch = self
             .n(&mut children, node, SyntaxKind::FILTER)
             .and_then(|n| Ok(Box::new(self.rule_filter(&n)?)));
@@ -1598,7 +1721,7 @@ impl Parser {
         self.assert_type(node, SyntaxKind::AS)?;
         let mut children = node.children();
         let n = self.n(&mut children, node, SyntaxKind::IDENT)?;
-        let name = self.ident(&n)?;
+        let name = self.ident(n)?;
         self.assert_end(children);
         Ok(Rule::As(name))
     }
@@ -1608,10 +1731,10 @@ impl Parser {
         let mut children = node.children();
         let name = self
             .n(&mut children, node, SyntaxKind::IDENT)
-            .and_then(|n| self.ident(&n));
+            .and_then(|n| self.ident(n));
         let value = self
             .n(&mut children, node, SyntaxKind::EXPR)
-            .and_then(|n| self.expr(&n));
+            .and_then(|n| self.expr(n));
         self.assert_end(children);
         Ok(ExtendPart {
             name: name?,
@@ -1666,7 +1789,7 @@ impl Parser {
             .and_then(|c| self.dataset(&c));
         let metric = self
             .n(&mut children, &node, SyntaxKind::IDENT)
-            .and_then(|c| self.ident(&c));
+            .and_then(|c| self.ident(c));
 
         let Some(mut c) = children.n() else {
             return Ok(SimpleQuery {
@@ -1681,7 +1804,7 @@ impl Parser {
         if c.kind() == SyntaxKind::KEYWORD {
             alias = self
                 .n(&mut children, &node, SyntaxKind::IDENT)
-                .and_then(|c| Ok(Some(self.ident(&c)?)));
+                .and_then(|c| Ok(Some(self.ident(c)?)));
             let Some(n) = children.n() else {
                 return Ok(SimpleQuery {
                     node,
@@ -1725,20 +1848,20 @@ impl Parser {
             .and_then(|c| self.query(&c));
         let name = self
             .n(&mut children, &node, SyntaxKind::IDENT)
-            .and_then(|c| self.ident(&c));
+            .and_then(|c| self.ident(c));
         let Some(c) = children.n() else {
             self.errors.push(AstError::MissingToken {
-                expected: SyntaxKind::FUNCTION_PATH,
+                expected: SyntaxKind::FUNCTION_CALL,
                 span: node.span(),
             });
             return Err(Error("expected compute function"));
         };
 
-        let func = self.function_path(&c);
+        let func = self.function_call(c);
         let mut rules = vec![];
         while let Some(c) = children.n() {
             if let Ok(rule) = self.rule(&c) {
-                rules.push(rule);
+                rules.push(SyntaxRule { node: c, rule });
             }
         }
 
@@ -1774,77 +1897,77 @@ impl Parser {
         Ok(r)
     }
 
-    fn ident_body(&mut self, node: &SyntaxNode) -> Result<Ident> {
+    fn ident_body(&mut self, node: SyntaxNode) -> Result<Ident> {
         let mut children = node.children_with_tokens();
-        let node = self.n(&mut children, node, SyntaxKind::LX_IDENT)?;
-        let r = match node.kind() {
-            SyntaxKind::LX_IDENT => node.token_string(),
+        let n = self.n(&mut children, &node, SyntaxKind::LX_IDENT)?;
+        let name = match n.kind() {
+            SyntaxKind::LX_IDENT => n.token_string(),
             SyntaxKind::LX_ESCAPED_IDENT => {
-                let s = node.to_string();
+                let s = n.to_string();
                 let Some(s) = s.strip_prefix('`').and_then(|s| s.strip_suffix('`')) else {
-                    self.errors
-                        .push(AstError::InvalidIdent { span: node.span() });
+                    self.errors.push(AstError::InvalidIdent { span: n.span() });
                     return Err(Error("string start must be followed by a string segment"));
                 };
 
-                self.unescape_ident(&node, s)
+                self.unescape_ident(&n, s)
             }
             found => {
                 self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[SyntaxKind::LX_IDENT, SyntaxKind::LX_ESCAPED_IDENT],
                     found,
-                    span: node.span(),
+                    span: n.span(),
                 });
                 return Err(Error("unexpected syntax"));
             }
         };
         self.assert_end(children);
-        Ok(Ident(r))
+        Ok(Ident { node, name })
     }
-    fn ident(&mut self, node: &SyntaxNode) -> Result<Ident> {
-        self.assert_type(node, SyntaxKind::IDENT)?;
+
+    fn ident(&mut self, node: SyntaxNode) -> Result<Ident> {
+        self.assert_type(&node, SyntaxKind::IDENT)?;
         self.ident_body(node)
     }
 
-    fn variable(&mut self, node: &SyntaxNode) -> Result<Variable> {
-        self.assert_type(node, SyntaxKind::VARIABLE)?;
+    fn variable(&mut self, node: SyntaxNode) -> Result<Variable> {
+        self.assert_type(&node, SyntaxKind::VARIABLE)?;
         let mut children = node.children_with_tokens();
-        let node = self.n(&mut children, node, SyntaxKind::LX_VARIABLE)?;
-        let r = match node.kind() {
+        let n = self.n(&mut children, &node, SyntaxKind::LX_VARIABLE)?;
+        let name = match n.kind() {
             SyntaxKind::LX_VARIABLE => {
-                let s = node.token_string();
+                let s = n.token_string();
                 let Some(s) = s.strip_prefix('$') else {
                     self.errors
-                        .push(AstError::InvalidVariable { span: node.span() });
+                        .push(AstError::InvalidVariable { span: n.span() });
                     return Err(Error("string start must be followed by a string segment"));
                 };
 
                 s.to_string()
             }
             SyntaxKind::LX_ESCAPED_VARIABLE => {
-                let s = node.token_string();
+                let s = n.token_string();
                 let Some(s) = s.strip_prefix("$`").and_then(|s| s.strip_suffix('`')) else {
                     self.errors
-                        .push(AstError::InvalidVariable { span: node.span() });
+                        .push(AstError::InvalidVariable { span: n.span() });
                     return Err(Error("string start must be followed by a string segment"));
                 };
-                self.unescape_ident(&node, s)
+                self.unescape_ident(&n, s)
             }
             found => {
                 self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[SyntaxKind::LX_VARIABLE, SyntaxKind::LX_ESCAPED_VARIABLE],
                     found,
-                    span: node.span(),
+                    span: n.span(),
                 });
                 return Err(Error("unexpected syntax"));
             }
         };
         self.assert_end(children);
-        Ok(Variable(r))
+        Ok(Variable { node, name })
     }
 
-    fn kw(&mut self, node: &SyntaxNode) -> Result<Ident> {
-        self.assert_type(node, SyntaxKind::KEYWORD)?;
+    fn kw(&mut self, node: SyntaxNode) -> Result<Ident> {
+        self.assert_type(&node, SyntaxKind::KEYWORD)?;
         self.ident_body(node)
     }
 
@@ -2016,7 +2139,7 @@ impl Parser {
         children: &mut SyntaxNodeChildren<Lang>,
     ) -> Result<Ident> {
         let c = self.n(children, node, SyntaxKind::IDENT)?;
-        self.ident(&c)
+        self.ident(c)
     }
 
     fn require_variable(
@@ -2025,7 +2148,7 @@ impl Parser {
         children: &mut SyntaxNodeChildren<Lang>,
     ) -> Result<Variable> {
         let c = self.n(children, node, SyntaxKind::VARIABLE)?;
-        self.variable(&c)
+        self.variable(c)
     }
 
     fn otel_typ(&mut self, node: &SyntaxNode) -> Result<TagType> {

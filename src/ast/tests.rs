@@ -39,7 +39,7 @@ fn report(name: &str, content: &str, errors: &[&AstError]) -> String {
 fn lower_first<T>(
     src: &str,
     kind: SyntaxKind,
-    f: impl FnOnce(&mut Parser, &SyntaxNode) -> Result<T>,
+    f: impl FnOnce(&mut Parser, SyntaxNode) -> Result<T>,
 ) -> T {
     let mut parser = Parser::new(src);
     assert!(
@@ -52,7 +52,7 @@ fn lower_first<T>(
         .descendants()
         .find(|n| n.kind() == kind)
         .unwrap_or_else(|| panic!("no {kind:?} node in {src:?}"));
-    match f(&mut parser, &node) {
+    match f(&mut parser, node) {
         Ok(v) => v,
         Err(Error(why)) => panic!("{src:?} did not lower: {why}: {:?}", parser.errors),
     }
@@ -64,7 +64,7 @@ fn lower_first<T>(
 fn lower_diagnostics<T>(
     src: &str,
     kind: SyntaxKind,
-    f: impl FnOnce(&mut Parser, &SyntaxNode) -> Result<T>,
+    f: impl FnOnce(&mut Parser, SyntaxNode) -> Result<T>,
 ) -> Vec<String> {
     let mut parser = Parser::new(src);
     assert!(
@@ -77,7 +77,7 @@ fn lower_diagnostics<T>(
         .descendants()
         .find(|n| n.kind() == kind)
         .unwrap_or_else(|| panic!("no {kind:?} node in {src:?}"));
-    drop(f(&mut parser, &node));
+    drop(f(&mut parser, node));
     parser.errors.iter().map(ToString::to_string).collect()
 }
 
@@ -87,7 +87,7 @@ fn lower_diagnostics<T>(
 fn unknown_escapes<T>(
     src: &str,
     kind: SyntaxKind,
-    f: impl FnOnce(&mut Parser, &SyntaxNode) -> Result<T>,
+    f: impl FnOnce(&mut Parser, SyntaxNode) -> Result<T>,
 ) -> Vec<char> {
     let mut parser = Parser::new(src);
     assert!(
@@ -100,13 +100,13 @@ fn unknown_escapes<T>(
         .descendants()
         .find(|n| n.kind() == kind)
         .unwrap_or_else(|| panic!("no {kind:?} node in {src:?}"));
-    drop(f(&mut parser, &node));
+    drop(f(&mut parser, node));
     parser
         .warnings
         .iter()
         .filter_map(|w| match w {
-            ParserWarning::UnknownEscapeSequence { char, .. } => Some(*char),
-            ParserWarning::TimeNotSecondAligned { .. } => None,
+            AstWarning::UnknownEscapeSequence { char, .. } => Some(*char),
+            AstWarning::TimeNotSecondAligned { .. } => None,
         })
         .collect()
 }
@@ -114,7 +114,7 @@ fn unknown_escapes<T>(
 /// The characters a string literal flags, for a body wrapping each escape in `x…y`.
 fn string_unknown_escapes(escape: char) -> Vec<char> {
     let src = format!("set a = \"x{}{escape}y\"; d:m", '\\');
-    unknown_escapes(&src, SyntaxKind::STRING, Parser::string_const)
+    unknown_escapes(&src, SyntaxKind::STRING, |p, n| p.string_const(&n))
 }
 
 /// The characters an escaped identifier flags, for the same body shape.
@@ -126,7 +126,7 @@ fn ident_unknown_escapes(escape: char) -> Vec<char> {
 /// The value a string literal carries once its quotes and escapes are resolved.
 fn string_value(literal: &str) -> String {
     let src = format!("set a = {literal}; d:m");
-    match lower_first(&src, SyntaxKind::STRING, Parser::string_const) {
+    match lower_first(&src, SyntaxKind::STRING, |p, n| p.string_const(&n)) {
         TagValue::String(s) => s.to_string(),
         other => panic!("{literal} lowered to {other:?}"),
     }
@@ -135,7 +135,10 @@ fn string_value(literal: &str) -> String {
 /// The pattern a regex literal carries once its delimiters are removed.
 fn regex_pattern(literal: &str) -> String {
     let src = format!("d:m | where a == {literal}");
-    lower_first(&src, SyntaxKind::REGEX, Parser::regex).0
+    lower_first(&src, SyntaxKind::REGEX, |p, n| p.regex(&n))
+        .0
+        .as_str()
+        .to_string()
 }
 
 /// The name an identifier carries once its backticks and escapes are resolved.
@@ -155,15 +158,21 @@ fn variable_name(literal: &str) -> String {
 /// for the reference marker.
 fn string_parts(literal: &str) -> String {
     let src = format!("d:m | extend x = {literal}");
-    let Expr::String(parts) = lower_first(&src, SyntaxKind::STRING, Parser::string_expr) else {
+    let SyntaxExpr {
+        expr: Expr::String(parts),
+        ..
+    } = lower_first(&src, SyntaxKind::STRING, Parser::string_expr)
+    else {
         panic!("{literal} did not lower to an interpolated string")
     };
     parts
         .iter()
         .map(|p| match p {
             StringPart::Const(s) => format!("{s:?}"),
-            StringPart::Expr(Expr::Var(v)) => format!("${v}"),
-            StringPart::Expr(e) => format!("{e:?}"),
+            StringPart::Expr(SyntaxExpr {
+                expr: Expr::Var(v), ..
+            }) => format!("${v}"),
+            StringPart::Expr(SyntaxExpr { expr, .. }) => format!("{expr:?}"),
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -253,7 +262,7 @@ fn a_unicode_escape_is_reported() {
         lower_diagnostics(
             &format!("set a = \"{bs}u0041\"; d:m"),
             SyntaxKind::STRING,
-            Parser::string_const
+            |p, n| p.string_const(&n)
         ),
         ["unicode escape sequences are not supported"],
         "a string resolved a unicode escape silently"

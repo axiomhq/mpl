@@ -3,9 +3,16 @@ use std::{hash, ops::Deref};
 
 use regex::Regex;
 
+use crate::ast;
+
 /// A wrapper around `regex::Regex` that can be serialized and deserialized via bincode
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct EncodableRegex(#[serde(with = "serde_regex")] Regex);
+impl From<ast::Regex> for EncodableRegex {
+    fn from(regex: ast::Regex) -> Self {
+        EncodableRegex(regex.into())
+    }
+}
 
 impl PartialEq for EncodableRegex {
     fn eq(&self, other: &Self) -> bool {
