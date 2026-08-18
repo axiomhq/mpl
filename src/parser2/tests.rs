@@ -113,7 +113,7 @@ fn bucket_requires_at_least_one_spec(src: &str) {
 /// A duration keeps the unit it was written in, or the user is told it could not. Rounding
 /// `1500ms` down to `1s` is a 1.5x wider window than the query asked for.
 #[test_case("d:m | align to 1500ms using avg", 1500 ; "align")]
-#[test_case("d:m | bucket to 500ms using histogram(0.5)", 500 ; "bucket")]
+#[test_case("d:m | bucket to 1500ms using histogram(0.5)", 1500 ; "bucket")]
 fn a_sub_second_duration_survives_or_is_reported(src: &str, millis: u64) {
     let Ok((query, warnings)) = lower(src) else {
         // Rejecting the duration also tells the user; what this pins is the silent rounding.

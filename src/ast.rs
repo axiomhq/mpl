@@ -1646,7 +1646,7 @@ impl Parser {
         let name = self
             .n(&mut children, &node, SyntaxKind::FUNCTION_PATH)
             .and_then(|node| self.function_path(node));
-        let n = self.n(&mut children, &node, SyntaxKind::FUNCTION_PATH)?;
+        let n = self.n(&mut children, &node, SyntaxKind::FUNCTION_ARGS)?;
         let args = self.function_args(&n)?;
         self.assert_end(children);
         Ok(FunctionCall {
