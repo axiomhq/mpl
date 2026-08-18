@@ -19,7 +19,8 @@ fn parse_examples() {
                 "__interval".to_string(),
                 ParamType::Terminal(TerminalParamType::Duration),
             );
-            match mpl_lang::compile(&content, params) {
+            let r = mpl_lang::compile(&content, params.clone());
+            match r {
                 Ok(_) => println!("Parsed successfully"),
                 Err(mpl_lang::CompileError::Parse(mpl_lang::ParseError::NotSupported {
                     span,
@@ -33,7 +34,23 @@ fn parse_examples() {
                     println!("Parsed but not yet implemented: {feature}")
                 }
                 Err(e) => panic!("Error parsing {:?}: {e} {e:?}", entry.file_name()),
-            }
+            };
+            let r2 = mpl_lang::compile2(&content, params);
+            match r2 {
+                Ok(_) => println!("Parsed successfully"),
+                Err(mpl_lang::CompileError::Parse(mpl_lang::ParseError::NotSupported {
+                    span,
+                    rule,
+                })) => {
+                    println!("Parsed but not supported by the backend: {span:?}, {rule:?}")
+                }
+                Err(mpl_lang::CompileError::Parse(mpl_lang::ParseError::NotImplemented(
+                    feature,
+                ))) => {
+                    println!("Parsed but not yet implemented: {feature}")
+                }
+                Err(e) => panic!("Error parsing {:?}: {e} {e:?}", entry.file_name()),
+            };
         });
 }
 

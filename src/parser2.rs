@@ -55,6 +55,13 @@ pub enum ParseError {
         #[label("You can not place a directive here")]
         span: SourceSpan,
     },
+    /// Param in the wrong place
+    #[error("Param in the wrong place")]
+    ParamInWongPlace {
+        /// The location
+        #[label("You can not place a param here")]
+        span: SourceSpan,
+    },
     /// Rule not supported after compute
     #[error("Rule not supported after compute")]
     RuleNotSupportedAfterCompute {
@@ -224,10 +231,9 @@ impl Parser {
         let mut directives = HashMap::new();
         // we rever so we can pop the content
         parts.reverse();
-        while parts.last().is_some_and(Part::is_directive) {
-            let Some(Part::Directive(d)) = parts.pop() else {
-                continue;
-            };
+        while parts.last().is_some_and(Part::is_directive)
+            && let Some(Part::Directive(d)) = parts.pop()
+        {
             let v = match d.value {
                 None => DirectiveValue::None,
                 Some(TagValue::Int(i)) => DirectiveValue::Int(i),
@@ -253,10 +259,9 @@ impl Parser {
                 typ,
             });
         }
-        while parts.last().is_some_and(Part::is_param) {
-            let Some(Part::Param(p)) = parts.pop() else {
-                continue;
-            };
+        while parts.last().is_some_and(Part::is_param)
+            && let Some(Part::Param(p)) = parts.pop()
+        {
             params.push(ParamDeclaration {
                 span: p.node.span(),
                 name: p.name.to_string(),
@@ -288,7 +293,10 @@ impl Parser {
                 });
                 Err(errors)
             }
-            Some(Part::Param(_)) => {
+            Some(Part::Param(p)) => {
+                errors.push(ParseError::ParamInWongPlace {
+                    span: p.node.span(),
+                });
                 // This is unreachable
                 Err(errors)
             }

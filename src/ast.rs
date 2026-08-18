@@ -359,7 +359,7 @@ impl Part {
         matches!(self, Part::Directive(_))
     }
     pub(crate) fn is_param(&self) -> bool {
-        matches!(self, Part::Directive(_))
+        matches!(self, Part::Param(_))
     }
 }
 
