@@ -46,7 +46,10 @@ pub use query::Query;
 pub use stdlib::STDLIB;
 
 use crate::{
-    query::{Cmp, Expr, Filter, ParamDeclaration, ParamType, TagType, TerminalParamType, Warnings},
+    query::{
+        Cmp, Expr, Filter, ParamDeclaration, ParamType, TagType, TerminalParamType, Warning,
+        Warnings,
+    },
     types::{Dataset, Parameterized},
     visitor::{QueryVisitor, QueryWalker, VisitRes},
 };
@@ -71,6 +74,9 @@ pub enum CompileError {
     #[error(transparent)]
     #[diagnostic(transparent)]
     Ifdef(#[from] IfdefError),
+    /// v2 parser error
+    #[error("Encountered errors during parsing")]
+    ParserV2(#[related] Vec<parser2::ParseError>),
 }
 
 /// Parses and typechecks an MPL query into a Query object.
@@ -94,6 +100,37 @@ pub fn compile<S: BuildHasher>(
 
     Ok((query, warnings))
 }
+
+/// Parses and typechecks an MPL query into a Query object.
+#[allow(clippy::result_large_err)]
+pub fn compile2<H: BuildHasher>(
+    query: &str,
+    system_params: HashMap<String, ParamType, H>,
+) -> Result<(Query, Warnings), CompileError> {
+    // stage 1: parse
+    let parser = ast::Parser::new(query);
+    let ast = parser.lower();
+    let (mut query, warnings) = parser2::Parser::new(ast)
+        .lower(system_params)
+        .map_err(CompileError::ParserV2)?;
+    // stage 2: typecheck
+    let mut visitor = ParamTypecheckVisitor {};
+    visitor.walk(&mut query)?;
+    // stage 3: group check
+    let mut visitor = GroupCheckVisitor::default();
+    visitor.walk(&mut query)?;
+
+    let mut visitor = OptionCheckVisitor::default();
+    visitor.walk(&mut query)?;
+
+    Ok((
+        query,
+        Warnings {
+            inner: warnings.into_iter().map(Warning::from).collect(),
+        },
+    ))
+}
+
 /// Type error
 #[derive(Debug, thiserror::Error, Diagnostic)]
 pub enum GroupError {

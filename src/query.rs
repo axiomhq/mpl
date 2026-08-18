@@ -17,6 +17,7 @@ use crate::{
     enc_regex::EncodableRegex,
     linker::{AlignFunction, ComputeFunction, GroupFunction, MapFunction},
     parser::{self, MPLParser, ParseParamError, Rule},
+    parser2,
     tags::TagValue,
     time::{Resolution, ResolutionError},
     types::{BucketSpec, BucketType, Dataset, Metric, Parameterized},
@@ -597,6 +598,8 @@ pub enum WarningReason {
     },
     /// lowercase duration
     OldDuration,
+    /// Parser v2 warning
+    ParserV2(parser2::Warning),
 }
 
 impl Display for WarningReason {
@@ -616,6 +619,7 @@ impl Display for WarningReason {
                     "The param ${param} uses the `__` prefix reserved for system params"
                 )
             }
+            WarningReason::ParserV2(warning) => warning.fmt(f),
         }
     }
 }
@@ -625,6 +629,14 @@ impl Display for WarningReason {
 pub struct Warning {
     source: Option<SourceSpan>,
     warning: WarningReason,
+}
+impl From<parser2::Warning> for Warning {
+    fn from(warning: parser2::Warning) -> Self {
+        Warning {
+            source: Some(warning.span()),
+            warning: WarningReason::ParserV2(warning),
+        }
+    }
 }
 
 impl Warning {
@@ -643,7 +655,7 @@ impl Warning {
 /// Warnings we want to surface to the user instead of failing the request.
 #[derive(Debug, Default)]
 pub struct Warnings {
-    inner: Vec<Warning>,
+    pub(crate) inner: Vec<Warning>,
 }
 
 impl Warnings {

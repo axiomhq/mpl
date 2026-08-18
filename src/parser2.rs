@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, hash::BuildHasher};
 
 use miette::{Diagnostic, SourceSpan};
 
@@ -30,7 +30,8 @@ pub enum ParseError {
     #[error("Not implemented")]
     Unimplemented,
     /// AST errors
-    #[error("AST errors")]
+    #[error(transparent)]
+    #[diagnostic(transparent)]
     AST(
         /// prior AST errors
         AstError,
@@ -180,9 +181,19 @@ pub enum ParseError {
 #[derive(thiserror::Error, Debug, Diagnostic)]
 pub enum Warning {
     /// A warning from the AST parser
-    #[error("AST warning")]
+    #[error(transparent)]
+    #[diagnostic(transparent)]
     Ast(AstWarning),
 }
+
+impl Warning {
+    pub(crate) fn span(&self) -> SourceSpan {
+        match self {
+            Warning::Ast(ast_warning) => ast_warning.span(),
+        }
+    }
+}
+
 /// Parser from AST -> Query
 pub struct Parser {
     stdlib: &'static Module,
@@ -199,14 +210,17 @@ impl Parser {
         }
     }
     /// Parses the AST into a query
-    pub fn parse(self) -> Result<crate::Query, Vec<ParseError>> {
+    pub fn lower<H: BuildHasher>(
+        self,
+        system_params: HashMap<String, ParamType, H>,
+    ) -> Result<(crate::Query, Vec<Warning>), Vec<ParseError>> {
         let Ast {
             errors,
             warnings,
             mut parts,
         } = self.ast;
         let mut errors: Vec<_> = errors.into_iter().map(ParseError::AST).collect();
-        let _warnings: Vec<_> = warnings.into_iter().map(Warning::Ast).collect();
+        let warnings: Vec<_> = warnings.into_iter().map(Warning::Ast).collect();
         let mut directives = HashMap::new();
         // we rever so we can pop the content
         parts.reverse();
@@ -232,6 +246,13 @@ impl Parser {
         }
 
         let mut params = Vec::new();
+        for (name, typ) in system_params {
+            params.push(ParamDeclaration {
+                span: SourceSpan::new(0.into(), 0),
+                name,
+                typ,
+            });
+        }
         while parts.last().is_some_and(Part::is_param) {
             let Some(Part::Param(p)) = parts.pop() else {
                 continue;
@@ -254,10 +275,12 @@ impl Parser {
                     directives: directives.clone(),
                     params: params.clone(),
                 };
-                p.query(q).map_err(|e| {
-                    errors.push(e);
-                    errors
-                })
+                p.query(q)
+                    .map_err(|e| {
+                        errors.push(e);
+                        errors
+                    })
+                    .map(|q| (q, warnings))
             }
             Some(Part::Directive(d)) => {
                 errors.push(ParseError::DirectiveInWongPlace {

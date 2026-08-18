@@ -38,7 +38,14 @@ pub enum AstWarning {
         span: SourceSpan,
     },
 }
-
+impl AstWarning {
+    pub(crate) fn span(&self) -> SourceSpan {
+        match self {
+            AstWarning::UnknownEscapeSequence { span, .. }
+            | AstWarning::TimeNotSecondAligned { span, .. } => *span,
+        }
+    }
+}
 #[derive(thiserror::Error, Debug, Diagnostic)]
 /// Represents a parser error.
 pub enum AstError {
@@ -149,7 +156,7 @@ pub enum AstError {
         /// The expected keyword.
         expected: &'static str,
         /// The found keyword.
-        found: Ident,
+        found: String,
         /// The source span of the found keyword.
         #[label("unexpected keyword {found} expected {expected}")]
         span: SourceSpan,
@@ -1589,7 +1596,7 @@ impl Parser {
         } else {
             self.errors.push(AstError::UnexpectedKeyword {
                 expected: "using",
-                found,
+                found: found.into_string(),
                 span: n.span(),
             });
             self.assert_end(children);
@@ -1620,7 +1627,7 @@ impl Parser {
         } else {
             self.errors.push(AstError::UnexpectedKeyword {
                 expected: "using",
-                found,
+                found: found.into_string(),
                 span: n.span(),
             });
             self.assert_end(children);
@@ -1687,7 +1694,7 @@ impl Parser {
         } else {
             self.errors.push(AstError::UnexpectedKeyword {
                 expected: "using",
-                found,
+                found: found.into_string(),
                 span: n.span(),
             });
             Err(Error("expected 'using'"))
