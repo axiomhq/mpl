@@ -11,13 +11,15 @@ use crate::{
     },
     linker::{Function, FunctionId, FunctionTrait, Module, ModuleId},
     query::{
-        self, Aggregate, Align, BucketBy, Cmp, DirectiveValue, Directives, Filter, FilterOrIfDef,
-        GroupBy, MetricId, ParamDeclaration, ParamType, Params, RelativeTime, Source, TagExtend,
-        TagType, TimeUnit,
+        self, Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter,
+        FilterOrIfDef, GroupBy, MetricId, ParamDeclaration, ParamType, Params, RelativeTime,
+        Source, TagExtend, TagType, TimeUnit,
     },
     tags::TagValue,
     types::{BucketSpec, Dataset, Metric, Parameterized},
 };
+
+use super::ast::Ident;
 
 type Result<T, E = ParseError> = std::result::Result<T, E>;
 
@@ -33,100 +35,151 @@ pub enum ParseError {
         /// prior AST errors
         AstError,
     ),
+    /// Invalid value for directive
     #[error("Invalid value for directive")]
     InvalidDirectiveValue {
+        /// The invalid value
         value: TagValue,
+        /// The location
         #[label("Invalid directive value: {value}")]
         span: SourceSpan,
     },
+    /// No query was provided
     #[error("No query was provided")]
     MissingQuery,
+    /// Directive in the wrong place
     #[error("Directive in the wrong place")]
     DirectiveInWongPlace {
+        /// The location
         #[label("You can not place a directive here")]
         span: SourceSpan,
     },
+    /// Rule not supported after compute
     #[error("Rule not supported after compute")]
     RuleNotSupportedAfterCompute {
+        /// The location
         #[label("Rule not supported after compute")]
         span: SourceSpan,
     },
+    /// Unknown function
     #[error("Unknown function: {name}")]
     UnknownFunction {
+        /// The function name
         name: String,
+        /// The location
         #[label("Unknown function: {name}")]
         span: SourceSpan,
     },
+    /// Invalid argument count
     #[error("Invalid argument count for function: {function} (expected {expected}, got {actual})")]
     InvalidArgumentCount {
+        /// The function name
         function: String,
+        /// The expected number of arguments
         expected: usize,
+        /// The actual number of arguments
         actual: usize,
+        /// The location
         #[label(
             "Invalid argument count for function: {function} (expected {expected}, got {actual})"
         )]
         span: SourceSpan,
     },
+    /// Invalid argument type
     #[error(
         "Invalid argument type for argument {n} of function: {function} (expected {expected}, got {actual})"
     )]
     InvalidArgumentType {
+        /// The function name
         function: String,
+        /// The expected argument type
         expected: TagType,
+        /// The actual argument type
         actual: TagType,
+        /// The argument index
         n: usize,
+        /// The location
         #[label(
             "Invalid argument type for argument {n} of function: {function} (expected {expected}, got {actual})"
         )]
         span: SourceSpan,
     },
+    /// Undefined variable
     #[error("Undefined variable: {name}")]
     UndefinedVariable {
+        /// The variable name
         name: String,
+        /// The location
         #[label("Undefined variable: {name}")]
         span: SourceSpan,
     },
+    /// Invalid variable type
     #[error("Invalid variable type: expected {expected}, got {actual}")]
     InvalidVariableType {
+        /// The location
         #[label("Invalid variable type, expected {expected}")]
         variable_span: SourceSpan,
+        /// The location
         #[label("The variable was declared here as {actual}")]
         declaration_span: SourceSpan,
+        /// The expected type
         expected: query::ParamType,
+        /// The actual type
         actual: query::ParamType,
     },
+    /// Variables are not supported here
     #[error("Variables are not supported here")]
     VariablesNotSupported {
+        /// The location
         #[label("Variables are not supported here")]
         span: SourceSpan,
     },
+    /// Invalid bucket spec
     #[error("Invalid bucket spec for function: {function} ({spec})")]
     InvalidBucketSpec {
+        /// The function name
         function: String,
+        /// The bucket spec
         spec: String,
+        /// The argument index
         n: usize,
+        /// The location
         #[label("Invalid bucket spec for function: {function} ({spec})")]
         span: SourceSpan,
     },
+    /// Invalid metric
     #[error("Invalid metric: {metric}")]
     InvalidMetric {
+        /// The metric name
         metric: String,
+        /// The location
         #[label("Invalid metric: {metric}")]
         span: SourceSpan,
     },
+    /// Expected a filter
     #[error("Expected a filter")]
-    ExpectedFilter { span: SourceSpan },
+    ExpectedFilter {
+        /// The location
+        #[label("Expected a filter")]
+        span: SourceSpan,
+    },
+    /// A warning
     #[error("Parameter in ifdef must be optional")]
     MustBeOptional {
+        /// The name of the parameter
         name: String,
+        /// The location
         #[label("Parameter `{name}` must be optional")]
         span: SourceSpan,
+        /// The location
         #[label("Parameter declared here")]
         decl_span: SourceSpan,
     },
 }
+/// A warning
 #[derive(thiserror::Error, Debug, Diagnostic)]
 pub enum Warning {
+    /// A warning from the AST parser
     #[error("AST warning")]
     Ast(AstWarning),
 }
@@ -137,13 +190,15 @@ pub struct Parser {
 }
 
 impl Parser {
+    /// Creates a new parser from an AST
+    #[must_use]
     pub fn new(ast: Ast) -> Self {
         Parser {
             ast,
             stdlib: &STDLIB,
         }
     }
-
+    /// Parses the AST into a query
     pub fn parse(self) -> Result<crate::Query, Vec<ParseError>> {
         let Ast {
             errors,
@@ -155,7 +210,7 @@ impl Parser {
         let mut directives = HashMap::new();
         // we rever so we can pop the content
         parts.reverse();
-        while parts.last().is_some_and(|p| p.is_directive()) {
+        while parts.last().is_some_and(Part::is_directive) {
             let Some(Part::Directive(d)) = parts.pop() else {
                 continue;
             };
@@ -199,7 +254,10 @@ impl Parser {
                     directives: directives.clone(),
                     params: params.clone(),
                 };
-                Ok(p.query(q).unwrap())
+                p.query(q).map_err(|e| {
+                    errors.push(e);
+                    errors
+                })
             }
             Some(Part::Directive(d)) => {
                 errors.push(ParseError::DirectiveInWongPlace {
@@ -232,7 +290,7 @@ impl QueryParser {
     fn simple_query(
         &self,
         SimpleQuery {
-            node,
+            node: _,
             dataset,
             metric,
             alias,
@@ -258,6 +316,13 @@ impl QueryParser {
         };
 
         let mut aggregates = Vec::new();
+        if let Some(alias) = alias {
+            let name = Metric::new(&alias).map_err(|_| ParseError::InvalidMetric {
+                metric: alias.to_string(),
+                span: alias.span(),
+            })?;
+            aggregates.push(Aggregate::As(As { name }));
+        }
         let mut extends = Vec::new();
         let mut filters = Vec::new();
         let mut sample = None;
@@ -295,16 +360,16 @@ impl QueryParser {
                         param,
                         filter,
                         else_filter,
-                    })
+                    });
                 }
                 Rule::As(_) => {
                     return Err(ParseError::RuleNotSupportedAfterCompute { span: node.span() });
                 }
-                Rule::Map(func) => aggregates.push(self.map_to_aggr(func)?),
+                Rule::Map(func) => aggregates.push(self.map_to_aggr(&func)?),
                 Rule::Align { duration, func } => {
-                    aggregates.push(self.align_to_aggr(duration, func)?);
+                    aggregates.push(self.align_to_aggr(duration, &func)?);
                 }
-                Rule::Group { groups, func } => aggregates.push(self.group_to_aggr(groups, func)?),
+                Rule::Group { groups, func } => aggregates.push(self.group_to_aggr(groups, &func)?),
                 Rule::Bucket {
                     groups,
                     duration,
@@ -339,7 +404,14 @@ impl QueryParser {
         let left = Box::new(self.query(l)?);
         let right = Box::new(self.query(r)?);
         let f = call_to_function(&func)?;
-        let op = self.stdlib.compute_fn(&f).unwrap().clone();
+        let op = self
+            .stdlib
+            .compute_fn(&f)
+            .ok_or_else(|| ParseError::UnknownFunction {
+                span: func.node.span(),
+                name: f.name.name().to_string(),
+            })?
+            .clone();
 
         if !func.args.is_empty() {
             return Err(ParseError::InvalidArgumentCount {
@@ -357,11 +429,11 @@ impl QueryParser {
                 Rule::As(_) | Rule::IfDef { .. } | Rule::Sample(_) | Rule::Filter(_) => {
                     return Err(ParseError::RuleNotSupportedAfterCompute { span: node.span() });
                 }
-                Rule::Map(func) => aggregates.push(self.map_to_aggr(func)?),
+                Rule::Map(func) => aggregates.push(self.map_to_aggr(&func)?),
                 Rule::Align { duration, func } => {
-                    aggregates.push(self.align_to_aggr(duration, func)?)
+                    aggregates.push(self.align_to_aggr(duration, &func)?);
                 }
-                Rule::Group { groups, func } => aggregates.push(self.group_to_aggr(groups, func)?),
+                Rule::Group { groups, func } => aggregates.push(self.group_to_aggr(groups, &func)?),
                 Rule::Bucket {
                     groups,
                     duration,
@@ -370,11 +442,15 @@ impl QueryParser {
                 Rule::Extern(extend_parts) => extends.append(&mut self.parse_extend(extend_parts)?),
             }
         }
+        let name = Metric::new(&name).map_err(|_| ParseError::InvalidMetric {
+            metric: name.to_string(),
+            span: name.span(),
+        })?;
 
         Ok(crate::Query::Compute {
             left,
             right,
-            name: Metric::new(&name).unwrap(),
+            name,
             op,
             aggregates,
             extends,
@@ -388,16 +464,16 @@ impl QueryParser {
         duration: Option<ast::Duration>,
         func: FunctionCall,
     ) -> Result<Aggregate> {
-        let span = func.node.span();
+        let span = func.span();
         let f = call_to_function(&func)?;
-        let function = self
-            .stdlib
-            .bucket_function(f.name.name())
-            .ok_or(ParseError::UnknownFunction {
-                name: f.name.name().to_string(),
-                span: func.node.span(),
-            })?
-            .clone();
+        let function =
+            *self
+                .stdlib
+                .bucket_function(f.name.name())
+                .ok_or(ParseError::UnknownFunction {
+                    name: f.name.name().to_string(),
+                    span: func.node.span(),
+                })?;
         let time = duration
             .map(|d| match d {
                 ast::Duration::Const(value) => Ok(Parameterized::Concrete(RelativeTime {
@@ -412,7 +488,7 @@ impl QueryParser {
             .transpose()?;
         let tags = groups
             .into_iter()
-            .map(|g| g.into_string())
+            .map(Ident::into_string)
             .collect::<Vec<_>>();
         let spec = func
             .args
@@ -500,9 +576,9 @@ impl QueryParser {
         Ok(param.clone())
     }
 
-    fn group_to_aggr(&self, groups: Vec<ast::Ident>, func: FunctionCall) -> Result<Aggregate> {
+    fn group_to_aggr(&self, groups: Vec<ast::Ident>, func: &FunctionCall) -> Result<Aggregate> {
         let span = func.node.span();
-        let f = call_to_function(&func)?;
+        let f = call_to_function(func)?;
         let function = self
             .stdlib
             .group_fn(&f)
@@ -525,9 +601,9 @@ impl QueryParser {
     fn align_to_aggr(
         &self,
         duration: Option<ast::Duration>,
-        func: FunctionCall,
+        func: &FunctionCall,
     ) -> Result<Aggregate> {
-        let f = call_to_function(&func)?;
+        let f = call_to_function(func)?;
         let function = self
             .stdlib
             .align_fn(&f)
@@ -552,8 +628,8 @@ impl QueryParser {
         Ok(Aggregate::Align(Align { function, time }))
     }
 
-    fn map_to_aggr(&self, func: FunctionCall) -> Result<Aggregate> {
-        let f = call_to_function(&func)?;
+    fn map_to_aggr(&self, func: &FunctionCall) -> Result<Aggregate> {
+        let f = call_to_function(func)?;
         let function = self.stdlib.map_fn(&f).ok_or(ParseError::UnknownFunction {
             name: f.name.name().to_string(),
             span: func.node.span(),
@@ -568,8 +644,9 @@ impl QueryParser {
         }
         let arg = if let Some(SyntaxExpr { node, expr }) = func.args.first() {
             match expr {
+                #[allow(clippy::cast_precision_loss)] // we accept ints as floats
                 ast::Expr::Const(TagValue::Int(f)) => Some(*f as f64),
-                ast::Expr::Const(TagValue::Float(f)) => Some(*f as f64),
+                ast::Expr::Const(TagValue::Float(f)) => Some(*f),
                 ast::Expr::Var(_) => {
                     return Err(ParseError::VariablesNotSupported { span: node.span() });
                 }
@@ -720,15 +797,15 @@ impl QueryParser {
             },
             FilterCmp::EqRe { lhs, rhs } => Filter::Cmp {
                 field: lhs.into_string(),
-                rhs: Cmp::RegEx(self.parse_expr(rhs)?),
+                rhs: Cmp::RegEx(Parameterized::Concrete(rhs.into())),
             },
             FilterCmp::NeqRe { lhs, rhs } => Filter::Cmp {
                 field: lhs.into_string(),
-                rhs: Cmp::RegExNot(self.parse_expr(rhs)?),
+                rhs: Cmp::RegExNot(Parameterized::Concrete(rhs.into())),
             },
             FilterCmp::Is { lhs, rhs } => Filter::Cmp {
                 field: lhs.into_string(),
-                rhs: Cmp::Is(self.parse_expr(rhs)?),
+                rhs: Cmp::Is(rhs),
             },
         };
         Ok(r)
@@ -739,7 +816,7 @@ fn call_to_function(f: &FunctionCall) -> Result<Function> {
     let Some((name, module_path)) = f.name.split_last() else {
         return Err(ParseError::UnknownFunction {
             span: f.node.span(),
-            name: "".to_string(),
+            name: String::new(),
         });
     };
     let name = FunctionId::new(name);

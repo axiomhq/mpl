@@ -228,12 +228,14 @@ pub enum AstError {
     },
 
     /// The regex is invalid.
-    #[error("invalid regex")]
+    #[error("invalid regex: {message}")]
     #[diagnostic(code(mpl_lang::invalid_regex))]
     InvalidRegex {
         /// The source span of the invalid regex.
-        #[label("invalid regex")]
+        #[label("invalid regex: {message}")]
         span: SourceSpan,
+        /// The error message from the regex parser.
+        message: String,
     },
     /// The identifier is invalid.
     #[error("invalid ident")]
@@ -306,6 +308,11 @@ pub struct FunctionCall {
     pub name: Vec<Ident>,
     /// The function arguments.
     pub args: Vec<SyntaxExpr>,
+}
+impl FunctionCall {
+    pub(crate) fn span(&self) -> SourceSpan {
+        self.node.span()
+    }
 }
 
 /// A `param` declaration.
@@ -448,7 +455,14 @@ impl Nontrivial for SyntaxElementChildren<Lang> {
 
 /// Regular expression or variable.
 #[derive(Debug)]
-pub struct Regex(String);
+pub struct Regex(regex::Regex);
+
+impl From<Regex> for regex::Regex {
+    fn from(regex: Regex) -> Self {
+        regex.0
+    }
+}
+
 impl std::fmt::Display for Regex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
@@ -456,7 +470,7 @@ impl std::fmt::Display for Regex {
 }
 
 impl Deref for Regex {
-    type Target = String;
+    type Target = regex::Regex;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -465,13 +479,13 @@ impl Deref for Regex {
 
 impl AsRef<str> for Regex {
     fn as_ref(&self) -> &str {
-        &self.0
+        self.0.as_str()
     }
 }
 
 impl PartialEq<&str> for Regex {
     fn eq(&self, other: &&str) -> bool {
-        self.0 == **other
+        self.0.as_str() == *other
     }
 }
 
@@ -483,12 +497,23 @@ pub struct Ident {
 }
 
 impl Ident {
+    /// Returns the name of the identifier.
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
+    /// Returns the node of the identifier.
+    #[must_use]
     pub fn node(&self) -> &SyntaxNode {
         &self.node
     }
+    /// Returns the span of the identifier.
+    #[must_use]
+    pub fn span(&self) -> SourceSpan {
+        self.node.span()
+    }
+    /// Converts the identifier to a string.
+    #[must_use]
     pub fn into_string(self) -> String {
         self.name
     }
@@ -527,9 +552,13 @@ pub struct Variable {
     name: String,
 }
 impl Variable {
+    /// Returns the span of the variable.
+    #[must_use]
     pub fn span(&self) -> SourceSpan {
         self.node.span()
     }
+    /// Returns the name of the variable.
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -572,7 +601,9 @@ pub enum StringPart {
 /// A parsed expression with its syntax node.
 #[derive(Debug)]
 pub struct SyntaxExpr {
+    /// The syntax node of the expression.
     pub node: SyntaxNode,
+    /// The expression.
     pub expr: Expr,
 }
 /// A filter expression.
@@ -995,9 +1026,9 @@ impl Parser {
 
     /// This is just `to_string` with a nice name, the reason  is rusts regex
     /// engine already take scare of un-escaping
-    fn unescape_regex(&self, _node: &impl NonTrivalItem, s: &str) -> String {
+    fn unescape_regex<'s>(&self, _node: &impl NonTrivalItem, s: &'s str) -> &'s str {
         let _ = self;
-        s.to_string()
+        s
     }
 
     fn string_expr(&mut self, node: SyntaxNode) -> Result<SyntaxExpr> {
@@ -1165,11 +1196,23 @@ impl Parser {
         self.assert_type(node, SyntaxKind::REGEX)?;
         let s = node.token_string();
         let Some(r) = s.strip_prefix("#/").and_then(|s| s.strip_suffix('/')) else {
-            self.errors
-                .push(AstError::InvalidRegex { span: node.span() });
-            return Err(Error("string start must be followed by a string segment"));
+            self.errors.push(AstError::InvalidRegex {
+                span: node.span(),
+                message: "invalid boundaries".to_string(),
+            });
+            return Err(Error("invalid regex boundaries"));
         };
-        Ok(Regex(self.unescape_regex(node, r)))
+        let r = regex::Regex::new(self.unescape_regex(node, r));
+        match r {
+            Ok(r) => Ok(Regex(r)),
+            Err(e) => {
+                self.errors.push(AstError::InvalidRegex {
+                    span: node.span(),
+                    message: e.to_string(),
+                });
+                Err(Error("invalid regex"))
+            }
+        }
     }
 
     fn filter_cmp(&mut self, node: &SyntaxNode) -> Result<FilterCmp> {
@@ -1877,8 +1920,9 @@ impl Parser {
             }
         };
         self.assert_end(children);
-        Ok(Ident { name, node })
+        Ok(Ident { node, name })
     }
+
     fn ident(&mut self, node: SyntaxNode) -> Result<Ident> {
         self.assert_type(&node, SyntaxKind::IDENT)?;
         self.ident_body(node)
@@ -1918,7 +1962,7 @@ impl Parser {
             }
         };
         self.assert_end(children);
-        Ok(Variable { name, node })
+        Ok(Variable { node, name })
     }
 
     fn kw(&mut self, node: SyntaxNode) -> Result<Ident> {
