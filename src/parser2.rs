@@ -16,7 +16,7 @@ use crate::{
         Source, TagExtend, TagType, TerminalParamType, TimeUnit,
     },
     tags::TagValue,
-    types::{BucketSpec, Dataset, Metric, Parameterized},
+    types::{BucketSpec, BucketType, ConversionMethod, Dataset, Metric, Parameterized},
 };
 
 use super::ast::Ident;
@@ -393,8 +393,13 @@ impl QueryParser {
                         else_filter,
                     });
                 }
-                Rule::As(_) => {
-                    return Err(ParseError::RuleNotSupportedAfterCompute { span: node.span() });
+
+                Rule::As(alias) => {
+                    let name = Metric::new(&alias).map_err(|_| ParseError::InvalidMetric {
+                        metric: alias.to_string(),
+                        span: alias.span(),
+                    })?;
+                    aggregates.push(Aggregate::As(As { name }));
                 }
                 Rule::Map(func) => aggregates.push(self.map_to_aggr(&func)?),
                 Rule::Align { duration, func } => {
@@ -457,8 +462,15 @@ impl QueryParser {
         let mut extends = Vec::new();
         for SyntaxRule { node, rule } in rules {
             match rule {
-                Rule::As(_) | Rule::IfDef { .. } | Rule::Sample(_) | Rule::Filter(_) => {
+                Rule::IfDef { .. } | Rule::Sample(_) | Rule::Filter(_) => {
                     return Err(ParseError::RuleNotSupportedAfterCompute { span: node.span() });
+                }
+                Rule::As(alias) => {
+                    let name = Metric::new(&alias).map_err(|_| ParseError::InvalidMetric {
+                        metric: alias.to_string(),
+                        span: alias.span(),
+                    })?;
+                    aggregates.push(Aggregate::As(As { name }));
                 }
                 Rule::Map(func) => aggregates.push(self.map_to_aggr(&func)?),
                 Rule::Align { duration, func } => {
@@ -489,6 +501,8 @@ impl QueryParser {
             params: self.params.clone(),
         })
     }
+
+    #[allow(clippy::too_many_lines)]
     fn bucket_to_aggr(
         &self,
         groups: Vec<ast::Ident>,
@@ -497,7 +511,7 @@ impl QueryParser {
     ) -> Result<Aggregate> {
         let span = func.span();
         let f = call_to_function(&func)?;
-        let function =
+        let mut function =
             *self
                 .stdlib
                 .bucket_function(f.name.name())
@@ -521,9 +535,37 @@ impl QueryParser {
             .into_iter()
             .map(Ident::into_string)
             .collect::<Vec<_>>();
-        let spec = func
-            .args
-            .into_iter()
+        let mut itr = func.args.into_iter();
+        // This is really hacky, but we need it for compatibility with the old parser
+        // we can clean this up once we drop support for the old parser
+        if let BucketType::InterpolateCumulativeHistogram(conversion_method) = &mut function {
+            let Some(SyntaxExpr { node, expr }) = itr.next() else {
+                return Err(ParseError::InvalidArgumentCount {
+                    function: f.name.name().to_string(),
+                    span,
+                    expected: 2,
+                    actual: 0,
+                });
+            };
+            match expr {
+                ast::Expr::Ident(ident) if ident.name() == "increase" => {
+                    *conversion_method = ConversionMethod::Increase;
+                }
+
+                ast::Expr::Ident(ident) if ident.name() == "rate" => {
+                    *conversion_method = ConversionMethod::Rate;
+                }
+                _ => {
+                    return Err(ParseError::InvalidBucketSpec {
+                        function: f.name.name().to_string(),
+                        span: node.span(),
+                        spec: "not increase or rate".to_string(),
+                        n: 1,
+                    });
+                }
+            }
+        }
+        let spec = itr
             .enumerate()
             .map(|(n, SyntaxExpr { expr, node })| match expr {
                 ast::Expr::Ident(ident) if ident.name() == "avg" => Ok(BucketSpec::Avg),

@@ -1412,13 +1412,7 @@ impl Parser {
             }
             SyntaxKind::MATH_FN => {
                 let name = node.token_string();
-                Ok(vec![
-                    Ident {
-                        node: node.clone(),
-                        name: "__MATH__".to_string(),
-                    },
-                    Ident { node, name },
-                ])
+                Ok(vec![Ident { node, name }])
             }
             _ => {
                 self.errors.push(AstError::UnexpectedSyntaxRule {
