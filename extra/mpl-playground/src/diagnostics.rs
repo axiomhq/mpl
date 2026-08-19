@@ -96,7 +96,7 @@ mod tests {
     fn compile_errors_include_location_and_expected_tokens() {
         let source = "test:metric\n| map + ";
         let err =
-            mpl_lang::compile2(source, HashMap::new()).expect_err("query should fail to compile");
+            mpl_lang::compile(source, HashMap::new()).expect_err("query should fail to compile");
         let message = message(source, &err);
 
         assert!(message.contains("syntax error"), "{message}");

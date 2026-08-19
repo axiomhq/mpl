@@ -9,14 +9,12 @@ use std::{
 use chrono::Utc;
 use chrono::{DateTime, Duration, FixedOffset};
 use miette::SourceSpan;
-use pest::Parser as _;
 use strumbra::SharedString;
 
 use crate::{
     ParseError,
     enc_regex::EncodableRegex,
     linker::{AlignFunction, ComputeFunction, GroupFunction, MapFunction},
-    parser::{self, MPLParser, ParseParamError, Rule},
     parser2,
     tags::TagValue,
     time::{Resolution, ResolutionError},
@@ -576,16 +574,6 @@ pub enum ResolveError {
 /// The error returned from `ProvidedParams::parse`.
 #[derive(Debug, thiserror::Error)]
 pub enum ParseProvidedParamsError {
-    /// Parse failed
-    #[error("Failed to parse the value for ${param_name} as {expected_type}: {err}")]
-    ParseParam {
-        /// Param name
-        param_name: String,
-        /// Expected t ype
-        expected_type: ParamType,
-        /// Parse param error
-        err: ParseParamError,
-    },
     /// Params provided more than once
     #[error("These params were provided more than once: {}", .0.join(", "))]
     ParamsProvidedMoreThanOnce(Vec<String>),

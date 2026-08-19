@@ -244,7 +244,7 @@ fn diagnose(
                 out
             })
             .collect(),
-        CorpusMode::Parse => mpl_lang::compile2(&entry.query, system_params.clone())
+        CorpusMode::Parse => mpl_lang::compile(&entry.query, system_params.clone())
             .err()
             .iter()
             .flat_map(|error| {

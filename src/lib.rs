@@ -13,12 +13,10 @@
 pub mod ast;
 /// The lexer for the MPL query language.
 pub mod lexer;
-mod parser;
 /// new v2 parser
 pub mod parser2;
 /// rowan syntax tree for the MPL query language.
 pub mod syntax_tree;
-pub use parser::{MPLParser, Rule};
 
 pub mod enc_regex;
 pub mod errors;
@@ -40,7 +38,6 @@ use std::{
 
 pub use errors::ParseError;
 use miette::{Diagnostic, SourceOffset, SourceSpan};
-use pest::Parser as _;
 pub use query::Query;
 
 pub use stdlib::STDLIB;
@@ -81,29 +78,7 @@ pub enum CompileError {
 
 /// Parses and typechecks an MPL query into a Query object.
 #[allow(clippy::result_large_err)]
-pub fn compile<S: BuildHasher>(
-    query: &str,
-    system_params: HashMap<String, ParamType, S>,
-) -> Result<(Query, Warnings), CompileError> {
-    // stage 1: parse
-    let mut parse = MPLParser::parse(Rule::file, query).map_err(ParseError::from)?;
-    let (mut query, warnings) = parser::Parser::default().parse_query(&mut parse, system_params)?;
-    // stage 2: typecheck
-    let mut visitor = ParamTypecheckVisitor {};
-    visitor.walk(&mut query)?;
-    // stage 3: group check
-    let mut visitor = GroupCheckVisitor::default();
-    visitor.walk(&mut query)?;
-
-    let mut visitor = OptionCheckVisitor::default();
-    visitor.walk(&mut query)?;
-
-    Ok((query, warnings))
-}
-
-/// Parses and typechecks an MPL query into a Query object.
-#[allow(clippy::result_large_err)]
-pub fn compile2<H: BuildHasher>(
+pub fn compile<H: BuildHasher>(
     query: &str,
     system_params: HashMap<String, ParamType, H>,
 ) -> Result<(Query, Warnings), CompileError> {

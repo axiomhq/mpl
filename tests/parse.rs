@@ -65,10 +65,10 @@ fn parse_examples() {
                 mpl_lang::compile(&content, params.clone()),
             );
             check(
-                "compile2",
+                "compile",
                 file_name,
                 &content,
-                mpl_lang::compile2(&content, params),
+                mpl_lang::compile(&content, params),
             );
         });
 }

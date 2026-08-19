@@ -10,7 +10,6 @@ use crate::{
         Rule, SimpleQuery, SyntaxExpr, SyntaxRule, Variable,
     },
     linker::{Function, FunctionId, FunctionTrait, Module, ModuleId},
-    parser::SYSTEM_PARAM_PREFIX,
     query::{
         self, Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter,
         FilterOrIfDef, GroupBy, MetricId, ParamDeclaration, ParamType, Params, RelativeTime,
@@ -21,6 +20,8 @@ use crate::{
 };
 
 use super::ast::Ident;
+
+pub(crate) const SYSTEM_PARAM_PREFIX: &str = "__";
 
 type Result<T, E = ParseError> = std::result::Result<T, E>;
 

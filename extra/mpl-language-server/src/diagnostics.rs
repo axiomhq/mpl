@@ -7,7 +7,7 @@ use strsim::jaro;
 
 use mpl_lang::query::{ParamType, Warning, WarningReason};
 use mpl_lang::syntax_tree::{Parser as SyntaxParser, SyntaxKind};
-use mpl_lang::{CompileError, GroupError, IfdefError, TypeError, compile2};
+use mpl_lang::{CompileError, GroupError, IfdefError, TypeError, compile};
 
 use crate::Span;
 use crate::completions::{
@@ -66,7 +66,7 @@ pub fn compute_diagnostics(
     query: &str,
     system_params: &HashMap<String, ParamType>,
 ) -> Vec<DiagnosticItem> {
-    match compile2(query, system_params.clone()) {
+    match compile(query, system_params.clone()) {
         Ok((_, warnings)) => {
             let mut items: Vec<DiagnosticItem> = warnings
                 .as_slice()
@@ -76,7 +76,7 @@ pub fn compute_diagnostics(
             items.extend(crate::lints::detect_hints(query));
             items
         }
-        // `compile2` reports a parse failure through `ParserV2`; this arm keeps
+        // `compile` reports a parse failure through `ParserV2`; this arm keeps
         // the match total.
         Err(CompileError::Parse(_)) => vec![],
         Err(CompileError::Type(error)) => type_error_diagnostic_items(&error),

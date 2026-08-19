@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use mpl_lang::query::{WarningReason, Warnings};
-use mpl_lang::{CompileError, compile, compile2};
+use mpl_lang::{CompileError, compile};
 
 use crate::diagnostics::{DiagnosticItem, Severity, compute_diagnostics};
 
@@ -23,7 +23,7 @@ fn error_items(q: &str) -> Vec<DiagnosticItem> {
 
 /// Run the full success-path pipeline: compile -> warnings -> diagnostic items.
 fn warning_items(q: &str) -> Vec<DiagnosticItem> {
-    let (_, warnings) = compile2(q, HashMap::new()).expect("query should compile");
+    let (_, warnings) = compile(q, HashMap::new()).expect("query should compile");
     warnings
         .as_slice()
         .iter()
@@ -516,12 +516,12 @@ fn system_param_missing_prefix_is_reported() {
 // ── v2 parser errors and warnings ────────────────────────────────
 
 /// A v2 parser error reaches the editor anchored to the token it is about.
-/// Driven through `compile2` rather than a hand-built error, so the offsets
+/// Driven through `compile` rather than a hand-built error, so the offsets
 /// asserted here are the ones a user would see highlighted.
 #[test]
 fn a_parser_v2_error_is_anchored_to_its_token() {
     let query = "d:m | map unknownfn()";
-    let Err(CompileError::ParserV2(errors)) = compile2(query, HashMap::new()) else {
+    let Err(CompileError::ParserV2(errors)) = compile(query, HashMap::new()) else {
         panic!("{query:?} should fail in the v2 parser")
     };
 
@@ -547,7 +547,7 @@ fn a_parser_v2_error_is_anchored_to_its_token() {
 /// failure is never swallowed on the way to the editor.
 #[test]
 fn no_parser_v2_error_is_dropped() {
-    let Err(CompileError::ParserV2(errors)) = compile2("", HashMap::new()) else {
+    let Err(CompileError::ParserV2(errors)) = compile("", HashMap::new()) else {
         panic!("an empty query should fail in the v2 parser")
     };
 
@@ -572,7 +572,7 @@ fn no_parser_v2_error_is_dropped() {
 #[test]
 fn a_parser_v2_warning_keeps_its_span() {
     let query = r#"d:m | where a == "x\qy""#;
-    let (_, warnings) = compile2(query, HashMap::new()).expect("the query should compile");
+    let (_, warnings) = compile(query, HashMap::new()).expect("the query should compile");
 
     let items: Vec<_> = warnings
         .as_slice()

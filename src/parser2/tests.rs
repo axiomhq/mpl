@@ -1,7 +1,7 @@
 //! Tests for lowering the AST to a `Query`.
 //!
 //! A child module rather than a file under `tests/`, because the cases read the `ParseError`
-//! variants `lower` produces. Going through `compile2` would fold them into a `CompileError`
+//! variants `lower` produces. Going through `compile` would fold them into a `CompileError`
 //! and run the typecheck visitors on top, so a case could no longer say which stage rejected
 //! the query.
 use std::collections::HashMap;
@@ -10,7 +10,7 @@ use test_case::test_case;
 
 use super::*;
 
-/// Runs the two stages `compile2` runs before its visitors, so a case states a query and reads
+/// Runs the two stages `compile` runs before its visitors, so a case states a query and reads
 /// the errors a user would be shown.
 fn lower_with(
     src: &str,
