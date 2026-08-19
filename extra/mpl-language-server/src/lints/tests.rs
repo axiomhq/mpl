@@ -119,7 +119,11 @@ fn unnecessary_escape_multiple() {
 // Note: lowercase `duration` warnings are emitted by the parser itself and
 // covered by the wasm/diagnostics tests, not the post-parse lint pass.
 
-// ── dataset given, no metric ─────────────────────────────────────
+// ── broken source ────────────────────────────────────────────────
+//
+// A lint fires on a word the parser recognised as a rule keyword. With the
+// source broken it never gets far enough to build a `KEYWORD` node, so these
+// stay silent.
 
 #[test]
 fn no_hints_dataset_colon_no_metric() {
@@ -133,17 +137,39 @@ fn no_hints_dataset_no_colon() {
 
 #[test]
 fn no_hints_dataset_no_metric_with_filter() {
-    // `filter` keyword would normally produce a hint, but parse fails
-    // so no hints are emitted
+    // Recovery consumes the `|` while reporting the missing metric, so what
+    // follows is never read as a rule and `filter` is left as a bare word.
     assert!(detect_hints("ds: | filter tag == \"x\"").is_empty());
 }
 
 #[test]
 fn no_hints_dataset_no_colon_with_filter() {
+    // Here the `:` is what is missing, so `filter` is taken as the metric name.
     assert!(detect_hints("ds | filter tag == \"x\"").is_empty());
 }
 
 #[test]
 fn no_hints_backtick_dataset_no_metric_with_where() {
     assert!(detect_hints("`my-dataset`: | where tag == \"x\"").is_empty());
+}
+
+/// The source is well formed and the `filter` is unambiguous, so the hint fires
+/// without waiting for the user to finish the comparison.
+#[test]
+fn hint_on_a_query_that_does_not_yet_parse() {
+    let query = "ds:metric | filter tag == ";
+    let items = detect_hints(query);
+    assert_eq!(items.len(), 1, "incomplete comparison should still hint");
+    assert_eq!(items[0].actions[0].insert, "where");
+    assert_eq!(&query[items[0].span.from..items[0].span.to], "filter");
+}
+
+/// A tag named after a rule keyword is not the keyword; the `KEYWORD` node is
+/// what separates them.
+#[test]
+fn tag_named_filter_is_not_hinted() {
+    assert!(
+        detect_hints("ds:metric | where filter == \"x\"").is_empty(),
+        "`filter` used as a tag name is not the deprecated keyword"
+    );
 }

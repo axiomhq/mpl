@@ -49,6 +49,27 @@ pub enum ParseError {
     /// No query was provided
     #[error("No query was provided")]
     MissingQuery,
+    /// A host-registered system param without the reserved prefix
+    #[error("The system param ${param} is missing the system prefix")]
+    #[diagnostic(
+        code(mpl_lang::system_param_missing_prefix),
+        help("The system param is missing the `{SYSTEM_PARAM_PREFIX}` prefix")
+    )]
+    SystemParamMissingPrefix {
+        /// The param
+        param: String,
+    },
+    /// `in` used with a non-array right-hand side
+    #[error("`in` requires an array on the right-hand side")]
+    #[diagnostic(
+        code(mpl_lang::in_requires_array),
+        help("Use an array literal (e.g. `in [200, 201]`) or an array-typed param")
+    )]
+    InRequiresArray {
+        /// The location of the offending right-hand side
+        #[label("expected an array here")]
+        span: SourceSpan,
+    },
     /// Directive in the wrong place
     #[error("Directive in the wrong place")]
     DirectiveInWongPlace {
@@ -299,14 +320,7 @@ impl Parser {
             directives.insert(d.name.to_string(), v);
         }
 
-        let mut params = Vec::new();
-        for (name, typ) in system_params {
-            params.push(ParamDeclaration {
-                span: SourceSpan::new(0.into(), 0),
-                name,
-                typ,
-            });
-        }
+        let mut params = system_param_declarations(system_params, &mut errors);
         while parts.last().is_some_and(Part::is_param)
             && let Some(Part::Param(p)) = parts.pop()
         {
@@ -955,6 +969,19 @@ impl QueryParser {
             FilterParen::Cmp(f) => self.filter_cmp(f),
         }
     }
+    /// Lowers `field in rhs`, which holds only when `rhs` names a set of values.
+    fn in_cmp(&self, lhs: Ident, rhs: SyntaxExpr) -> Result<Filter> {
+        let span = rhs.node.span();
+        let value = self.expr(rhs)?;
+        if !value.is_array() {
+            return Err(ParseError::InRequiresArray { span });
+        }
+        Ok(Filter::Cmp {
+            field: lhs.into_string(),
+            rhs: Cmp::In(value),
+        })
+    }
+
     fn filter_cmp(&self, f: FilterCmp) -> Result<Filter> {
         let r = match f {
             FilterCmp::Eq {
@@ -1036,10 +1063,7 @@ impl QueryParser {
                 field: lhs.into_string(),
                 rhs: Cmp::Ge(self.expr(rhs)?),
             },
-            FilterCmp::In { lhs, rhs } => Filter::Cmp {
-                field: lhs.into_string(),
-                rhs: Cmp::In(self.expr(rhs)?),
-            },
+            FilterCmp::In { lhs, rhs } => self.in_cmp(lhs, rhs)?,
             FilterCmp::EqRe { lhs, rhs } => Filter::Cmp {
                 field: lhs.into_string(),
                 rhs: Cmp::RegEx(Parameterized::Concrete(rhs.into())),
@@ -1055,6 +1079,31 @@ impl QueryParser {
         };
         Ok(r)
     }
+}
+
+/// The declarations a host's registrations stand for.
+///
+/// The reserved prefix is what separates them from the names a query may declare, so a
+/// registration that omits it is reported to the host rather than quietly becoming an
+/// ordinary param.
+fn system_param_declarations<H: BuildHasher>(
+    system_params: HashMap<String, ParamType, H>,
+    errors: &mut Vec<ParseError>,
+) -> Vec<ParamDeclaration> {
+    system_params
+        .into_iter()
+        .filter_map(|(name, typ)| {
+            if !name.starts_with(SYSTEM_PARAM_PREFIX) {
+                errors.push(ParseError::SystemParamMissingPrefix { param: name });
+                return None;
+            }
+            Some(ParamDeclaration {
+                span: SourceSpan::new(0.into(), 0),
+                name,
+                typ,
+            })
+        })
+        .collect()
 }
 
 fn call_to_function(f: &FunctionCall) -> Result<Function> {

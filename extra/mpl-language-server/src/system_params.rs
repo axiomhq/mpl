@@ -35,7 +35,7 @@ impl SystemParamSpec {
     /// or returns `None` for unknown spellings (silently dropped — invalid
     /// host registrations must not break the editor).
     fn to_query_param_type(&self) -> Option<ParamType> {
-        let terminal = parse_terminal(&self.type_name)?;
+        let terminal = CompletionParamType::from_spelling(&self.type_name)?.into();
         Some(if self.optional {
             ParamType::Optional(terminal)
         } else {
@@ -46,7 +46,7 @@ impl SystemParamSpec {
     /// Maps the spec to the completion-side `ParamItem` used to render
     /// the `$param` autocomplete list.
     fn to_completion_item(&self) -> Option<ParamItem> {
-        let typ = parse_completion_type(&self.type_name)?;
+        let typ = CompletionParamType::from_spelling(&self.type_name)?;
         Some(ParamItem {
             label: ensure_dollar_prefix(&self.name),
             typ,
@@ -55,34 +55,22 @@ impl SystemParamSpec {
     }
 }
 
-fn parse_terminal(s: &str) -> Option<TerminalParamType> {
-    match s {
-        "Dataset" => Some(TerminalParamType::Dataset),
-        // `duration` is the legacy lowercase form; accept it for symmetry
-        // with the in-source param syntax even though it triggers an
-        // OldDuration warning when written in a query.
-        "Duration" | "duration" => Some(TerminalParamType::Duration),
-        "Regex" => Some(TerminalParamType::Regex),
-        "string" => Some(TerminalParamType::Tag(TagType::String)),
-        "int" => Some(TerminalParamType::Tag(TagType::Int)),
-        "float" => Some(TerminalParamType::Tag(TagType::Float)),
-        "bool" => Some(TerminalParamType::Tag(TagType::Bool)),
-        "array" => Some(TerminalParamType::Tag(TagType::Array)),
-        _ => None,
-    }
-}
-
-fn parse_completion_type(s: &str) -> Option<CompletionParamType> {
-    match s {
-        "Dataset" => Some(CompletionParamType::Dataset),
-        "Duration" | "duration" => Some(CompletionParamType::Duration),
-        "Regex" => Some(CompletionParamType::Regex),
-        "string" => Some(CompletionParamType::String),
-        "int" => Some(CompletionParamType::Int),
-        "float" => Some(CompletionParamType::Float),
-        "bool" => Some(CompletionParamType::Bool),
-        "array" => Some(CompletionParamType::Array),
-        _ => None,
+/// The editor keeps its own param type so completion results can travel as the
+/// flat `{ type, optional }` pair the TypeScript side reads. This is where that
+/// type meets the query-level one, and the mapping is total: every type the
+/// editor offers names a type the parser accepts.
+impl From<CompletionParamType> for TerminalParamType {
+    fn from(typ: CompletionParamType) -> TerminalParamType {
+        match typ {
+            CompletionParamType::Dataset => TerminalParamType::Dataset,
+            CompletionParamType::Duration => TerminalParamType::Duration,
+            CompletionParamType::Regex => TerminalParamType::Regex,
+            CompletionParamType::String => TerminalParamType::Tag(TagType::String),
+            CompletionParamType::Int => TerminalParamType::Tag(TagType::Int),
+            CompletionParamType::Float => TerminalParamType::Tag(TagType::Float),
+            CompletionParamType::Bool => TerminalParamType::Tag(TagType::Bool),
+            CompletionParamType::Array => TerminalParamType::Tag(TagType::Array),
+        }
     }
 }
 
@@ -118,6 +106,21 @@ pub fn to_completion_items(specs: &[SystemParamSpec]) -> Vec<ParamItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The editor's spelling and the query type's `Display` are two renderings
+    /// of one vocabulary. A host registration is written in the first and
+    /// resolved through the second, so the two have to agree character for
+    /// character or a registration silently fails to bind.
+    #[test]
+    fn spellings_agree_with_the_query_types() {
+        for typ in crate::completions::PARAM_TYPES {
+            assert_eq!(
+                typ.spelling(),
+                TerminalParamType::from(typ).to_string(),
+                "{typ:?}"
+            );
+        }
+    }
 
     // Specs without going through the JS bridge — exercises only the
     // type-string decode and the dollar-prefix normalisation.
@@ -179,18 +182,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_lowercase_duration_accepted() {
-        // Source-level `duration` is a legacy spelling; the system_params
-        // API accepts it for symmetry, mapping to TerminalParamType::Duration.
-        let specs = [spec("__t", "duration", false)];
-        let map = to_compile_params(&specs);
-        assert!(matches!(
-            map["__t"],
-            ParamType::Terminal(TerminalParamType::Duration)
-        ));
-    }
-
-    #[test]
     fn completion_items_normalise_dollar_prefix() {
         // Some hosts will pass names with `$`, others without. Completion
         // labels must always carry the prefix for the autocomplete UI.
@@ -226,7 +217,6 @@ mod tests {
             spec("__e", "int", false),
             spec("__f", "float", false),
             spec("__g", "bool", false),
-            spec("__h", "duration", false),
         ];
         let items = to_completion_items(&specs);
         assert_eq!(
@@ -243,10 +233,5 @@ mod tests {
         assert_eq!(by_label["$__e"].typ, CompletionParamType::Int);
         assert_eq!(by_label["$__f"].typ, CompletionParamType::Float);
         assert_eq!(by_label["$__g"].typ, CompletionParamType::Bool);
-        assert_eq!(
-            by_label["$__h"].typ,
-            CompletionParamType::Duration,
-            "legacy lowercase `duration` must map to Duration on the completion side too"
-        );
     }
 }

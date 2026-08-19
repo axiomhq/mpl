@@ -137,6 +137,16 @@ pub enum Expr {
     Tag(String),
 }
 
+impl Expr {
+    pub(crate) fn is_array(&self) -> bool {
+        match self {
+            Expr::Array(_) | Expr::Const(TagValue::Array(_)) => true,
+            Expr::Param { param, .. } => param.typ() == TerminalParamType::Tag(TagType::Array),
+            _ => false,
+        }
+    }
+}
+
 /// A comparison operator for filtering based on a value
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub enum Cmp {

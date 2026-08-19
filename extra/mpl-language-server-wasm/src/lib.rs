@@ -4,7 +4,7 @@
 //! `JsValue` arguments into pure Rust types, calls the corresponding
 //! `mpl_language_server::*` function, and re-encodes the result.
 
-use mpl_lang::{Query, compile, query::Source};
+use mpl_lang::{CompileError, Query, compile2, query::Source};
 use mpl_language_server::SystemParamSpec;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -12,16 +12,34 @@ use wasm_bindgen::prelude::*;
 mod system_params;
 
 /// Parse `query` (ignoring warnings) into a `Query` AST. Used by the
-/// `parse_*` / `extract_dataset` shims below. Errors are stringified via
-/// `Debug` to avoid pulling miette's fancy formatter into the wasm bundle.
+/// `parse_*` / `extract_dataset` shims below.
 fn parse_with_system_param_specs(
     query: &str,
     system_params: &[SystemParamSpec],
 ) -> Result<Query, String> {
     let params = mpl_language_server::to_compile_params(system_params);
-    compile(query, params)
+    compile2(query, params)
         .map(|(q, _warnings)| q)
-        .map_err(|e| format!("{e:?}"))
+        .map_err(|e| describe(&e))
+}
+
+/// What went wrong, as a line the host can show.
+///
+/// Each variant is rendered through the error it carries. Naming them one by one
+/// keeps miette's formatter and the grammar's rule names out of the wasm bundle,
+/// which is worth more here than the shorter spelling.
+fn describe(e: &CompileError) -> String {
+    match e {
+        CompileError::ParserV2(errors) => errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; "),
+        CompileError::Type(e) => e.to_string(),
+        CompileError::Group(e) => e.to_string(),
+        CompileError::Ifdef(e) => e.to_string(),
+        CompileError::Parse(_) => "parse error".to_string(),
+    }
 }
 
 /// Pure rust JSON parse helper.
@@ -86,11 +104,57 @@ pub fn diagnostics(query: &str, system_params: JsValue) -> JsValue {
 }
 
 /// Tokenises `query` for syntax highlighting.
+///
+/// Always returns an array: a query that does not parse yields the tokens it
+/// does have, so the editor keeps its colours while the user is still typing.
 #[must_use]
 #[wasm_bindgen]
 pub fn tokenize(query: &str) -> JsValue {
     let tokens = mpl_language_server::collect_tokens(query);
     to_js_value(&tokens)
+}
+
+/// Returns the token at byte `offset` as `{ from, to, type }`, or `null` where
+/// there is nothing to report (whitespace, punctuation, past the end).
+///
+/// A `::`-qualified function name comes back whole, so hovering either segment
+/// of `prom::rate` yields the name the stdlib is keyed by. Callers read the text
+/// out of their own copy with the returned span.
+#[must_use]
+#[wasm_bindgen]
+pub fn token_at(query: &str, offset: usize) -> JsValue {
+    to_js_value(&mpl_language_server::token_at(query, offset))
+}
+
+/// Looks up an MPL keyword by name and returns its description and syntax, or
+/// `null` when the word names no keyword.
+#[must_use]
+#[wasm_bindgen]
+pub fn keyword_info(label: &str) -> JsValue {
+    to_js_value(&mpl_language_server::keyword_info(label))
+}
+
+/// Whether `name` has to be backtick-escaped to be read as an identifier.
+#[must_use]
+#[wasm_bindgen]
+pub fn needs_escape(name: &str) -> bool {
+    mpl_language_server::needs_escape(name)
+}
+
+/// `name` written so it reads as an identifier, adding backticks only where
+/// they are required.
+#[must_use]
+#[wasm_bindgen]
+pub fn escape_ident(name: &str) -> String {
+    mpl_language_server::escape_ident(name)
+}
+
+/// The text a completion inserts for `name`. Set `in_backtick` when the opening
+/// backtick is already in the document and the replacement starts after it.
+#[must_use]
+#[wasm_bindgen]
+pub fn apply_text_for_ident(name: &str, in_backtick: bool) -> String {
+    mpl_language_server::apply_text_for_ident(name, in_backtick)
 }
 
 /// Extracts the dataset name from an `MPL` query string.

@@ -1,14 +1,14 @@
 //! Autocompletion and function info for `MPL` queries.
 use std::sync::LazyLock;
 
-use pest::Parser as _;
+use rowan::NodeOrToken;
 use serde::Serialize;
 
 use mpl_lang::STDLIB;
 use mpl_lang::linker::{ArgType, FunctionTrait, Module};
-use mpl_lang::{MPLParser, Rule};
+use mpl_lang::syntax_tree::{Parser as SyntaxParser, SyntaxKind, SyntaxNode};
 
-use crate::Span;
+use crate::{Span, keywords};
 
 #[derive(Clone, Serialize)]
 pub struct CompletionArg {
@@ -21,7 +21,6 @@ pub struct CompletionArg {
 #[serde(rename_all = "snake_case")]
 pub enum ParamType {
     Dataset,
-    Metric,
     Duration,
     String,
     Int,
@@ -29,6 +28,50 @@ pub enum ParamType {
     Bool,
     Array,
     Regex,
+}
+
+/// Every param type, in the order the editor offers them.
+pub(crate) const PARAM_TYPES: [ParamType; 8] = [
+    ParamType::Dataset,
+    ParamType::Duration,
+    ParamType::String,
+    ParamType::Int,
+    ParamType::Float,
+    ParamType::Bool,
+    ParamType::Array,
+    ParamType::Regex,
+];
+
+impl ParamType {
+    /// The source-level spelling users write in a `param` declaration, which is
+    /// also the wire format hosts register system params with.
+    pub(crate) fn spelling(self) -> &'static str {
+        match self {
+            Self::Dataset => "Dataset",
+            Self::Duration => "Duration",
+            Self::Regex => "Regex",
+            Self::String => "string",
+            Self::Int => "int",
+            Self::Float => "float",
+            Self::Bool => "bool",
+            Self::Array => "array",
+        }
+    }
+
+    /// The type a source-level spelling names.
+    pub(crate) fn from_spelling(s: &str) -> Option<Self> {
+        PARAM_TYPES.into_iter().find(|t| t.spelling() == s)
+    }
+
+    /// Whether `Option<...>` may wrap this type. The grammar allows the wrapper
+    /// only around tag values and `Regex`; a dataset or a duration is needed to
+    /// resolve the query at all, so neither can be omitted.
+    pub(crate) fn is_optionable(self) -> bool {
+        matches!(
+            self,
+            Self::String | Self::Int | Self::Float | Self::Bool | Self::Array | Self::Regex
+        )
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -411,145 +454,69 @@ pub enum QueryContext<'a> {
     ComputeTailPipe(&'a str),
 }
 
-/// Returns `true` when `(` at `pos` opens a compute query tuple rather than a
-/// function call or filter grouping. A compute `(` is only preceded by
-/// start-of-input, `;` (directive end), `(` (nested compute), or `,` (second
-/// subquery). Any identifier character or backtick means a function call.
-/// `//` line comments are skipped when scanning backwards.
-fn is_compute_paren(bytes: &[u8], pos: usize) -> bool {
-    let mut j = pos;
-    loop {
-        while j > 0 && bytes[j - 1].is_ascii_whitespace() {
-            j -= 1;
-        }
-        if j == 0 {
-            return true;
-        }
-        // If we landed inside a // line comment, skip back past it.
-        let line_start = bytes[..j]
-            .iter()
-            .rposition(|&b| b == b'\n')
-            .map_or(0, |p| p + 1);
-        match find_line_comment(&bytes[line_start..j]) {
-            Some(offset) => j = line_start + offset,
-            None => break,
-        }
-    }
-    matches!(bytes[j - 1], b';' | b'(' | b',')
-}
-
-/// Finds the byte offset of the first `//` on a line that is not inside a
-/// string or backtick-escaped identifier.
-fn find_line_comment(line: &[u8]) -> Option<usize> {
-    let len = line.len();
-    let mut i = 0;
-    while i + 1 < len {
-        match line[i] {
-            // Interpolation-aware so a `//` inside a nested string (e.g.
-            // `"a ${ "b // c" }"`) is not mistaken for a comment.
-            b'"' => {
-                skip_string_literal(line, len, &mut i);
-                if i < len {
-                    i += 1;
-                }
-            }
-            b'`' => skip_backtick(line, len, &mut i),
-            b'/' if line[i + 1] == b'/' => return Some(i),
-            _ => i += 1,
-        }
-    }
-    None
-}
-
 /// Determines the query context for the text before the cursor.
 ///
-/// Uses a stack to track brace nesting, producing a scoped text slice that
-/// `suggest_for_context` and `extract_source_info` can operate on correctly
-/// without needing brace-awareness themselves.
+/// The parser has already decided which parentheses open a compute tuple and
+/// which open a function call or a filter group, so the question reduces to
+/// which query node encloses the cursor. Of the nodes covering it the last in
+/// document order is the innermost, which is what scopes the returned slice to
+/// the subquery being edited.
 pub fn locate_query_context(text: &str) -> QueryContext<'_> {
-    let bytes = text.as_bytes();
-    let len = bytes.len();
+    let tree = SyntaxParser::new(text).parse().root;
+    let offset = rowan::TextSize::of(text);
 
-    // Stack of subquery start positions; base entry represents top-level.
-    let mut stack: Vec<usize> = vec![0];
-    let mut last_close_brace: Option<usize> = None;
-    // Depth counter for non-compute parentheses (function calls, filter
-    // grouping). While > 0, all nested parens and commas are ignored.
-    let mut ignored_paren_depth: usize = 0;
-    let mut i = 0;
+    let enclosing = tree
+        .descendants()
+        .filter(|n| {
+            matches!(
+                n.kind(),
+                SyntaxKind::SIMPLE_QUERY | SyntaxKind::COMPUTE_QUERY
+            ) && n.text_range().contains_inclusive(offset)
+        })
+        .last();
 
-    while i < len {
-        if !skip_literal(bytes, len, &mut i) {
-            match bytes[i] {
-                b'(' => {
-                    if ignored_paren_depth > 0 {
-                        ignored_paren_depth += 1;
-                    } else if is_compute_paren(bytes, i) {
-                        stack.push(i + 1);
+    match enclosing {
+        // In a compute query the tuple's `)` is the boundary: past it the
+        // cursor is in the rule that combines the subqueries, not in either.
+        Some(node) if node.kind() == SyntaxKind::COMPUTE_QUERY => {
+            let close = node
+                .children_with_tokens()
+                .filter_map(NodeOrToken::into_token)
+                .find(|t| t.kind() == SyntaxKind::LX_R_PAREN)
+                .map(|t| usize::from(t.text_range().end()));
+            match close {
+                Some(close) if close <= usize::from(offset) => {
+                    let outer = &text[close..];
+                    // The first pipe after `)` carries the `compute` rule; any
+                    // further pipe carries an ordinary rule.
+                    if count_pipes(outer) <= 1 {
+                        QueryContext::ComputeRulePipe(outer)
                     } else {
-                        ignored_paren_depth += 1;
+                        QueryContext::ComputeTailPipe(outer)
                     }
                 }
-                b')' => {
-                    if ignored_paren_depth > 0 {
-                        ignored_paren_depth -= 1;
-                    } else if stack.len() > 1 {
-                        stack.pop();
-                        if stack.len() == 1 {
-                            last_close_brace = Some(i);
-                        }
-                    }
-                }
-                b',' => {
-                    if ignored_paren_depth == 0
-                        && stack.len() > 1
-                        && let Some(top) = stack.last_mut()
-                    {
-                        *top = i + 1;
-                    }
-                }
-                _ => {}
+                // Inside the tuple but not inside either subquery.
+                _ => QueryContext::Subquery(text),
             }
         }
-        i += 1;
+        Some(node) => QueryContext::Subquery(&text[usize::from(node.text_range().start())..]),
+        None => QueryContext::Subquery(text),
     }
-
-    // Inside braces — scope to the current subquery
-    if stack.len() > 1 {
-        let start = stack.last().copied().unwrap_or(0);
-        return QueryContext::Subquery(&text[start..]);
-    }
-
-    // Outside braces — check if this is a compute query (we saw `{ ... }`)
-    if let Some(brace_pos) = last_close_brace {
-        let outer = &text[brace_pos + 1..];
-        // Count escape-aware pipes in the outer text to distinguish the
-        // compute_rule pipe (first) from subsequent pipe_rule pipes.
-        let pipe_count = count_pipes(outer);
-        return if pipe_count <= 1 {
-            QueryContext::ComputeRulePipe(outer)
-        } else {
-            QueryContext::ComputeTailPipe(outer)
-        };
-    }
-
-    // Simple query
-    QueryContext::Subquery(text)
 }
 
-/// Counts escape-aware pipe characters in text.
+/// Byte offsets of the `|` tokens in `text`, in order. The lexer keeps pipes
+/// inside strings, regexes and comments out of the token stream.
+fn pipe_offsets(text: &str) -> Vec<usize> {
+    let tree = SyntaxParser::new(text).parse().root;
+    tree.descendants_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .filter(|t| t.kind() == SyntaxKind::LX_PIPE)
+        .map(|t| usize::from(t.text_range().start()))
+        .collect()
+}
+
 fn count_pipes(text: &str) -> usize {
-    let bytes = text.as_bytes();
-    let len = bytes.len();
-    let mut count = 0;
-    let mut i = 0;
-    while i < len {
-        if !skip_literal(bytes, len, &mut i) && bytes[i] == b'|' {
-            count += 1;
-        }
-        i += 1;
-    }
-    count
+    pipe_offsets(text).len()
 }
 
 /// Convenience wrapper for the test suite, where no host-supplied system
@@ -728,74 +695,6 @@ pub fn is_char_escaped(bytes: &[u8], pos: usize) -> bool {
     count % 2 == 1
 }
 
-/// Advances `i` past a literal (double-quoted string, backtick identifier,
-/// Skips a backtick-escaped identifier starting at `bytes[*i] == '`'`,
-/// leaving `*i` just past the closing backtick (or at `len` if unterminated).
-/// Handles `\`` escapes inside the identifier.
-fn skip_backtick(bytes: &[u8], len: usize, i: &mut usize) {
-    *i += 1;
-    while *i < len {
-        match bytes[*i] {
-            b'\\' => *i += 2,
-            b'`' => {
-                *i += 1;
-                return;
-            }
-            _ => *i += 1,
-        }
-    }
-}
-
-/// Skips a double-quoted string starting at `bytes[*i] == '"'`, descending
-/// through any `${ … }` interpolations (which may contain nested strings).
-/// On return `*i` is on the closing quote, or at `len` if the string is
-/// unterminated. Mirrors the `skip_literal` contract so callers `*i += 1` past
-/// the closing quote.
-fn skip_string_literal(bytes: &[u8], len: usize, i: &mut usize) {
-    *i += 1;
-    while *i < len {
-        match bytes[*i] {
-            b'\\' => *i += 2,
-            b'"' => return,
-            b'$' if *i + 1 < len && bytes[*i + 1] == b'{' => {
-                *i += 2;
-                skip_interpolation(bytes, len, i);
-            }
-            _ => *i += 1,
-        }
-    }
-    // Unterminated: clamp so the index stays within bounds.
-    if *i > len {
-        *i = len;
-    }
-}
-
-/// Skips the body of a `${ … }` interpolation; `*i` starts just past the
-/// opening `${` and ends just past the matching `}` (or at `len`). The
-/// interpolation expr is `param_ident | const`, so the only constructs that
-/// can hide a `}` are nested strings and backtick identifiers; bare brace
-/// nesting cannot occur.
-fn skip_interpolation(bytes: &[u8], len: usize, i: &mut usize) {
-    while *i < len {
-        match bytes[*i] {
-            b'}' => {
-                *i += 1;
-                return;
-            }
-            b'"' => {
-                skip_string_literal(bytes, len, i);
-                // Step past the nested closing quote (skip_string_literal
-                // leaves us on it). Guard against the unterminated case.
-                if *i < len {
-                    *i += 1;
-                }
-            }
-            b'`' => skip_backtick(bytes, len, i),
-            _ => *i += 1,
-        }
-    }
-}
-
 /// Returns `true` when byte offset `pos` lies inside a `${ … }` string
 /// interpolation, i.e. in interpolation "code" context where the grammar
 /// expects an `expr`. Plain string text and ordinary query code both return
@@ -825,318 +724,179 @@ enum StringContext {
 /// Classifies the position at byte offset `pos` as ordinary code, the inside
 /// of a `${ … }` interpolation, or plain string-literal text.
 ///
-/// Uses a context stack where `false` = code and `true` = string text. The
-/// base frame is top-level code; an interpolation pushes a code frame on top
-/// of a string frame, so being "in an interpolation" means the top frame is
-/// code while nested inside at least one string frame.
+/// The lexer splits an interpolated literal at each `${` and `}`, naming each
+/// run by the part it plays: `STRING_START` opens an interpolation,
+/// `STRING_SEGMENT` closes one and opens the next, and `STRING_END` closes the
+/// last. Counting those over the text before the cursor gives the nesting at
+/// that point, which is what tells the nested literal in `"a ${ "b" } c"` apart
+/// from the run that closes the outer one.
 fn classify_string_context(text: &str, pos: usize) -> StringContext {
-    let bytes = text.as_bytes();
-    let end = pos.min(bytes.len());
-    let mut stack = vec![false];
-    let mut i = 0;
-    while i < end {
-        let in_string = stack.last().copied().unwrap_or(false);
-        if in_string {
-            match bytes[i] {
-                b'\\' => i += 2,
-                b'"' => {
-                    stack.pop();
-                    i += 1;
-                }
-                b'$' if i + 1 < end && bytes[i + 1] == b'{' => {
-                    stack.push(false);
-                    i += 2;
-                }
-                _ => i += 1,
+    let end = pos.min(text.len());
+    let Some(prefix) = text.get(..end) else {
+        return StringContext::Code;
+    };
+    let tree = SyntaxParser::new(prefix).parse().root;
+
+    let mut depth = 0usize;
+    for token in tree
+        .descendants_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+    {
+        match token.kind() {
+            SyntaxKind::LX_STRING_START => depth += 1,
+            SyntaxKind::LX_STRING_END => depth = depth.saturating_sub(1),
+            // An unterminated literal swallows the rest of the input, so the
+            // cursor is inside string text. The lexer only produces one of
+            // these starting at the opening `"`, or at the `}` that reopens a
+            // literal after an interpolation — every other invalid token starts
+            // with a different character.
+            SyntaxKind::LX_INVALID if token.text().starts_with(['"', '}']) => {
+                return StringContext::StringText;
             }
-        } else {
-            match bytes[i] {
-                b'"' => {
-                    stack.push(true);
-                    i += 1;
-                }
-                b'`' => skip_backtick(bytes, end, &mut i),
-                // Close the current interpolation; never pop the base frame.
-                b'}' if stack.len() > 1 => {
-                    stack.pop();
-                    i += 1;
-                }
-                b'/' if i + 1 < end && bytes[i + 1] == b'/' => {
-                    while i < end && bytes[i] != b'\n' {
-                        i += 1;
-                    }
-                }
-                _ => i += 1,
-            }
+            _ => {}
         }
     }
-    if stack.last().copied().unwrap_or(false) {
-        StringContext::StringText
-    } else if stack.len() > 1 {
+
+    if depth > 0 {
         StringContext::Interpolation
     } else {
         StringContext::Code
     }
 }
 
-/// `//` line comment, `/regex/`, or `s/src/dst/` regex replace) if one starts
-/// at `bytes[i]`. After returning `true`, `i` points at the closing delimiter
-/// so the caller's `i += 1` skips past it.
-fn skip_literal(bytes: &[u8], len: usize, i: &mut usize) -> bool {
-    match bytes[*i] {
-        // Strings may contain `${ \u2026 }` interpolations, which can themselves hold
-        // nested strings (and thus nested `${ }`). A naive "scan to the next
-        // quote" would stop at a nested string's opening quote, so use the
-        // interpolation-aware skipper. It leaves `*i` on the closing quote,
-        // matching the contract (the caller's `*i += 1` steps past it).
-        b'"' => {
-            skip_string_literal(bytes, len, i);
-            true
-        }
-        b'`' => {
-            *i += 1;
-            while *i < len && bytes[*i] != b'`' {
-                if bytes[*i] == b'\\' {
-                    *i += 1;
-                }
-                *i += 1;
-            }
-            true
-        }
-        b'/' if *i + 1 < len && bytes[*i + 1] == b'/' => {
-            while *i < len && bytes[*i] != b'\n' {
-                *i += 1;
-            }
-            true
-        }
-        b'/' if preceded_by_eq(bytes, *i) => {
-            skip_regex_body(bytes, len, i);
-            true
-        }
-        b'/' if is_regex_replace_start(bytes, *i) => {
-            skip_regex_body(bytes, len, i);
-            skip_regex_body(bytes, len, i);
-            true
-        }
-        _ => false,
-    }
-}
-
-/// Advances `i` from an opening `/` past the regex body to the closing `/`,
-/// handling `\` escapes. After return, `*i` points at the closing `/`.
-fn skip_regex_body(bytes: &[u8], len: usize, i: &mut usize) {
-    *i += 1;
-    while *i < len && bytes[*i] != b'/' {
-        if bytes[*i] == b'\\' {
-            *i += 1;
-        }
-        *i += 1;
-    }
-}
-
-/// Returns `true` when the non-whitespace character before `pos` is `=`
-/// (covers both `==` and `!=` comparison operators preceding a regex).
-fn preceded_by_eq(bytes: &[u8], pos: usize) -> bool {
-    let mut j = pos;
-    while j > 0 && bytes[j - 1].is_ascii_whitespace() {
-        j -= 1;
-    }
-    j > 0 && bytes[j - 1] == b'='
-}
-
-/// Returns `true` when the `/` at `pos` is the opening of an `s/…/…/`
-/// regex replace (always preceded by `~` in the grammar).
-fn is_regex_replace_start(bytes: &[u8], pos: usize) -> bool {
-    if pos == 0 || bytes[pos - 1] != b's' {
-        return false;
-    }
-    let mut j = pos - 1;
-    while j > 0 && bytes[j - 1].is_ascii_whitespace() {
-        j -= 1;
-    }
-    j > 0 && bytes[j - 1] == b'~'
-}
-
 fn find_last_pipe(text: &str) -> Option<usize> {
-    let bytes = text.as_bytes();
-    let len = bytes.len();
-    let mut last_pipe = None;
-    let mut i = 0;
-    while i < len {
-        if !skip_literal(bytes, len, &mut i) && bytes[i] == b'|' {
-            last_pipe = Some(i);
-        }
-        i += 1;
-    }
-    last_pipe
+    pipe_offsets(text).last().copied()
 }
 
 // ── source extraction ───────────────────────────────────────────
 
-/// Extracts the dataset and metric name from the source portion of the query
-/// using pest's `Rule::source` parser for correct backtick/escaping handling.
-/// Expects text already scoped to the current subquery by `locate_query_context`.
+/// Extracts the dataset and metric of the subquery the cursor sits in.
+///
+/// `text` runs up to the cursor, so the enclosing subquery is the innermost one
+/// whose range reaches the end — which is what scopes tag completion to the
+/// right side of a compute query. A parameterised dataset or metric
+/// (`$ds:metric`) names nothing the tag lookup could resolve, so it yields
+/// `None`.
 fn extract_source_info(text: &str) -> Option<(String, String)> {
-    let bytes = text.as_bytes();
-    let len = bytes.len();
+    let tree = SyntaxParser::new(text).parse().root;
+    let offset = rowan::TextSize::of(text);
+    // `descendants` is preorder, so of the subqueries covering the cursor the
+    // last one is the innermost.
+    let query = tree
+        .descendants()
+        .filter(|n| {
+            n.kind() == SyntaxKind::SIMPLE_QUERY && n.text_range().contains_inclusive(offset)
+        })
+        .last()?;
 
-    // Find source portion: after directives, before first pipe
-    let mut source_start = 0;
-    let mut first_pipe = len;
-    let mut i = 0;
-    while i < len {
-        if !skip_literal(bytes, len, &mut i) {
-            match bytes[i] {
-                b';' => source_start = i + 1,
-                b'|' => {
-                    first_pipe = i;
-                    break;
-                }
-                _ => {}
-            }
-        }
-        i += 1;
-    }
-
-    // Strip full-line `//` comments from the preamble: pest's `source` rule
-    // does not skip leading trivia, so a commented header — which every example
-    // query has — would otherwise make the parse fail and tag completion
-    // silently vanish.
-    let source: String = text[source_start..first_pipe]
-        .lines()
-        .filter(|line| !line.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    extract_source_via_parser(source.trim())
-}
-
-/// Parses the source string using pest's `Rule::source` and extracts the
-/// dataset and metric names from the resulting `metric_id` pair.
-fn extract_source_via_parser(source: &str) -> Option<(String, String)> {
-    let pairs = MPLParser::parse(Rule::source, source).ok()?;
-    let source_pair = pairs.into_iter().next()?;
-
-    let metric_id = source_pair
-        .into_inner()
-        .find(|p| p.as_rule() == Rule::metric_id)?;
-
-    let mut dataset = None;
-    let mut metric = None;
-    for pair in metric_id.into_inner() {
-        match pair.as_rule() {
-            Rule::dataset => dataset = Some(extract_ident_name(pair)),
-            Rule::metric_name => metric = Some(extract_ident_name(pair)),
-            _ => {}
-        }
-    }
-
-    let (dataset, metric) = (dataset?, metric?);
-    if dataset.is_empty()
-        || metric.is_empty()
-        || dataset.starts_with('$')
-        || metric.starts_with('$')
+    // The `:` has to actually be there. Without it the parser reports the gap
+    // and then takes the next word as the metric, so `ds | filter ` would
+    // otherwise resolve to the metric `filter` and offer its tags.
+    if !query
+        .children_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .any(|t| t.kind() == SyntaxKind::LX_COLON)
     {
         return None;
     }
+
+    let dataset = ident_name(
+        &query
+            .children()
+            .find(|n| n.kind() == SyntaxKind::IDENT_OR_VARIABLE)?,
+    )?;
+    // The metric is the first plain ident of the subquery; a trailing `as name`
+    // contributes a second one.
+    let metric = ident_name(&query.children().find(|n| n.kind() == SyntaxKind::IDENT)?)?;
     Some((dataset, metric))
 }
 
-/// Extracts the unescaped name from a `dataset` or `metric_name` pest pair.
-/// Handles both `plain_ident` (raw text) and `escaped_ident` (backtick-wrapped,
-/// descends into `escaped_ident_inner` to strip the backtick delimiters).
-fn extract_ident_name(pair: pest::iterators::Pair<'_, Rule>) -> String {
-    let Some(inner) = pair.into_inner().next() else {
-        return String::new();
+/// The name an ident node carries, with the backtick delimiters of an escaped
+/// ident removed. Yields `None` for a variable or for the empty node the parser
+/// leaves behind where an ident was expected but not written.
+fn ident_name(node: &SyntaxNode) -> Option<String> {
+    let token = node
+        .descendants_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .find(|t| {
+            matches!(
+                t.kind(),
+                SyntaxKind::LX_IDENT | SyntaxKind::LX_ESCAPED_IDENT
+            )
+        })?;
+    let name = if token.kind() == SyntaxKind::LX_ESCAPED_IDENT {
+        token.text().strip_prefix('`')?.strip_suffix('`')?
+    } else {
+        token.text()
     };
-    match inner.as_rule() {
-        Rule::plain_ident | Rule::param_ident => inner.as_str().to_string(),
-        Rule::escaped_ident => inner
-            .into_inner()
-            .next()
-            .map(|p| p.as_str().to_string())
-            .unwrap_or_default(),
-        _ => String::new(),
-    }
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 // ── param extraction ────────────────────────────────────────────
 
-/// Extracts declared parameters from the query preamble. Scans for
-/// `param $name: type;` declarations that appear before the query body,
-/// tolerating directives (`set ... ;`) and comments.
+/// Extracts declared parameters from the query preamble.
+///
+/// Reads the `PARAM` nodes the parser collects ahead of the query body. It
+/// gathers them whether or not that body parses, which is what lets params be
+/// offered while the query is still being written.
 pub fn extract_declared_params(text: &str) -> Vec<ParamItem> {
-    let mut params = Vec::new();
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with("set ") {
-            continue;
-        }
-        if let Some(rest) = trimmed.strip_prefix("param ") {
-            if let Some(item) = parse_param_decl(rest) {
-                params.push(item);
-            }
-            continue;
-        }
-        // First non-directive, non-param, non-comment line — stop scanning
-        break;
-    }
-    params
+    let tree = SyntaxParser::new(text).parse().root;
+    tree.children()
+        .filter(|node| node.kind() == SyntaxKind::PARAM)
+        .filter_map(|param| param_item(&param))
+        .collect()
 }
 
-/// Parses the remainder of a `param` declaration: `$name: type;`
+/// The first identifier under `node`, whether or not the syntax tree accepted
+/// it: a type it does not name is wrapped in an error node, and completions read
+/// through that on purpose. The legacy lowercase `duration` alias lands there,
+/// and the editor still has to report the param it declares.
+fn first_ident(node: &SyntaxNode) -> Option<String> {
+    node.descendants_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .find(|t| t.kind() == SyntaxKind::LX_IDENT)
+        .map(|t| t.text().to_string())
+}
+
+/// Builds a completion item from one `param $name: type;` declaration.
 ///
 /// Accepts both `$name: T;` and `$name: Option<T>;`. Optional params can only
-/// appear inside `ifdef(...)` blocks, so completions need the optional flag
-/// to gate the `ifdef` keyword and filter the param list inside `ifdef(`.
-fn parse_param_decl(rest: &str) -> Option<ParamItem> {
-    let rest = rest.trim().strip_suffix(';')?.trim();
-    let (name, typ_str) = rest.split_once(':')?;
-    let name = name.trim();
-    let typ_str = typ_str.trim();
+/// appear inside `ifdef(...)` blocks, so completions need the optional flag to
+/// gate the `ifdef` keyword and filter the param list inside `ifdef(`.
+fn param_item(param: &SyntaxNode) -> Option<ParamItem> {
+    let name = param
+        .children()
+        .find(|n| n.kind() == SyntaxKind::VARIABLE)?
+        .descendants_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .find(|t| {
+            matches!(
+                t.kind(),
+                SyntaxKind::LX_VARIABLE | SyntaxKind::LX_ESCAPED_VARIABLE
+            )
+        })?
+        .text()
+        .to_string();
 
-    if !name.starts_with('$') {
-        return None;
-    }
-
-    let (inner, optional) = match typ_str
-        .strip_prefix("Option<")
-        .and_then(|s| s.strip_suffix('>'))
-    {
-        Some(inner) => (inner.trim(), true),
-        None => (typ_str, false),
+    let type_node = param.children().find(|n| n.kind() == SyntaxKind::TYPE)?;
+    // `Option<T>` nests the wrapped type one level down, under the node that
+    // records the wrapper. Anything else names its type directly.
+    let wrapped = type_node
+        .children()
+        .find(|n| n.kind() == SyntaxKind::OPTION_TYPE)
+        .and_then(|opt| opt.children().find(|n| n.kind() == SyntaxKind::TYPE));
+    let (spelling, optional) = match wrapped {
+        Some(inner) => (first_ident(&inner)?, true),
+        None => (first_ident(&type_node)?, false),
     };
 
-    let typ = match inner {
-        "Dataset" => ParamType::Dataset,
-        "Metric" => ParamType::Metric,
-        // `duration` is a legacy lowercase alias; `Duration` is canonical.
-        "Duration" | "duration" => ParamType::Duration,
-        "string" => ParamType::String,
-        "int" => ParamType::Int,
-        "float" => ParamType::Float,
-        "bool" => ParamType::Bool,
-        "array" => ParamType::Array,
-        "Regex" => ParamType::Regex,
-        _ => return None,
-    };
-
-    if optional
-        && !matches!(
-            typ,
-            ParamType::String
-                | ParamType::Int
-                | ParamType::Float
-                | ParamType::Bool
-                | ParamType::Array
-                | ParamType::Regex
-        )
-    {
+    let typ = ParamType::from_spelling(&spelling)?;
+    if optional && !typ.is_optionable() {
         return None;
     }
 
     Some(ParamItem {
-        label: name.to_string(),
+        label: name,
         typ,
         optional,
     })
@@ -1243,11 +1003,6 @@ pub enum FilterPolicy {
     Exclude,
 }
 
-// NOTE: `replace` and `join` are valid pipe keywords in the grammar's
-// `pipe_rule` but are intentionally omitted here. The parser returns
-// `ParseError::NotSupported` for both, so suggesting them would lead users
-// to write queries that immediately fail. Add them here once parser and
-// runtime support lands.
 fn pipe_keywords(
     span: Span,
     policy: FilterPolicy,
@@ -1259,20 +1014,20 @@ fn pipe_keywords(
         options.push(KeywordItem {
             label: "sample",
             apply: Some("sample "),
-            info: "Sample time series at a numeric rate",
+            info: keywords::describe("sample"),
         });
     }
     if policy == FilterPolicy::Include {
         options.push(KeywordItem {
             label: "where",
             apply: Some("where "),
-            info: "Filter time series by label values",
+            info: keywords::describe("where"),
         });
         if has_optional_params {
             options.push(KeywordItem {
                 label: "ifdef",
                 apply: Some("ifdef("),
-                info: "Apply a filter only when an optional param is supplied",
+                info: keywords::describe("ifdef"),
             });
         }
     }
@@ -1280,32 +1035,32 @@ fn pipe_keywords(
         KeywordItem {
             label: "map",
             apply: Some("map "),
-            info: "Apply a function to each data point",
+            info: keywords::describe("map"),
         },
         KeywordItem {
             label: "group",
             apply: Some("group "),
-            info: "Group time series by labels",
+            info: keywords::describe("group"),
         },
         KeywordItem {
             label: "align",
             apply: Some("align "),
-            info: "Align time series to a time grid",
+            info: keywords::describe("align"),
         },
         KeywordItem {
             label: "bucket",
             apply: Some("bucket "),
-            info: "Bucket time series into histogram buckets",
+            info: keywords::describe("bucket"),
         },
         KeywordItem {
             label: "as",
             apply: Some("as "),
-            info: "Rename the metric",
+            info: keywords::describe("as"),
         },
         KeywordItem {
             label: "extend",
             apply: Some("extend "),
-            info: "Add new constant-valued tags to every series after aggregation",
+            info: keywords::describe("extend"),
         },
     ]);
     CompletionResult::Keywords { span, options }
@@ -1325,7 +1080,7 @@ fn suggest_for_compute_rule(text: &str, span: Span) -> Vec<CompletionResult> {
             options: vec![KeywordItem {
                 label: "compute",
                 apply: Some("compute "),
-                info: "Compute a new metric from two sources",
+                info: keywords::describe("compute"),
             }],
         }];
     }
@@ -1393,7 +1148,7 @@ fn suggest_for_context(
         // `sample` takes a single numeric argument; no further completions
         "sample" => vec![],
         f if f.starts_with("ifdef") && policy == FilterPolicy::Include => {
-            suggest_ifdef_context(before, span, partial, after_pipe, params)
+            suggest_ifdef_context(before, span, partial, params)
         }
         "group"
             if words.len() >= 2 && words[1] == "by" && (last == "by" || last.ends_with(',')) =>
@@ -1425,27 +1180,56 @@ fn suggest_for_context(
 ///       brace + `where`
 ///   (f) inside the else-body `{ ... }`: same as (c), but scoped to the
 ///       else branch
+///
+/// `before` is the query text up to the cursor, so the delimiters the parser
+/// managed to read are exactly the ones the user has typed, and the case is
+/// decided by counting them. Reading them off the tree is what keeps a brace or
+/// paren written inside a string or an escaped identifier from being mistaken
+/// for one that opens or closes a body.
 fn suggest_ifdef_context(
     before: &str,
     span: Span,
     partial: &str,
-    after_pipe: &str,
     params: &[ParamItem],
 ) -> Vec<CompletionResult> {
-    let open_paren = after_pipe.find('(');
-    let close_paren = after_pipe.rfind(')');
-    // Use `find` (not `rfind`) so a `{` in the else-body doesn't masquerade
-    // as the if-body brace. Filter expressions don't contain `{`, so the
-    // first one is always the if-body opener.
-    let if_open_brace = after_pipe.find('{');
+    let tree = SyntaxParser::new(before).parse().root;
+    let Some(ifdef) = tree
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::IFDEF)
+        .last()
+    else {
+        return vec![];
+    };
+
+    let (mut has_open_paren, mut has_close_paren, mut has_else) = (false, false, false);
+    let mut closed_bodies = 0usize;
+    // Where each body starts, so the text under the cursor can be read back out.
+    let mut body_starts: Vec<usize> = Vec::new();
+    for token in ifdef
+        .children_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+    {
+        match token.kind() {
+            SyntaxKind::LX_L_PAREN => has_open_paren = true,
+            SyntaxKind::LX_R_PAREN => has_close_paren = true,
+            SyntaxKind::LX_L_BRACE => body_starts.push(usize::from(token.text_range().end())),
+            SyntaxKind::LX_R_BRACE => closed_bodies += 1,
+            SyntaxKind::LX_IDENT if token.text() == "else" => has_else = true,
+            _ => {}
+        }
+    }
+
+    if !has_open_paren {
+        return vec![];
+    }
 
     // (a) inside the argument list — `(` seen, no matching `)` yet
-    if open_paren.is_some() && close_paren.is_none() {
+    if !has_close_paren {
         return suggest_optional_params(span, params);
     }
 
     // (b) `)` typed but no `{` yet — suggest opening the body
-    if close_paren.is_some() && if_open_brace.is_none() {
+    if body_starts.is_empty() {
         return vec![CompletionResult::Keywords {
             span,
             options: vec![KeywordItem {
@@ -1456,52 +1240,42 @@ fn suggest_ifdef_context(
         }];
     }
 
-    let Some(if_open) = if_open_brace else {
-        return vec![];
-    };
-    // Gate name (e.g. `"$f"`) scopes optional-param completions inside the
-    // body to *this* ifdef's gate. Falling back to `None` when the argument
-    // is malformed is intentional: with no gate, all optionals are filtered
-    // out, which is the safe direction (compiler would reject either way).
-    let active_gate = open_paren.and_then(|p| extract_ifdef_gate_name(after_pipe, p));
-    // Locate the if-body's closing `}`. Filter exprs don't use `}`, so the
-    // first `}` after the opening brace is the if-body close.
-    let if_close = after_pipe[if_open + 1..].find('}').map(|p| if_open + 1 + p);
+    // The gate (e.g. `"$f"`) scopes optional-param completions inside the body
+    // to *this* ifdef. Falling back to `None` when the argument is malformed is
+    // intentional: with no gate, all optionals are filtered out, which is the
+    // safe direction (compiler would reject either way).
+    let gate = ifdef
+        .children()
+        .find(|n| n.kind() == SyntaxKind::VARIABLE)
+        .map(|n| n.text().to_string());
+    let body_from = |start: usize| before.get(start..).unwrap_or("").trim();
 
     // (c) still inside the if-body — no closing `}` yet
-    let Some(if_close) = if_close else {
+    if closed_bodies == 0 {
         return suggest_inside_filter_body(
             before,
             span,
             partial,
-            after_pipe[if_open + 1..].trim(),
+            body_from(body_starts[0]),
             params,
-            active_gate,
+            gate.as_deref(),
         );
-    };
-
-    let after_if = after_pipe[if_close + 1..].trim_start();
+    }
 
     // (d) after if-body close, no `else` typed yet — suggest `else`
-    if after_if.is_empty() {
+    if !has_else {
         return vec![CompletionResult::Keywords {
             span,
             options: vec![KeywordItem {
                 label: "else",
                 apply: Some("else { where "),
-                info: "Apply a different filter when the gating param is omitted",
+                info: keywords::describe("else"),
             }],
         }];
     }
 
-    // The only valid continuation after the if-body is the `else` clause.
-    // Anything else is a typo/in-progress edit we can't help with.
-    let Some(after_else_kw) = after_if.strip_prefix("else") else {
-        return vec![];
-    };
-
     // (e) `else` typed but no `{` yet — suggest opening the else body
-    let Some(else_open_rel) = after_else_kw.find('{') else {
+    let Some(&else_body) = body_starts.get(1) else {
         return vec![CompletionResult::Keywords {
             span,
             options: vec![KeywordItem {
@@ -1512,13 +1286,19 @@ fn suggest_ifdef_context(
         }];
     };
 
-    // (f) inside the else-body — bail once the user has typed the closing
-    // `}` since the pipe-keywords logic on the next `|` takes over from there.
-    let else_body = &after_else_kw[else_open_rel + 1..];
-    if else_body.contains('}') {
+    // (f) inside the else-body — once its `}` is typed the pipe-keywords logic
+    // on the next `|` takes over.
+    if closed_bodies > 1 {
         return vec![];
     }
-    suggest_inside_filter_body(before, span, partial, else_body.trim(), params, active_gate)
+    suggest_inside_filter_body(
+        before,
+        span,
+        partial,
+        body_from(else_body),
+        params,
+        gate.as_deref(),
+    )
 }
 
 /// Shared body of cases (c) and (f): cursor sits inside a `{ ... }` filter
@@ -1539,7 +1319,7 @@ fn suggest_inside_filter_body(
             options: vec![KeywordItem {
                 label: "where",
                 apply: Some("where "),
-                info: "Filter time series by label values",
+                info: keywords::describe("where"),
             }],
         }];
     }
@@ -1559,21 +1339,6 @@ fn suggest_inside_filter_body(
     } else {
         vec![]
     }
-}
-
-/// Extracts the gate param name (e.g. `"$f"`) from text like
-/// `ifdef($f) { ... `, given the position of the opening `(`. Returns
-/// `None` when the argument is malformed or absent — the caller should then
-/// fall back to "no active gate," which filters all optional params.
-fn extract_ifdef_gate_name(after_pipe: &str, open_paren: usize) -> Option<&str> {
-    let after = after_pipe.get(open_paren + 1..)?;
-    let close = after.find(')')?;
-    let inner = after[..close].trim();
-    let rest = inner.strip_prefix('$')?;
-    if rest.is_empty() || !rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        return None;
-    }
-    Some(inner)
 }
 
 /// Returns the list of declared optional params, regardless of inner type.
@@ -1599,14 +1364,13 @@ fn suggest_pipe_rule(
 ) -> Vec<CompletionResult> {
     match first {
         "align" => match last {
-            "to" | "over" => suggest_params(span, params, None, |t| t == ParamType::Duration),
+            "to" => suggest_params(span, params, None, |t| t == ParamType::Duration),
             "using" => vec![CompletionResult::AlignFunctions {
                 span,
                 options: ALIGN_COMPLETIONS.clone(),
             }],
             _ => {
                 let has_to = words.contains(&"to");
-                let has_over = words.contains(&"over");
                 let has_using = words.contains(&"using");
                 let mut options = Vec::new();
                 if !has_to && !has_using {
@@ -1614,13 +1378,6 @@ fn suggest_pipe_rule(
                         label: "to",
                         apply: Some("to "),
                         info: "Align to a time interval",
-                    });
-                }
-                if has_to && !has_over && !has_using {
-                    options.push(KeywordItem {
-                        label: "over",
-                        apply: Some("over "),
-                        info: "Specify the lookback window",
                     });
                 }
                 if !has_using {
@@ -1672,7 +1429,7 @@ fn suggest_pipe_rule(
                 ],
             }],
         },
-        "bucket" => suggest_bucket_pipe(words, last, span, params),
+        "bucket" => suggest_bucket_pipe(before, words, last, span, params),
         "as" => vec![CompletionResult::Keywords {
             span,
             options: vec![],
@@ -1767,12 +1524,13 @@ fn is_extend_value_literal(tok: &str) -> bool {
 }
 
 fn suggest_bucket_pipe(
+    before: &str,
     words: &[&str],
     last: &str,
     span: Span,
     params: &[ParamItem],
 ) -> Vec<CompletionResult> {
-    let args = suggest_bucket_args(words, span);
+    let args = suggest_bucket_args(before, span);
     if !args.is_empty() {
         return args;
     }
@@ -1831,46 +1589,46 @@ fn extract_enum_values(arg_type: &ArgType) -> Vec<&'static str> {
 /// Detects when the cursor is inside the parentheses of a bucket function
 /// call and returns argument completions derived from the function's
 /// `FunctionTrait::args()` metadata in the stdlib.
-fn suggest_bucket_args(words: &[&str], span: Span) -> Vec<CompletionResult> {
-    let joined: String = words.join(" ");
-
-    // Find an unmatched open paren (depth > 0 at end of string)
-    let mut depth: i32 = 0;
-    let mut last_open: Option<usize> = None;
-    for (i, ch) in joined.char_indices() {
-        match ch {
-            '(' => {
-                depth += 1;
-                if depth == 1 {
-                    last_open = Some(i);
-                }
-            }
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    last_open = None;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let Some(open) = last_open else {
-        return vec![];
-    };
-
-    // Extract function name: identifier chars immediately before '('
-    let before_paren = &joined[..open];
-    let Some(fn_name) = before_paren
-        .trim_end()
-        .rsplit(|c: char| !c.is_alphanumeric() && c != '_')
-        .next()
-        .filter(|s| !s.is_empty())
+///
+/// `before` is the query text up to the cursor, so the `BUCKET` the cursor sits
+/// in is the last one the tree names, and the call is still open exactly when
+/// the parser has not yet read its closing `)`.
+fn suggest_bucket_args(before: &str, span: Span) -> Vec<CompletionResult> {
+    let tree = SyntaxParser::new(before).parse().root;
+    let Some(call) = tree
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::BUCKET)
+        .last()
+        .and_then(|bucket| {
+            bucket
+                .children()
+                .find(|n| n.kind() == SyntaxKind::FUNCTION_CALL)
+        })
     else {
         return vec![];
     };
+    let Some(arg_list) = call
+        .children()
+        .find(|n| n.kind() == SyntaxKind::FUNCTION_ARGS)
+    else {
+        return vec![];
+    };
+    // The argument list owns the parentheses, so the call is still open for as
+    // long as it has no closing one.
+    let closed = arg_list
+        .children_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .any(|t| t.kind() == SyntaxKind::LX_R_PAREN);
+    if closed {
+        return vec![];
+    }
 
-    let Some(func) = STDLIB.bucket_function(fn_name) else {
+    let fn_name = call
+        .children()
+        .find(|n| n.kind() == SyntaxKind::FUNCTION_PATH)
+        .map(|n| n.text().to_string())
+        .unwrap_or_default();
+    let Some(func) = STDLIB.bucket_function(fn_name.trim()) else {
         return vec![];
     };
     let args = func.args();
@@ -1878,8 +1636,13 @@ fn suggest_bucket_args(words: &[&str], span: Span) -> Vec<CompletionResult> {
         return vec![];
     }
 
-    let inside = &joined[open + 1..];
-    let comma_count = inside.chars().filter(|&c| c == ',').count();
+    // Each comma the parser consumed closes one argument, so the count is the
+    // index of the one the cursor is on.
+    let comma_count = arg_list
+        .children_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .filter(|t| t.kind() == SyntaxKind::LX_COMMA)
+        .count();
 
     // Determine which arg the cursor is on: if past the last positional arg,
     // clamp to the last arg if it is Repeated (variadic).
@@ -2012,17 +1775,17 @@ fn suggest_filter_context(
                 KeywordItem {
                     label: "and",
                     apply: Some("and "),
-                    info: "Logical AND",
+                    info: keywords::describe("and"),
                 },
                 KeywordItem {
                     label: "or",
                     apply: Some("or "),
-                    info: "Logical OR",
+                    info: keywords::describe("or"),
                 },
                 KeywordItem {
                     label: "not",
                     apply: Some("not "),
-                    info: "Logical NOT",
+                    info: keywords::describe("not"),
                 },
             ],
         }]
@@ -2064,36 +1827,35 @@ fn suggest_filter_context(
                 KeywordItem {
                     label: "in",
                     apply: Some("in ["),
-                    info: "Membership in an array of values",
+                    info: keywords::describe("in"),
                 },
                 KeywordItem {
                     label: "is",
                     apply: Some("is "),
-                    info: "Type check",
+                    info: keywords::describe("is"),
                 },
             ],
         }]
     }
 }
 
-/// Returns `true` when every line in `text` is a preamble construct
-/// (param declaration, set directive, comment, or blank). The cursor is
-/// still in the preamble and no source/query text has been typed yet.
+/// Returns `true` when `text` is preamble and nothing else — at least one
+/// directive or `param` declaration, and no query begun.
+///
+/// The parser only builds a query node once a source has been written, so the
+/// absence of one is the test; comments and blank lines are trivia and never
+/// produce a node either way.
 fn is_preamble_only(text: &str) -> bool {
-    let mut has_preamble = false;
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
+    let tree = SyntaxParser::new(text).parse().root;
+    let mut declared = false;
+    for node in tree.descendants() {
+        match node.kind() {
+            SyntaxKind::SIMPLE_QUERY | SyntaxKind::COMPUTE_QUERY => return false,
+            SyntaxKind::DIRECTIVE | SyntaxKind::PARAM => declared = true,
+            _ => {}
         }
-        if trimmed.starts_with("//") || trimmed.starts_with("set ") || trimmed.starts_with("param ")
-        {
-            has_preamble = true;
-            continue;
-        }
-        return false;
     }
-    has_preamble
+    declared
 }
 
 /// Suggests completions when the cursor is in the preamble (before any query
@@ -2164,33 +1926,23 @@ fn suggest_for_preamble(text: &str, partial: &str, span: Span) -> Vec<Completion
     vec![]
 }
 
-/// Returns `true` when the text before the current partial consists entirely
-/// of preamble constructs (param/set/comment/blank lines) or is empty — i.e.
-/// the cursor is at a position where a new preamble keyword would be valid.
+/// Returns `true` when nothing but preamble precedes the cursor, so a new
+/// `param` or `set` would still be legal there. Unlike [`is_preamble_only`] an
+/// empty prefix qualifies: the very start of a query is a preamble position.
 fn is_preamble_position(text: &str) -> bool {
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if trimmed.starts_with("//") || trimmed.starts_with("set ") || trimmed.starts_with("param ")
-        {
-            continue;
-        }
-        return false;
-    }
-    true
+    let tree = SyntaxParser::new(text).parse().root;
+    !tree.descendants().any(|n| {
+        matches!(
+            n.kind(),
+            SyntaxKind::SIMPLE_QUERY | SyntaxKind::COMPUTE_QUERY
+        )
+    })
 }
 
-const PARAM_TYPE_KEYWORDS: [KeywordItem; 15] = [
+const PARAM_TYPE_KEYWORDS: [KeywordItem; 14] = [
     KeywordItem {
         label: "Dataset",
         apply: Some("Dataset;\n"),
-        info: "Parameter type",
-    },
-    KeywordItem {
-        label: "Metric",
-        apply: Some("Metric;\n"),
         info: "Parameter type",
     },
     KeywordItem {
@@ -2287,16 +2039,9 @@ fn suggest_for_source(
         if dataset_raw.is_empty() {
             return vec![];
         }
-        // Metric part after the colon — param mode when it starts with `$`
+        // The metric position takes a name only, so whatever follows the colon
+        // is a partial metric to complete against.
         let metric_part = &partial[colon_idx + 1..];
-        if metric_part.starts_with('$') {
-            return suggest_params(
-                Span::new(span.from + colon_idx + 1, span.to),
-                params,
-                None,
-                |t| t == ParamType::Metric,
-            );
-        }
         let dataset = dataset_raw
             .strip_prefix('`')
             .and_then(|s| s.strip_suffix('`'))

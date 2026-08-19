@@ -8,11 +8,11 @@
 mod completions;
 mod declared_params;
 mod diagnostics;
+mod ident;
+mod keywords;
 mod lints;
-mod parser;
 mod system_params;
 mod tokenize;
-mod visit;
 
 pub use completions::{
     ALIGN_FN_NAMES, BUCKET_FN_NAMES, COMPUTE_FN_NAMES, CompletionArg, CompletionResult,
@@ -23,10 +23,16 @@ pub use declared_params::{DeclaredParam, declared_params};
 pub use diagnostics::{
     DiagnosticAction, DiagnosticItem, Severity, compute_diagnostics, compute_diagnostics_raw,
 };
+pub use ident::{apply_text_for_ident, escape_ident, needs_escape};
+pub use keywords::{KeywordInfo, keyword_info};
 pub use system_params::{
     SystemParamSpec, to_compile_params, to_completion_items as system_params_to_completion_items,
 };
-pub use tokenize::{Token, TokenType, collect_tokens};
+pub use tokenize::{Token, TokenType, collect_tokens, token_at};
+
+/// A terminal in the MPL syntax tree. `mpl_lang::syntax_tree` aliases the node
+/// type but not the token type, so it is spelled out once here.
+pub(crate) type SyntaxToken = rowan::SyntaxToken<mpl_lang::syntax_tree::Lang>;
 
 /// Inclusive-exclusive byte range matching CodeMirror's convention.
 /// Distinct from `miette::SourceSpan` which uses `(offset, len)`.
@@ -39,6 +45,11 @@ pub struct Span {
 impl Span {
     pub fn new(from: usize, to: usize) -> Self {
         Self { from, to }
+    }
+
+    /// A syntax-tree range in the same convention.
+    pub(crate) fn from_text_range(range: rowan::TextRange) -> Self {
+        Self::new(usize::from(range.start()), usize::from(range.end()))
     }
 }
 

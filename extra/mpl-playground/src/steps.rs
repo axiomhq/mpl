@@ -16,7 +16,7 @@ use tsify::Tsify;
 use wasm_bindgen::prelude::*;
 
 use mpl_lang::{
-    Query, compile,
+    Query, compile2,
     linker::{AlignFunction, ComputeFunction, GroupFunction, MapFunction},
     query::{
         Aggregate, Align, As, BucketBy, Cmp, Expr, Filter, FilterOrIfDef, GroupBy, Mapping,
@@ -217,7 +217,7 @@ impl Interpreter {
     /// Parse and interpret an MPL query.
     pub fn run(&self, code: &str) -> Result<RunOutput, String> {
         let (query, _) =
-            compile(code, HashMap::new()).map_err(|e| crate::diagnostics::message(code, &e))?;
+            compile2(code, HashMap::new()).map_err(|e| crate::diagnostics::message(code, &e))?;
         let steps = query_steps(query);
         let results = interpret(&steps, &self.datasets);
 

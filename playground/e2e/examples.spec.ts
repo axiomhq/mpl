@@ -11,10 +11,7 @@ const examples = fs
 // Examples that produce known errors (unsupported features).
 const expectedErrors: Record<string, string> = {
   "rate.mpl": "Compute",
-  "replace_labels.mpl": "not supported",
   "slo-ingest-rate.mpl": "Compute",
-  "enrich.mpl": "not supported",
-  "nested-enrich.mpl": "not supported",
   "params.mpl": "Parameterized",
   "filtered-histogram.mpl": "Unknown tag",
 };

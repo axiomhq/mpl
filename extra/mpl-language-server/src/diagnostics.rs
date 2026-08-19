@@ -1,13 +1,13 @@
 //! Diagnostics and code actions for `MPL` queries.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use miette::Diagnostic as _;
 use serde::Serialize;
 use strsim::jaro;
 
-use mpl_lang::errors::Suggestion;
 use mpl_lang::query::{ParamType, Warning, WarningReason};
-use mpl_lang::{CompileError, GroupError, IfdefError, ParseError, TypeError, compile};
+use mpl_lang::syntax_tree::{Parser as SyntaxParser, SyntaxKind};
+use mpl_lang::{CompileError, GroupError, IfdefError, TypeError, compile2};
 
 use crate::Span;
 use crate::completions::{
@@ -66,7 +66,7 @@ pub fn compute_diagnostics(
     query: &str,
     system_params: &HashMap<String, ParamType>,
 ) -> Vec<DiagnosticItem> {
-    match compile(query, system_params.clone()) {
+    match compile2(query, system_params.clone()) {
         Ok((_, warnings)) => {
             let mut items: Vec<DiagnosticItem> = warnings
                 .as_slice()
@@ -76,14 +76,16 @@ pub fn compute_diagnostics(
             items.extend(crate::lints::detect_hints(query));
             items
         }
-        Err(CompileError::Parse(error)) => {
-            let items = parse_error_diagnostic_items(&error);
-            maybe_rewrite_escaped_dataset_error(query, items)
-        }
+        // `compile2` reports a parse failure through `ParserV2`; this arm keeps
+        // the match total.
+        Err(CompileError::Parse(_)) => vec![],
         Err(CompileError::Type(error)) => type_error_diagnostic_items(&error),
         Err(CompileError::Group(error)) => group_error_diagnostic_items(&error),
         Err(CompileError::Ifdef(error)) => ifdef_error_diagnostic_items(&error),
-        Err(CompileError::ParserV2(errors)) => parser_v2_error_diagnostic_items(&errors),
+        Err(CompileError::ParserV2(errors)) => {
+            let items = parser_v2_error_diagnostic_items(query, &errors);
+            maybe_rewrite_escaped_dataset_error(query, items)
+        }
     }
 }
 
@@ -143,7 +145,7 @@ pub(crate) fn maybe_rewrite_escaped_dataset_error(
     query: &str,
     items: Vec<DiagnosticItem>,
 ) -> Vec<DiagnosticItem> {
-    if items.len() != 1 || !matches!(items[0].severity, Severity::Error) {
+    if !items.iter().any(|i| matches!(i.severity, Severity::Error)) {
         return items;
     }
 
@@ -312,51 +314,24 @@ pub fn group_error_diagnostic_items(e: &GroupError) -> Vec<DiagnosticItem> {
 /// second place to update. An error that labels nothing is still surfaced,
 /// anchored at the start of the query.
 pub fn parser_v2_error_diagnostic_items(
+    query: &str,
     errors: &[mpl_lang::parser2::ParseError],
 ) -> Vec<DiagnosticItem> {
+    // One malformed token makes the parser report the same problem from each
+    // stage that trips over it, so an editor would draw the same squiggle
+    // several times over; a diagnostic is keyed by where it points and what it
+    // says.
+    let mut seen = HashSet::new();
     errors
         .iter()
         .flat_map(|e| {
             let message = e.to_string();
             let help = e.help().map(|h| h.to_string());
+            let actions = parser_v2_error_actions(query, e);
             let items: Vec<_> = e
                 .labels()
                 .into_iter()
                 .flatten()
-                .map(|label| {
-                    let src = label.inner();
-                    DiagnosticItem {
-                        span: Span::new(src.offset(), src.offset() + src.len()),
-                        severity: Severity::Error,
-                        message: message.clone(),
-                        help: help.clone(),
-                        actions: vec![],
-                    }
-                })
-                .collect();
-
-            if items.is_empty() {
-                vec![DiagnosticItem {
-                    span: Span::new(0, 0),
-                    severity: Severity::Error,
-                    message,
-                    help,
-                    actions: vec![],
-                }]
-            } else {
-                items
-            }
-        })
-        .collect()
-}
-
-pub fn parse_error_diagnostic_items(e: &ParseError) -> Vec<DiagnosticItem> {
-    let message = e.to_string();
-    let help = e.help().map(|h| h.to_string());
-    let actions = parse_error_diagnostic_actions(e);
-    {
-        if let Some(labels) = e.labels() {
-            let items: Vec<_> = labels
                 .map(|label| {
                     let src = label.inner();
                     DiagnosticItem {
@@ -380,63 +355,53 @@ pub fn parse_error_diagnostic_items(e: &ParseError) -> Vec<DiagnosticItem> {
             } else {
                 items
             }
-        } else {
-            vec![DiagnosticItem {
-                span: Span::new(0, 0),
-                severity: Severity::Error,
-                message,
-                help,
-                actions,
-            }]
-        }
-    }
+        })
+        .filter(|item| seen.insert((item.span.from, item.span.to, item.message.clone())))
+        .collect()
 }
 
-/// Extracts quick-fix actions by matching on the error variant and
-/// fuzzy-matching against known function names or keywords.
-fn parse_error_diagnostic_actions(e: &ParseError) -> Vec<DiagnosticAction> {
-    {
-        match e {
-            ParseError::SyntaxError {
-                span,
-                suggestion: Some(suggestion),
-                ..
-            } => {
-                vec![suggestion_to_diagnostic(
-                    suggestion,
-                    Span::new(span.offset(), span.offset() + span.len()),
-                )]
-            }
-
-            ParseError::UnsupportedMapFunction { span, name }
-            | ParseError::UnsupportedMapEvaluation { span, name } => {
-                suggest_function_replacements(name, span.offset(), &MAP_FN_NAMES)
-            }
-
-            ParseError::UnsupportedAlignFunction { span, name } => {
-                suggest_function_replacements(name, span.offset(), &ALIGN_FN_NAMES)
-            }
-
-            ParseError::UnsupportedGroupFunction { span, name } => {
-                suggest_function_replacements(name, span.offset(), &GROUP_FN_NAMES)
-            }
-
-            ParseError::UnsupportedComputeFunction { span, name } => {
-                suggest_function_replacements(name, span.offset(), &COMPUTE_FN_NAMES)
-            }
-
-            ParseError::UnsupportedBucketFunction { span, name } => {
-                suggest_function_replacements(name, span.offset(), &BUCKET_FN_NAMES)
-            }
-
-            _ => vec![],
-        }
-    }
+/// Quick-fixes for one error the v2 parser produced.
+///
+/// A misspelled function is the case worth repairing: the name is close to one
+/// the slot accepts, so the fix is to offer those names.
+fn parser_v2_error_actions(
+    query: &str,
+    e: &mpl_lang::parser2::ParseError,
+) -> Vec<DiagnosticAction> {
+    let mpl_lang::parser2::ParseError::UnknownFunction { name, span } = e else {
+        return vec![];
+    };
+    let span = Span::new(span.offset(), span.offset() + span.len());
+    let Some(candidates) = slot_candidates(query, span) else {
+        return vec![];
+    };
+    suggest_function_replacements(name, span.from, candidates)
 }
 
-/// Convert a parser-side suggestion into a code action over `span`.
-fn suggestion_to_diagnostic(s: &Suggestion, span: Span) -> DiagnosticAction {
-    DiagnosticAction::replace_with(span, s.suggestion())
+/// The names a function slot accepts, chosen by the construct the tree puts
+/// around `span`.
+///
+/// Each slot draws from its own vocabulary, and the tree is what says which
+/// slot a name sits in; the innermost match wins, so a `map` inside a compute
+/// query is read as a map.
+fn slot_candidates(query: &str, span: Span) -> Option<&'static Vec<String>> {
+    SyntaxParser::new(query)
+        .parse()
+        .root
+        .descendants()
+        .filter(|n| {
+            let range = n.text_range();
+            usize::from(range.start()) <= span.from && span.to <= usize::from(range.end())
+        })
+        .filter_map(|n| match n.kind() {
+            SyntaxKind::MAP => Some(&*MAP_FN_NAMES),
+            SyntaxKind::ALIGN => Some(&*ALIGN_FN_NAMES),
+            SyntaxKind::GROUP => Some(&*GROUP_FN_NAMES),
+            SyntaxKind::BUCKET => Some(&*BUCKET_FN_NAMES),
+            SyntaxKind::COMPUTE_QUERY => Some(&*COMPUTE_FN_NAMES),
+            _ => None,
+        })
+        .last()
 }
 
 /// Fuzzy-matches `input` against `candidates` using Jaro similarity and returns

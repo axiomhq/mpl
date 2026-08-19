@@ -50,8 +50,8 @@ impl AstWarning {
 /// Represents a parser error.
 pub enum AstError {
     /// The input could not be parsed.
-    #[error("invalid syntax")]
-    #[diagnostic(code(mpl_lang::invalid_syntax))]
+    #[error(transparent)]
+    #[diagnostic(transparent)]
     InvalidSyntax(SyntaxError),
 
     /// Failed to create string
@@ -283,17 +283,13 @@ impl AstError {
     /// Converts this error into a [`MietteDiagnostic`].
     #[must_use]
     pub fn to_diagnostic(&self) -> MietteDiagnostic {
-        if let AstError::InvalidSyntax(error) = self {
-            error.to_diagnostic()
-        } else {
-            MietteDiagnostic {
-                message: self.to_string(),
-                code: self.code().map(|code| code.to_string()),
-                severity: self.severity(),
-                help: self.help().map(|help| help.to_string()),
-                url: self.url().map(|url| url.to_string()),
-                labels: self.labels().map(Iterator::collect),
-            }
+        MietteDiagnostic {
+            message: self.to_string(),
+            code: self.code().map(|code| code.to_string()),
+            severity: self.severity(),
+            help: self.help().map(|help| help.to_string()),
+            url: self.url().map(|url| url.to_string()),
+            labels: self.labels().map(Iterator::collect),
         }
     }
 }

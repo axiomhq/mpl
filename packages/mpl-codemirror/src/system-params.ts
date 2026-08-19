@@ -7,8 +7,7 @@ import { Facet } from "@codemirror/state";
  * token a user would have written inline.
  *
  * Lowercase entries are tag-value types; capitalised ones are language
- * built-ins. `duration` is accepted as a legacy alias but discouraged; the
- * canonical spelling is `Duration`.
+ * built-ins.
  */
 export type MplParamType =
   | "Dataset"

@@ -3,22 +3,27 @@ use std::collections::HashMap;
 use mpl_lang::query::{WarningReason, Warnings};
 use mpl_lang::{CompileError, compile, compile2};
 
-use crate::diagnostics::{DiagnosticItem, Severity, maybe_rewrite_escaped_dataset_error};
+use crate::diagnostics::{DiagnosticItem, Severity, compute_diagnostics};
 
+/// The diagnostics the editor is handed for `q`.
+///
+/// Every helper here goes through `compute_diagnostics`, so a case states what
+/// a user sees rather than what one conversion produces in isolation.
 fn diagnostic_items(q: &str) -> Vec<DiagnosticItem> {
-    match compile(q, HashMap::new()) {
-        Ok(_) => vec![],
-        Err(CompileError::Parse(error)) => crate::diagnostics::parse_error_diagnostic_items(&error),
-        Err(CompileError::Type(error)) => crate::diagnostics::type_error_diagnostic_items(&error),
-        Err(CompileError::Group(error)) => crate::diagnostics::group_error_diagnostic_items(&error),
-        Err(CompileError::Ifdef(error)) => crate::diagnostics::ifdef_error_diagnostic_items(&error),
-        Err(CompileError::ParserV2(_)) => panic!("`compile` does not run the v2 parser"),
-    }
+    compute_diagnostics(q, &HashMap::new())
+}
+
+/// The error diagnostics for `q`, dropping warnings and hints.
+fn error_items(q: &str) -> Vec<DiagnosticItem> {
+    diagnostic_items(q)
+        .into_iter()
+        .filter(|i| matches!(i.severity, Severity::Error))
+        .collect()
 }
 
 /// Run the full success-path pipeline: compile -> warnings -> diagnostic items.
 fn warning_items(q: &str) -> Vec<DiagnosticItem> {
-    let (_, warnings) = compile(q, HashMap::new()).expect("query should compile");
+    let (_, warnings) = compile2(q, HashMap::new()).expect("query should compile");
     warnings
         .as_slice()
         .iter()
@@ -238,48 +243,7 @@ fn compute_function_typo_suggests_replacement() {
     );
 }
 
-// ── parser-emitted warnings (OldDuration) ──────────────────────────
-
-#[test]
-fn old_duration_warning_emitted_as_diagnostic() {
-    let query = "param $t: duration;\nds:metric | align to $t using avg";
-    let items = warning_items(query);
-    assert_eq!(items.len(), 1, "expected exactly one OldDuration warning");
-    let item = &items[0];
-    assert!(matches!(item.severity, Severity::Warning));
-    assert!(
-        item.message.contains("`duration`") && item.message.contains("Duration"),
-        "warning message should mention both forms, got: {:?}",
-        item.message
-    );
-    assert_eq!(
-        &query[item.span.from..item.span.to],
-        "duration",
-        "warning span should cover the lowercase `duration` token"
-    );
-}
-
-#[test]
-fn old_duration_warning_has_replace_action() {
-    let query = "param $t: duration;\nds:metric | align to $t using avg";
-    let items = warning_items(query);
-    let item = &items[0];
-    assert_eq!(
-        item.actions.len(),
-        1,
-        "OldDuration should have one quick-fix"
-    );
-    let action = &item.actions[0];
-    assert_eq!(action.insert, "Duration");
-    // The action's span must cover the exact `duration` token so applying it
-    // is a straight substring replacement, not an offset shift.
-    assert_eq!(&query[action.span.from..action.span.to], "duration");
-    assert!(
-        action.name.contains("Duration"),
-        "action label should mention Duration, got: {:?}",
-        action.name
-    );
-}
+// ── parser-emitted warnings ───────────────────────────────────────
 
 #[test]
 fn uppercase_duration_emits_no_warning() {
@@ -325,53 +289,25 @@ fn param_not_declared_warning_is_plain_warning_without_actions() {
     assert!(items[0].message.contains("$foo"));
 }
 
-#[test]
-fn multiple_old_duration_warnings() {
-    // Each occurrence of `duration` produces its own warning so the editor
-    // can pin a quick-fix to every site, not just the first.
-    let query = concat!(
-        "param $t: duration;\n",
-        "param $u: duration;\n",
-        "ds:metric | align to $t using avg",
-    );
-    let items = warning_items(query);
-    assert_eq!(items.len(), 2, "one warning per `duration` token");
-    for item in &items {
-        assert!(matches!(item.severity, Severity::Warning));
-        assert_eq!(&query[item.span.from..item.span.to], "duration");
-        assert_eq!(item.actions[0].insert, "Duration");
-    }
-}
-
 // ── dataset given, no metric ─────────────────────────────────────
 
+/// Asserts the editor is told about `query` at `expected_from..expected_to`.
+///
+/// The parser recovers and reports what each stage tripped over, so a case names the span it
+/// cares about rather than how many diagnostics reach the editor alongside it.
 fn assert_parse_error(query: &str, expected_from: usize, expected_to: usize) {
-    let items = match compile(query, HashMap::new()) {
-        Ok(_) => panic!("'{query}' should not compile"),
-        Err(CompileError::Parse(error)) => crate::diagnostics::parse_error_diagnostic_items(&error),
-        Err(CompileError::Type(_) | CompileError::Group(_) | CompileError::Ifdef(_)) => {
-            panic!("'{query}' should be a parse error, not type/group/ifdef error")
-        }
-        Err(CompileError::ParserV2(_)) => panic!("`compile` does not run the v2 parser"),
-    };
-    assert_eq!(
-        items.len(),
-        1,
-        "'{query}' should produce exactly one diagnostic"
-    );
+    let items = error_items(query);
+    assert!(!items.is_empty(), "'{query}' should not compile");
     assert!(
-        matches!(items[0].severity, Severity::Error),
-        "'{query}' should produce an error"
+        items
+            .iter()
+            .any(|i| i.span.from == expected_from && i.span.to == expected_to),
+        "'{query}' should report at {expected_from}..{expected_to}, got: {:?}",
+        items
+            .iter()
+            .map(|i| (i.span.from, i.span.to, &i.message))
+            .collect::<Vec<_>>()
     );
-    assert!(
-        items[0].actions.is_empty(),
-        "'{query}' should have no code actions"
-    );
-    assert_eq!(
-        items[0].span.from, expected_from,
-        "'{query}' error span.from"
-    );
-    assert_eq!(items[0].span.to, expected_to, "'{query}' error span.to");
 }
 
 #[test]
@@ -389,9 +325,10 @@ fn backtick_dataset_colon_no_metric_error_at_eof() {
 }
 
 #[test]
-fn dataset_no_colon_error_highlights_dataset() {
-    // "ds" — error highlights "ds" as an unexpected token
-    assert_parse_error("ds", 0, 2);
+/// A source names a dataset and a metric, so a lone name is reported where the `:` that
+/// would separate them belongs.
+fn dataset_no_colon_error_points_at_the_missing_colon() {
+    assert_parse_error("ds", 2, 2);
 }
 
 #[test]
@@ -402,9 +339,10 @@ fn dataset_no_metric_with_filter_error_at_pipe() {
 }
 
 #[test]
-fn dataset_no_colon_with_filter_error_highlights_dataset() {
-    // "ds | filter tag == \"x\"" — error highlights "ds"
-    assert_parse_error("ds | filter tag == \"x\"", 0, 2);
+/// The `|` is the first token that cannot follow a bare dataset name, so it is what the
+/// missing `:` is reported against.
+fn dataset_no_colon_with_filter_error_points_at_the_pipe() {
+    assert_parse_error("ds | filter tag == \"x\"", 3, 4);
 }
 
 #[test]
@@ -423,18 +361,13 @@ fn dataset_no_metric_with_time_range_error_at_bracket() {
 // ── escaped ident dataset with dot, no colon ────────────────────
 
 /// Runs `compile` → `diagnostic_items` → `maybe_rewrite` (the full wasm path).
+/// The message the escaped-dataset rewrite puts in place of the parser's own.
+const REWRITTEN_MESSAGE: &str = "expected ':' and a metric name after the dataset";
+
 fn diagnostics_for(query: &str) -> Vec<DiagnosticItem> {
-    match compile(query, HashMap::new()) {
-        Ok(_) => panic!("'{query}' should not compile"),
-        Err(CompileError::Parse(error)) => maybe_rewrite_escaped_dataset_error(
-            query,
-            crate::diagnostics::parse_error_diagnostic_items(&error),
-        ),
-        Err(CompileError::Type(_) | CompileError::Group(_) | CompileError::Ifdef(_)) => {
-            panic!("'{query}' should be a parse error, not type/group/ifdef error")
-        }
-        Err(CompileError::ParserV2(_)) => panic!("`compile` does not run the v2 parser"),
-    }
+    let items = error_items(query);
+    assert!(!items.is_empty(), "'{query}' should not compile");
+    items
 }
 
 #[test]
@@ -466,14 +399,17 @@ fn backtick_dotted_dataset_suggests_colon_syntax() {
     );
 }
 
+/// The rewrite reads a dataset and a metric out of one escaped identifier, so it
+/// only has something to say when there is a dot to split on.
 #[test]
 fn backtick_dataset_no_dot_not_rewritten() {
-    // No dot in the ident — rewrite should NOT fire, keep original behavior
     let query = "`my-dataset`";
     let items = diagnostics_for(query);
-    assert_eq!(items.len(), 1);
-    // Original error stays at position 0 (not rewritten)
-    assert_eq!(items[0].span.from, 0);
+    assert!(
+        !items.iter().any(|i| i.message == REWRITTEN_MESSAGE),
+        "'{query}' names no metric to split out, got: {:?}",
+        items.iter().map(|i| &i.message).collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -481,11 +417,10 @@ fn backtick_dataset_with_colon_not_rewritten() {
     // Has colon after ident — should NOT be rewritten
     let query = "`dev.metrics`:";
     let items = diagnostics_for(query);
-    assert_eq!(items.len(), 1);
-    // Original error, not our rewrite (error is at EOF for missing metric name)
-    assert_ne!(
-        items[0].message, "expected ':' and a metric name after the dataset",
-        "should not rewrite when colon is present"
+    assert!(
+        !items.iter().any(|i| i.message == REWRITTEN_MESSAGE),
+        "'{query}' already separates dataset and metric, got: {:?}",
+        items.iter().map(|i| &i.message).collect::<Vec<_>>()
     );
 }
 
@@ -498,14 +433,7 @@ fn diagnostic_items_with_params(
     q: &str,
     params: HashMap<String, mpl_lang::query::ParamType>,
 ) -> Vec<DiagnosticItem> {
-    match compile(q, params) {
-        Ok(_) => vec![],
-        Err(CompileError::Parse(error)) => crate::diagnostics::parse_error_diagnostic_items(&error),
-        Err(CompileError::Type(error)) => crate::diagnostics::type_error_diagnostic_items(&error),
-        Err(CompileError::Group(error)) => crate::diagnostics::group_error_diagnostic_items(&error),
-        Err(CompileError::Ifdef(error)) => crate::diagnostics::ifdef_error_diagnostic_items(&error),
-        Err(CompileError::ParserV2(_)) => panic!("`compile` does not run the v2 parser"),
-    }
+    compute_diagnostics(q, &params)
 }
 
 #[test]
@@ -597,7 +525,7 @@ fn a_parser_v2_error_is_anchored_to_its_token() {
         panic!("{query:?} should fail in the v2 parser")
     };
 
-    let items = crate::diagnostics::parser_v2_error_diagnostic_items(&errors);
+    let items = crate::diagnostics::parser_v2_error_diagnostic_items(query, &errors);
 
     assert_eq!(items.len(), 1, "one error should yield one diagnostic");
     assert!(matches!(items[0].severity, Severity::Error));
@@ -623,7 +551,7 @@ fn no_parser_v2_error_is_dropped() {
         panic!("an empty query should fail in the v2 parser")
     };
 
-    let items = crate::diagnostics::parser_v2_error_diagnostic_items(&errors);
+    let items = crate::diagnostics::parser_v2_error_diagnostic_items("", &errors);
 
     assert!(
         items.len() >= errors.len(),
@@ -659,4 +587,61 @@ fn a_parser_v2_warning_keeps_its_span() {
         (17, 23),
         "the warning should cover the string literal"
     );
+}
+
+/// `compute_diagnostics` is the entry point the editor calls, so these cases read what an
+/// editor would draw rather than what one stage of the compiler produced.
+mod compute {
+    use std::collections::HashMap;
+
+    use crate::diagnostics::{Severity, compute_diagnostics};
+
+    fn errors(query: &str) -> Vec<(usize, usize, String)> {
+        compute_diagnostics(query, &HashMap::new())
+            .into_iter()
+            .filter(|d| matches!(d.severity, Severity::Error))
+            .map(|d| (d.span.from, d.span.to, d.message))
+            .collect()
+    }
+
+    /// A squiggle is only useful where the problem is. An error that names no place in the
+    /// query would be drawn at the very start of the document, pointing the reader away from
+    /// the token that caused it.
+    #[test]
+    fn a_syntax_error_is_anchored_where_it_happened() {
+        let query = "test:metric\n| map + ";
+        let found = errors(query);
+        assert!(!found.is_empty(), "expected an error for `{query}`");
+        assert!(
+            found.iter().all(|(from, to, _)| *from > 0 && *to > 0),
+            "every error should point past the start of the query, got: {found:?}"
+        );
+    }
+
+    /// The parser reports what it recovered from at several stages, so the same problem can
+    /// arrive more than once; an editor draws one squiggle per diagnostic.
+    #[test]
+    fn the_same_problem_is_reported_once() {
+        let found = errors("ds:metric | where");
+        let mut seen = found.clone();
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), found.len(), "duplicate diagnostics: {found:?}");
+    }
+
+    /// `in` compares against a set, so a scalar right-hand side is a query the editor has to
+    /// reject rather than pass to the backend.
+    #[test]
+    fn in_with_a_scalar_is_reported() {
+        let found = errors("ds:metric | where t in 200");
+        assert!(
+            found.iter().any(|(.., m)| m.contains("requires an array")),
+            "expected an in-requires-array diagnostic, got: {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_valid_query_reports_nothing() {
+        assert_eq!(errors("ds:metric | where t == 200"), Vec::new());
+    }
 }
