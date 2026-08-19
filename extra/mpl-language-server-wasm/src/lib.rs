@@ -38,7 +38,6 @@ fn describe(e: &CompileError) -> String {
         CompileError::Type(e) => e.to_string(),
         CompileError::Group(e) => e.to_string(),
         CompileError::Ifdef(e) => e.to_string(),
-        CompileError::Parse(_) => "parse error".to_string(),
     }
 }
 

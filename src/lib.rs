@@ -36,7 +36,6 @@ use std::{
     hash::BuildHasher,
 };
 
-pub use errors::ParseError;
 use miette::{Diagnostic, SourceOffset, SourceSpan};
 pub use query::Query;
 
@@ -54,10 +53,6 @@ use crate::{
 /// Compile error
 #[derive(Debug, thiserror::Error, Diagnostic)]
 pub enum CompileError {
-    /// Parse error
-    #[error(transparent)]
-    #[diagnostic(transparent)]
-    Parse(#[from] ParseError),
     /// Typecheck error
     #[error(transparent)]
     #[diagnostic(transparent)]

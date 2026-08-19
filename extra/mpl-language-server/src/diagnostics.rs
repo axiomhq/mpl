@@ -76,9 +76,6 @@ pub fn compute_diagnostics(
             items.extend(crate::lints::detect_hints(query));
             items
         }
-        // `compile` reports a parse failure through `ParserV2`; this arm keeps
-        // the match total.
-        Err(CompileError::Parse(_)) => vec![],
         Err(CompileError::Type(error)) => type_error_diagnostic_items(&error),
         Err(CompileError::Group(error)) => group_error_diagnostic_items(&error),
         Err(CompileError::Ifdef(error)) => ifdef_error_diagnostic_items(&error),

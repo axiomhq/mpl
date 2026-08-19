@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::fs;
 
 use miette::{GraphicalReportHandler, GraphicalTheme, NamedSource, Report};
+use mpl_lang::CompileError;
 use mpl_lang::query::{ParamType, TerminalParamType};
-use mpl_lang::{CompileError, ParseError};
 
 /// Renders `err` the way a user would see it: the labels point into the
 /// example and the report is named for the file it came from, so a failure
@@ -29,9 +29,6 @@ fn report(file_name: &str, content: &str, err: CompileError) -> String {
 fn check<T>(label: &str, file_name: &str, content: &str, r: Result<T, CompileError>) {
     match r {
         Ok(_) => println!("  {label}: parsed successfully"),
-        Err(CompileError::Parse(ParseError::NotImplemented(feature))) => {
-            println!("  {label}: parsed, not yet implemented: {feature}");
-        }
         Err(e) => panic!(
             "{label} rejected {file_name}:\n{}",
             report(file_name, content, e)

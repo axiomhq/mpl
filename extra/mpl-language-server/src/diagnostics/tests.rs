@@ -99,7 +99,6 @@ fn type_error_puts_error_on_use_and_info_on_declaration() {
     let query = "param $tag: string;\nds:metric | align to $tag using avg";
     let items = match compile(query, HashMap::new()) {
         Ok(_) => panic!("should produce a type error"),
-        Err(CompileError::Parse(_)) => panic!("should be a type error, not parse error"),
         Err(CompileError::Type(error)) => crate::diagnostics::type_error_diagnostic_items(&error),
         Err(CompileError::Group(error)) => crate::diagnostics::group_error_diagnostic_items(&error),
         Err(CompileError::Ifdef(_)) => panic!("should be a type error, not ifdef error"),
