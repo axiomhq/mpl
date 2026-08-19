@@ -582,3 +582,22 @@ fn test_e_notation() {
     assert!(ast.errors.is_empty());
     dbg!(&ast.parts);
 }
+
+/// A sign is a token `CONST` collects alongside the number it wraps
+/// (`tests/syntax_tree.rs::constants`), so lowering has to fold it into the value.
+#[test]
+fn a_negative_integer_keeps_its_sign() {
+    let value = lower_first("ds:m | where x == -42", SyntaxKind::CONST, |p, n| {
+        p.constant(&n)
+    });
+    assert_eq!(TagValue::Int(-42), value);
+}
+
+/// The same for floats: the sign sits outside `FLOAT`, so lowering has to apply it.
+#[test]
+fn a_negative_float_keeps_its_sign() {
+    let value = lower_first("ds:m | where x == -1.5", SyntaxKind::CONST, |p, n| {
+        p.constant(&n)
+    });
+    assert_eq!(TagValue::Float(-1.5), value);
+}
