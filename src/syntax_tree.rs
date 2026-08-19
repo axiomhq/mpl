@@ -1,5 +1,6 @@
-use std::{fmt::Display, iter::Peekable};
+use std::fmt::Display;
 
+use itertools::{PeekNth, peek_nth};
 use miette::{Diagnostic, MietteDiagnostic, SourceSpan};
 use rowan::GreenNodeBuilder;
 use strum::VariantArray;
@@ -271,7 +272,7 @@ impl From<SyntaxKind> for rowan::SyntaxKind {
 
 /// Parser for the MPL language syntax tree.
 pub struct Parser<'input> {
-    lexer: Peekable<Lexer<'input>>,
+    lexer: PeekNth<Lexer<'input>>,
     builder: GreenNodeBuilder<'static>,
     errors: Vec<SyntaxError>,
     eof: Token<'static>,
@@ -285,7 +286,7 @@ impl<'input> Parser<'input> {
     #[must_use]
     pub fn new(input: &'input str) -> Self {
         Self {
-            lexer: Lexer::new(input).peekable(),
+            lexer: peek_nth(Lexer::new(input)),
             builder: GreenNodeBuilder::default(),
             errors: Vec::new(),
             eof: Token::new(TokenType::Eof, "", input.len()),
@@ -311,6 +312,26 @@ impl<'input> Parser<'input> {
             };
             self.token(token);
         }
+    }
+
+    /// returns the nth non-trivia token
+    fn peek_nth(&mut self, mut n: usize) -> Option<Token<'input>> {
+        let mut i = 0;
+        while let Some(t) = self.lexer.peek_nth(i) {
+            i += 1;
+            if t.is_trivia() {
+                continue;
+            }
+            if n == 0 {
+                return Some(*t);
+            }
+            n -= 1;
+        }
+        None
+    }
+    /// returns the nth non-trivia token type
+    fn peek_nth_type(&mut self, n: usize) -> Option<TokenType> {
+        self.peek_nth(n).map(|t| t.tpe())
     }
 
     fn token(&mut self, token: Token<'input>) {
@@ -1102,7 +1123,15 @@ impl Parser<'_> {
         self.node(EXTEND, |s| {
             s.keyword_token("extend");
             s.extend_part();
-            while s.try_structural(TokenType::Comma) {
+
+            // the continuation here is `, <ident> = `
+            // while `, <ident>:` or `, )` are not valid continuations
+            // so we need to look ahead two tokens
+            while s.peek_nth_type(0) == Some(TokenType::Comma)
+                && s.peek_nth(1).is_some_and(|t| t.is_ident())
+                && s.peek_nth_type(2) == Some(TokenType::Equal)
+            {
+                s.eat_token_type(TokenType::Comma);
                 s.extend_part();
             }
         });

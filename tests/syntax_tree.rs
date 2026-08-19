@@ -283,6 +283,129 @@ fn compute_queries_nest() {
 }
 
 // ---------------------------------------------------------------------------------------
+// Where a compute operand ends
+//
+// `extend` is the one rule whose comma-separated list has no closing token — `group by a, b`
+// ends at `using`, a function call at its `)`, `in [a, b]` at its `]` — so it is the one rule
+// that can sit at the end of a compute operand with a comma still pending. The comma that
+// continues the list and the comma that separates the operands are the same token, and the
+// tree records which one the parser read by where the comma landed: a child of `EXTEND`
+// continued the list, a child of `COMPUTE_QUERY` started the next operand.
+//
+// What separates them is the token after that. An extend part spells `name =`; an operand
+// spells `dataset :`, and the dataset may be an ident, an escaped ident or a variable. The
+// two remaining continuations settle on the first token alone: a nested operand opens with
+// `(`, and the operand list closes with `)`.
+// ---------------------------------------------------------------------------------------
+
+#[test_case(
+    "(a:b | extend x = 1, c:d) | compute y using sum"
+    => "COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b) | \
+        RULE(EXTEND(extend EXTEND_PART(IDENT(x) = EXPR(CONST(INTEGER(1)))))))) , \
+        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | compute IDENT(y) using \
+        FUNCTION_CALL(FUNCTION_PATH(IDENT(sum)) FUNCTION_ARGS()))"
+    ; "one part, then the next operand"
+)]
+#[test_case(
+    "(a:b | extend x = 1, y = 2, c:d) | compute y using sum"
+    => "COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b) | \
+        RULE(EXTEND(extend EXTEND_PART(IDENT(x) = EXPR(CONST(INTEGER(1)))) , \
+        EXTEND_PART(IDENT(y) = EXPR(CONST(INTEGER(2)))))))) , \
+        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | compute IDENT(y) using \
+        FUNCTION_CALL(FUNCTION_PATH(IDENT(sum)) FUNCTION_ARGS()))"
+    ; "a list of parts, then the next operand"
+)]
+#[test_case(
+    "(a:b, c:d | extend x = 1,) | compute y using sum"
+    => "COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b))) , \
+        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d) | RULE(EXTEND(extend \
+        EXTEND_PART(IDENT(x) = EXPR(CONST(INTEGER(1)))))))) , ) | compute IDENT(y) using \
+        FUNCTION_CALL(FUNCTION_PATH(IDENT(sum)) FUNCTION_ARGS()))"
+    ; "the trailing comma of the operand list"
+)]
+#[test_case(
+    "(a:b | extend x = 1, $v:d) | compute y using sum"
+    => "COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b) | \
+        RULE(EXTEND(extend EXTEND_PART(IDENT(x) = EXPR(CONST(INTEGER(1)))))))) , \
+        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(VARIABLE($v)) : IDENT(d))) ) | compute IDENT(y) \
+        using FUNCTION_CALL(FUNCTION_PATH(IDENT(sum)) FUNCTION_ARGS()))"
+    ; "the next operand reads its dataset from a parameter"
+)]
+#[test_case(
+    "(a:b | extend x = 1, `e f`:d) | compute y using sum"
+    => "COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b) | \
+        RULE(EXTEND(extend EXTEND_PART(IDENT(x) = EXPR(CONST(INTEGER(1)))))))) , \
+        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(`e f`)) : IDENT(d))) ) | compute IDENT(y) \
+        using FUNCTION_CALL(FUNCTION_PATH(IDENT(sum)) FUNCTION_ARGS()))"
+    ; "the next operand has an escaped dataset"
+)]
+#[test_case(
+    "(a:b | extend x = 1, (c:d, e:f) | compute m using +) | compute y using sum"
+    => "COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : IDENT(b) | \
+        RULE(EXTEND(extend EXTEND_PART(IDENT(x) = EXPR(CONST(INTEGER(1)))))))) , \
+        QUERY(COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) , \
+        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(e)) : IDENT(f))) ) | compute IDENT(m) using \
+        FUNCTION_CALL(MATH_FN(+) FUNCTION_ARGS()))) ) | compute IDENT(y) using \
+        FUNCTION_CALL(FUNCTION_PATH(IDENT(sum)) FUNCTION_ARGS()))"
+    ; "the next operand is itself a compute query"
+)]
+#[test_case(
+    "((a:b | extend x = 1, c:d) | compute m using +, e:f) | compute y using -"
+    => "COMPUTE_QUERY(( QUERY(COMPUTE_QUERY(( QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(a)) : \
+        IDENT(b) | RULE(EXTEND(extend EXTEND_PART(IDENT(x) = EXPR(CONST(INTEGER(1)))))))) , \
+        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(c)) : IDENT(d))) ) | compute IDENT(m) using \
+        FUNCTION_CALL(MATH_FN(+) FUNCTION_ARGS()))) , \
+        QUERY(SIMPLE_QUERY(IDENT_OR_VARIABLE(IDENT(e)) : IDENT(f))) ) | compute IDENT(y) using \
+        FUNCTION_CALL(MATH_FN(-) FUNCTION_ARGS()))"
+    ; "an operand of a nested compute query"
+)]
+fn extend_lists_end_where_the_operand_list_continues(src: &str) -> String {
+    first(src, SyntaxKind::COMPUTE_QUERY)
+}
+
+/// The rules whose comma lists close on a token of their own reach the same position without
+/// needing to look past the comma at all.
+#[test]
+fn closed_comma_lists_end_at_their_own_terminator() {
+    for src in [
+        "(a:b | group by x, y using sum, c:d) | compute y using sum",
+        "(a:b | where t in [1, 2], c:d) | compute y using sum",
+        "(a:b | bucket by x using f(1.0, 2.0), c:d) | compute y using sum",
+    ] {
+        parse_clean(src);
+    }
+}
+
+/// What continues an extend list is the comma, whatever trivia surrounds it. A list may be
+/// spread over lines the way the rules around it are, and a comment may sit in the gap.
+#[test_case("d:m | extend a = 1, b = 2"          ; "one space")]
+#[test_case("d:m | extend a = 1,b = 2"           ; "no space")]
+#[test_case("d:m | extend a = 1,\n  b = 2"       ; "spread over lines")]
+#[test_case("d:m | extend a = 1, // note\nb = 2" ; "comment in the gap")]
+fn the_extend_list_separator_is_the_comma_alone(src: &str) {
+    assert_eq!(
+        first(src, SyntaxKind::EXTEND),
+        "EXTEND(extend EXTEND_PART(IDENT(a) = EXPR(CONST(INTEGER(1)))) , \
+         EXTEND_PART(IDENT(b) = EXPR(CONST(INTEGER(2)))))"
+    );
+}
+
+/// Outside a compute query nothing may follow the comma of an extend list, so every way of
+/// running out of list is an error — including the one that is well-formed inside a compute
+/// query. Which diagnostic each produces is the parser's business; that none of them is
+/// accepted is the contract.
+#[test_case("d:m | extend a = 1,"        ; "nothing after the comma")]
+#[test_case("d:m | extend a = 1, c:d"    ; "an operand where a part belongs")]
+#[test_case("d:m | extend a = 1, b"      ; "a part without a value")]
+#[test_case("d:m | extend a = 1, b == 2" ; "a comparison is not an assignment")]
+#[test_case("d:m | extend a = 1, 2 = 3"  ; "a part is named by an ident")]
+fn a_dangling_extend_list_is_reported(src: &str) {
+    let SyntaxTree { root, errors } = Parser::new(src).parse();
+    assert!(!errors.is_empty(), "{src:?} was expected to fail");
+    assert_eq!(root.to_string(), src, "tree does not reproduce {src:?}");
+}
+
+// ---------------------------------------------------------------------------------------
 // Directives
 //
 // `set` and `param` share the `DIRECTIVE` kind, and both are only accepted before the query.
@@ -1468,20 +1591,14 @@ fn gen_rule(rng: &mut Rng) -> String {
     }
 }
 
-/// `comma_terminated` says whether this query is followed by a comma, i.e. whether it sits
-/// inside a compute query's argument list. If it is, its last rule may not be `extend`: the
-/// rule's own comma-separated parts would swallow the separator — see
-/// `extend_swallows_the_comma_of_a_compute_query`.
-fn gen_query(rng: &mut Rng, depth: u64, comma_terminated: bool) -> String {
+/// One query: a dataset/metric pair carrying a run of rules, or a compute over two of them.
+/// `depth` bounds how far the compute case may nest.
+fn gen_query(rng: &mut Rng, depth: u64) -> String {
     let count = rng.below(4);
-    let mut rules = (0..count).map(|_| gen_rule(rng)).collect::<Vec<_>>();
-    if comma_terminated && rules.last().is_some_and(|r| r.starts_with("extend")) {
-        let alias = *rng.pick(IDENTS);
-        rules.push(join(rng, &["as", alias]));
-    }
+    let rules = (0..count).map(|_| gen_rule(rng)).collect::<Vec<_>>();
     let mut query = if depth > 0 && rng.below(4) == 0 {
-        let left = gen_query(rng, depth - 1, true);
-        let right = gen_query(rng, depth - 1, true);
+        let left = gen_query(rng, depth - 1);
+        let right = gen_query(rng, depth - 1);
         let trailing = if rng.below(2) == 0 { "," } else { "" };
         let func = *rng.pick(FUNCS);
         let op = *rng.pick(&["+", "-", "*", "/"]);
@@ -1535,7 +1652,7 @@ fn gen_program(rng: &mut Rng) -> String {
         out.push_str(&join(rng, &["param", "$v", ":", tpe, ";"]));
         out.push_str(rng.pick::<&str>(TRIVIA));
     }
-    out.push_str(&gen_query(rng, 2, false));
+    out.push_str(&gen_query(rng, 2));
     out
 }
 
@@ -1700,33 +1817,6 @@ fn arrays_parse_in_constant_position() {
     ] {
         let SyntaxTree { root: _, errors } = Parser::new(src).parse();
         assert!(errors.is_empty(), "{src:?} should parse: {errors:?}");
-    }
-}
-
-/// An `extend` as the last rule of a compute query's sub-query eats the comma that separates
-/// the sub-queries: `extend` takes a comma-separated list of parts and has no way to know the
-/// list ended, so it reads `c` of `, c:d` as another part and fails at the `:`.
-///
-/// This is an ambiguity in the language, not a mistake in the implementation — the same two
-/// commas collide in `mpl.pest` — so it is pinned rather than reported as a bug. Every other
-/// comma-carrying rule is safe because its list is closed by something: `group by a, b` ends
-/// at `using`, `bucket` at its `)`, and `in [a, b]` at its `]`.
-#[test]
-fn extend_swallows_the_comma_of_a_compute_query() {
-    let ambiguous = "(a:b | extend x = 1, c:d) | compute y using sum";
-    let SyntaxTree { root: _, errors } = Parser::new(ambiguous).parse();
-    assert!(
-        !errors.is_empty(),
-        "the ambiguity appears to have been resolved"
-    );
-
-    // The same shape with any other comma-carrying rule in the same position is fine.
-    for src in [
-        "(a:b | group by x, y using sum, c:d) | compute y using sum",
-        "(a:b | where t in [1, 2], c:d) | compute y using sum",
-        "(a:b | bucket by x using f(1.0, 2.0), c:d) | compute y using sum",
-    ] {
-        parse_clean(src);
     }
 }
 
