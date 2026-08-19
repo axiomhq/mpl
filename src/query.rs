@@ -1,5 +1,9 @@
 //! The query structures
-use std::{collections::HashMap, fmt::Display, num::TryFromIntError};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Display,
+    num::TryFromIntError,
+};
 
 #[cfg(feature = "clock")]
 use chrono::Utc;
@@ -10,7 +14,7 @@ use strumbra::SharedString;
 use crate::{
     enc_regex::EncodableRegex,
     linker::{AlignFunction, ComputeFunction, GroupFunction, MapFunction},
-    parser2,
+    parser2::{self, ParseParamError},
     tags::TagValue,
     time::{Resolution, ResolutionError},
     types::{BucketSpec, BucketType, Dataset, Metric, Parameterized},
@@ -569,6 +573,16 @@ pub enum ResolveError {
 /// The error returned from `ProvidedParams::parse`.
 #[derive(Debug, thiserror::Error)]
 pub enum ParseProvidedParamsError {
+    /// A provided value could not be parsed as its declared type
+    #[error("Failed to parse the value for ${param_name} as {expected_type}: {err}")]
+    ParseParam {
+        /// The name of the param
+        param_name: String,
+        /// The type the param was declared as
+        expected_type: ParamType,
+        /// Why the value could not be parsed
+        err: ParseParamError,
+    },
     /// Params provided more than once
     #[error("These params were provided more than once: {}", .0.join(", "))]
     ParamsProvidedMoreThanOnce(Vec<String>),
@@ -703,131 +717,120 @@ impl ProvidedParams {
     /// This will only look at params that start with `param__` and it'll use
     /// the parser definitions to extract the values.
     pub fn parse_and_validate(
-        _mpl_params: &Params,
-        _query_params: &[(String, String)],
+        mpl_params: &Params,
+        query_params: &[(String, String)],
     ) -> Result<(Self, Warnings), ParseProvidedParamsError> {
-        // const PREFIX: &str = "param__";
-        // const PARAM_COUNT_LIMIT: usize = 128;
+        const PREFIX: &str = "param__";
+        const PARAM_COUNT_LIMIT: usize = 128;
 
-        // let mut warnings = Warnings::new();
-        // let mut defined_more_than_once = HashSet::new();
-        // let mut provided_but_not_declared = HashSet::new();
-        // let mut seen = HashSet::new();
+        let mut warnings = Warnings::new();
+        let mut defined_more_than_once = HashSet::new();
+        let mut provided_but_not_declared = HashSet::new();
+        let mut seen = HashSet::new();
 
-        // let params = query_params
-        //     .iter()
-        //     .filter_map(|(name, value)| {
-        //         if !name.starts_with(PREFIX) {
-        //             return None;
-        //         }
-        //         let name = name.trim_start_matches(PREFIX);
-        //         if name.is_empty() {
-        //             return None;
-        //         }
+        let params = query_params
+            .iter()
+            .filter_map(|(name, value)| {
+                if !name.starts_with(PREFIX) {
+                    return None;
+                }
+                let name = name.trim_start_matches(PREFIX);
+                if name.is_empty() {
+                    return None;
+                }
 
-        //         Some((name, value))
-        //     })
-        //     .take(PARAM_COUNT_LIMIT + 1)
-        //     .collect::<Vec<(&str, &String)>>();
+                Some((name, value))
+            })
+            .take(PARAM_COUNT_LIMIT + 1)
+            .collect::<Vec<(&str, &String)>>();
 
-        // // we don't support unlimited params
-        // if params.len() > PARAM_COUNT_LIMIT {
-        //     return Err(ParseProvidedParamsError::TooManyParamsProvided(
-        //         PARAM_COUNT_LIMIT,
-        //     ));
-        // }
+        // we don't support unlimited params
+        if params.len() > PARAM_COUNT_LIMIT {
+            return Err(ParseProvidedParamsError::TooManyParamsProvided(
+                PARAM_COUNT_LIMIT,
+            ));
+        }
 
-        // let mut provided_params = Vec::new();
-        // for (name, value) in params {
-        //     if seen.contains(name) {
-        //         // uh oh, we've already seen this value
-        //         defined_more_than_once.insert(name);
-        //         continue;
-        //     }
-        //     seen.insert(name);
+        let mut provided_params = Vec::new();
+        for (name, value) in params {
+            if seen.contains(name) {
+                // uh oh, we've already seen this value
+                defined_more_than_once.insert(name);
+                continue;
+            }
+            seen.insert(name);
 
-        //     // is the param even declared?
-        //     let Some(mpl_param) = mpl_params.iter().find(|p| p.name == name) else {
-        //         provided_but_not_declared.insert(name);
-        //         continue;
-        //     };
+            // is the param even declared?
+            let Some(mpl_param) = mpl_params.iter().find(|p| p.name == name) else {
+                provided_but_not_declared.insert(name);
+                continue;
+            };
 
-        //     // parse mpl
-        //     let parsed = MPLParser::parse(Rule::param_value, value).map_err(|err| {
-        //         ParseProvidedParamsError::ParseParam {
-        //             param_name: name.to_string(),
-        //             expected_type: mpl_param.typ,
-        //             err: ParseParamError::Parse(ParseError::from(err)),
-        //         }
-        //     })?;
+            let value = parser2::parse_param_value(mpl_param, value).map_err(|err| {
+                ParseProvidedParamsError::ParseParam {
+                    param_name: name.to_string(),
+                    expected_type: mpl_param.typ,
+                    err,
+                }
+            })?;
 
-        //     // parse as correct type
-        //     let value = parser::parse_param_value(mpl_param, parsed).map_err(|err| {
-        //         ParseProvidedParamsError::ParseParam {
-        //             param_name: name.to_string(),
-        //             expected_type: mpl_param.typ,
-        //             err,
-        //         }
-        //     })?;
+            provided_params.push(ProvidedParam {
+                name: name.to_string(),
+                value,
+            });
+        }
 
-        //     provided_params.push(ProvidedParam {
-        //         name: name.to_string(),
-        //         value,
-        //     });
-        // }
+        if !provided_but_not_declared.is_empty() {
+            // sort for consistency
+            let mut items = provided_but_not_declared
+                .into_iter()
+                .map(|p| format!("${p}"))
+                .collect::<Vec<String>>();
+            items.sort();
 
-        // if !provided_but_not_declared.is_empty() {
-        //     // sort for consistency
-        //     let mut items = provided_but_not_declared
-        //         .into_iter()
-        //         .map(|p| format!("${p}"))
-        //         .collect::<Vec<String>>();
-        //     items.sort();
+            // add to warnings, no need to error
+            warnings.push(WarningReason::ParamNotDeclared(items));
+        }
 
-        //     // add to warnings, no need to error
-        //     warnings.push(WarningReason::ParamNotDeclared(items));
-        // }
+        if !defined_more_than_once.is_empty() {
+            // sort for consistency
+            let mut items = defined_more_than_once
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<String>>();
+            items.sort();
 
-        // if !defined_more_than_once.is_empty() {
-        //     // sort for consistency
-        //     let mut items = defined_more_than_once
-        //         .into_iter()
-        //         .map(String::from)
-        //         .collect::<Vec<String>>();
-        //     items.sort();
+            return Err(ParseProvidedParamsError::ParamsProvidedMoreThanOnce(items));
+        }
 
-        //     return Err(ParseProvidedParamsError::ParamsProvidedMoreThanOnce(items));
-        // }
+        let declared_param_names = mpl_params
+            .iter()
+            .filter_map(|p| {
+                // Skip optional params since they don't need to be provided.
+                if p.typ.is_optional() {
+                    None
+                } else {
+                    Some(p.name.as_str())
+                }
+            })
+            .collect::<HashSet<&str>>();
+        let declared_but_not_provided = declared_param_names
+            .difference(&seen)
+            .collect::<Vec<&&str>>();
+        if !declared_but_not_provided.is_empty() {
+            // sort for consistency
+            let mut items = declared_but_not_provided
+                .into_iter()
+                .map(|s| String::from(*s))
+                .collect::<Vec<String>>();
+            items.sort();
 
-        // let declared_param_names = mpl_params
-        //     .iter()
-        //     .filter_map(|p| {
-        //         // Skip optional params since they don't need to be provided.
-        //         if p.typ.is_optional() {
-        //             None
-        //         } else {
-        //             Some(p.name.as_str())
-        //         }
-        //     })
-        //     .collect::<HashSet<&str>>();
-        // let declared_but_not_provided = declared_param_names
-        //     .difference(&seen)
-        //     .collect::<Vec<&&str>>();
-        // if !declared_but_not_provided.is_empty() {
-        //     // sort for consistency
-        //     let mut items = declared_but_not_provided
-        //         .into_iter()
-        //         .map(|s| String::from(*s))
-        //         .collect::<Vec<String>>();
-        //     items.sort();
+            return Err(ParseProvidedParamsError::ParamsDeclaredButNotProvided(
+                items,
+            ));
+        }
 
-        //     return Err(ParseProvidedParamsError::ParamsDeclaredButNotProvided(
-        //         items,
-        //     ));
-        // }
-
-        // Ok((ProvidedParams::new(provided_params), warnings))
-        todo!()
+        Ok((ProvidedParams::new(provided_params), warnings))
     }
 
     /// Return a ref to the inner value.

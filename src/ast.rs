@@ -899,6 +899,70 @@ impl Parser {
         &self.parts
     }
 }
+
+type ParamResult<T> = std::result::Result<T, Vec<AstError>>;
+
+pub(crate) fn parse_ident_value(input: &str) -> ParamResult<Ident> {
+    lower_value(
+        syntax_tree::Parser::new(input).parse_ident_value(),
+        Parser::ident,
+    )
+}
+
+pub(crate) fn parse_duration_value(input: &str) -> ParamResult<u64> {
+    lower_value(
+        syntax_tree::Parser::new(input).parse_duration_value(),
+        |p, node| p.duration_const(&node),
+    )
+}
+
+pub(crate) fn parse_regex_value(input: &str) -> ParamResult<Regex> {
+    lower_value(
+        syntax_tree::Parser::new(input).parse_regex_value(),
+        |p, node| p.regex(&node),
+    )
+}
+
+pub(crate) fn parse_const_value(input: &str) -> ParamResult<TagValue> {
+    lower_value(
+        syntax_tree::Parser::new(input).parse_const_value(),
+        |p, node| p.constant(&node),
+    )
+}
+
+/// Lowers the single node a value tree carries, reporting the errors both stages produced.
+fn lower_value<T>(
+    SyntaxTree { root, errors }: SyntaxTree,
+    lower: impl FnOnce(&mut Parser, SyntaxNode) -> Result<T>,
+) -> ParamResult<T> {
+    let mut errors: Vec<_> = errors.into_iter().map(AstError::InvalidSyntax).collect();
+    let mut children = root.children();
+    let Some(node) = children.n() else {
+        errors.push(AstError::MissingToken {
+            expected: SyntaxKind::EXPR,
+            span: root.span(),
+        });
+        return Err(errors);
+    };
+    let mut parser = Parser {
+        root,
+        errors,
+        warnings: Vec::new(),
+        parts: Vec::new(),
+    };
+    parser.assert_end(children);
+    match lower(&mut parser, node) {
+        Ok(value) if parser.errors.is_empty() => Ok(value),
+        _ => {
+            if parser.errors.is_empty() {
+                let span = parser.root.span();
+                parser.errors.push(AstError::ExpectedConst { span });
+            }
+            Err(parser.errors)
+        }
+    }
+}
+
 impl Parser {
     fn n<T: Nontrivial>(
         &mut self,
@@ -1497,14 +1561,10 @@ impl Parser {
         Ok(Rule::Map(f))
     }
 
-    fn duration(&mut self, node: SyntaxNode) -> Result<Duration> {
-        if node.kind() == SyntaxKind::VARIABLE {
-            let v = self.variable(node)?;
-            return Ok(Duration::Var(v));
-        }
-        self.assert_type(&node, SyntaxKind::DURATION)?;
+    fn duration_const(&mut self, node: &SyntaxNode) -> Result<u64> {
+        self.assert_type(node, SyntaxKind::DURATION)?;
         let mut children = node.children();
-        let n = self.n(&mut children, &node, SyntaxKind::INTEGER)?;
+        let n = self.n(&mut children, node, SyntaxKind::INTEGER)?;
         let TagValue::Int(i) = self.integer_const(&n)? else {
             return Err(Error("expected integer (this should be unreachable!)"));
         };
@@ -1515,7 +1575,7 @@ impl Parser {
                 .push(AstError::NegativeDuration { span: n.span() });
             0
         };
-        let n = self.n(&mut children, &node, SyntaxKind::TIME_UNIT)?;
+        let n = self.n(&mut children, node, SyntaxKind::TIME_UNIT)?;
         let unit = self.time_unit(&n)?;
         let duration = match unit.as_str() {
             "ms" if i < 1000 => {
@@ -1547,7 +1607,15 @@ impl Parser {
                 return Err(Error("invalid time unit"));
             }
         };
-        Ok(Duration::Const(duration))
+        Ok(duration)
+    }
+
+    fn duration(&mut self, node: SyntaxNode) -> Result<Duration> {
+        if node.kind() == SyntaxKind::VARIABLE {
+            let v = self.variable(node)?;
+            return Ok(Duration::Var(v));
+        }
+        self.duration_const(&node).map(Duration::Const)
     }
 
     fn tags(&mut self, node: &SyntaxNode) -> Result<Vec<Ident>> {

@@ -538,6 +538,34 @@ impl Parser<'_> {
         self.finish()
     }
 
+    #[must_use]
+    pub(crate) fn parse_ident_value(self) -> SyntaxTree {
+        self.single_value(Self::ident)
+    }
+
+    #[must_use]
+    pub(crate) fn parse_duration_value(self) -> SyntaxTree {
+        self.single_value(Self::duration)
+    }
+
+    #[must_use]
+    pub(crate) fn parse_regex_value(self) -> SyntaxTree {
+        self.single_value(Self::regex)
+    }
+
+    #[must_use]
+    pub(crate) fn parse_const_value(self) -> SyntaxTree {
+        self.single_value(Self::constant)
+    }
+
+    fn single_value(mut self, val: fn(&mut Self)) -> SyntaxTree {
+        self.node(ROOT, |s| {
+            val(s);
+            s.garbage_tail();
+        });
+        self.finish()
+    }
+
     fn query(&mut self) {
         self.rnode(QUERY, |s| {
             let token = s.peek();

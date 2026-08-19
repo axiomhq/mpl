@@ -132,35 +132,35 @@ fn provided_params_parse_array() {
     }));
 }
 
-// #[test]
-// fn provided_params_array_rejects_scalar_value() {
-//     let mpl_params = vec![ParamDeclaration {
-//         span: SourceSpan::from(0..0),
-//         name: "hosts".to_string(),
-//         typ: ParamType::Terminal(TerminalParamType::Tag(TagType::Array)),
-//     }];
+#[test]
+fn provided_params_array_rejects_scalar_value() {
+    let mpl_params = vec![ParamDeclaration {
+        span: SourceSpan::from(0..0),
+        name: "hosts".to_string(),
+        typ: ParamType::Terminal(TerminalParamType::Tag(TagType::Array)),
+    }];
 
-//     let query_params = vec![("param__hosts".to_string(), "42".to_string())];
+    let query_params = vec![("param__hosts".to_string(), "42".to_string())];
 
-//     match ProvidedParams::parse_and_validate(&mpl_params, &query_params) {
-//         Err(ParseProvidedParamsError::ParseParam {
-//             param_name,
-//             expected_type,
-//             err,
-//         }) => {
-//             assert_eq!("hosts", param_name);
-//             assert_eq!(
-//                 ParamType::Terminal(TerminalParamType::Tag(TagType::Array)),
-//                 expected_type
-//             );
-//             assert!(
-//                 err.to_string().contains("declared as type array"),
-//                 "expected an array type mismatch, got: {err}"
-//             );
-//         }
-//         res => panic!("expected parse param error, got {res:?}"),
-//     }
-// }
+    match ProvidedParams::parse_and_validate(&mpl_params, &query_params) {
+        Err(ParseProvidedParamsError::ParseParam {
+            param_name,
+            expected_type,
+            err,
+        }) => {
+            assert_eq!("hosts", param_name);
+            assert_eq!(
+                ParamType::Terminal(TerminalParamType::Tag(TagType::Array)),
+                expected_type
+            );
+            assert!(
+                err.to_string().contains("declared as type array"),
+                "expected an array type mismatch, got: {err}"
+            );
+        }
+        res => panic!("expected parse param error, got {res:?}"),
+    }
+}
 
 // #[test]
 // fn provided_params_array_rejects_interpolated_element() {
@@ -171,9 +171,9 @@ fn provided_params_parse_array() {
 //         name: "hosts".to_string(),
 //         typ: ParamType::Terminal(TerminalParamType::Tag(TagType::Array)),
 //     }];
-
+//
 //     let query_params = vec![("param__hosts".to_string(), "[\"${ x }\"]".to_string())];
-
+//
 //     match ProvidedParams::parse_and_validate(&mpl_params, &query_params) {
 //         Err(ParseProvidedParamsError::ParseParam { err, .. }) => {
 //             assert!(
@@ -265,8 +265,8 @@ fn provided_params_duplicates() {
 
     let query_params = [
         ("lol", "whatever, this should be ignored"),
-        ("param__dataset", "my-metrics"),
-        ("param__dataset", "my-metrics-2"),
+        ("param__dataset", "mymetrics"),
+        ("param__dataset", "`my-metrics-2`"),
         ("param____interval", "1m"),
         ("param____interval", "5m"),
     ]
@@ -330,44 +330,44 @@ fn provided_params_not_declared() {
     );
 }
 
-// #[test]
-// fn provided_params_parse_failure() {
-//     let mpl_params = vec![
-//         ParamDeclaration {
-//             span: SourceSpan::from(0..0),
-//             name: "dataset".to_string(),
-//             typ: ParamType::Terminal(TerminalParamType::Dataset),
-//         },
-//         ParamDeclaration {
-//             span: SourceSpan::from(0..0),
-//             name: "duration".to_string(),
-//             typ: ParamType::Terminal(TerminalParamType::Duration),
-//         },
-//     ];
+#[test]
+fn provided_params_parse_failure() {
+    let mpl_params = vec![
+        ParamDeclaration {
+            span: SourceSpan::from(0..0),
+            name: "dataset".to_string(),
+            typ: ParamType::Terminal(TerminalParamType::Dataset),
+        },
+        ParamDeclaration {
+            span: SourceSpan::from(0..0),
+            name: "duration".to_string(),
+            typ: ParamType::Terminal(TerminalParamType::Duration),
+        },
+    ];
 
-//     let query_params = [
-//         ("param__dataset", "`my-dataset`"),
-//         ("param__duration", "invalid-duration"),
-//     ]
-//     .iter()
-//     .map(|(k, v)| (k.to_string(), v.to_string()))
-//     .collect::<Vec<(String, String)>>();
+    let query_params = [
+        ("param__dataset", "`my-dataset`"),
+        ("param__duration", "invalid-duration"),
+    ]
+    .iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect::<Vec<(String, String)>>();
 
-//     match ProvidedParams::parse_and_validate(&mpl_params, &query_params) {
-//         Err(ParseProvidedParamsError::ParseParam {
-//             param_name,
-//             expected_type,
-//             err: _,
-//         }) => {
-//             assert_eq!("duration", param_name);
-//             assert_eq!(
-//                 ParamType::Terminal(TerminalParamType::Duration),
-//                 expected_type
-//             );
-//         }
-//         res => panic!("expected parse param error, got {res:?}"),
-//     }
-// }
+    match ProvidedParams::parse_and_validate(&mpl_params, &query_params) {
+        Err(ParseProvidedParamsError::ParseParam {
+            param_name,
+            expected_type,
+            err: _,
+        }) => {
+            assert_eq!("duration", param_name);
+            assert_eq!(
+                ParamType::Terminal(TerminalParamType::Duration),
+                expected_type
+            );
+        }
+        res => panic!("expected parse param error, got {res:?}"),
+    }
+}
 
 #[test]
 fn too_many_provided_params() {

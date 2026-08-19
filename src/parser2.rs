@@ -12,8 +12,8 @@ use crate::{
     linker::{Function, FunctionId, FunctionTrait, Module, ModuleId},
     query::{
         self, Aggregate, Align, As, BucketBy, Cmp, DirectiveValue, Directives, Filter,
-        FilterOrIfDef, GroupBy, MetricId, ParamDeclaration, ParamType, Params, RelativeTime,
-        Source, TagExtend, TagType, TerminalParamType, TimeUnit,
+        FilterOrIfDef, GroupBy, MetricId, ParamDeclaration, ParamType, ParamValue, Params,
+        RelativeTime, Source, TagExtend, TagType, TerminalParamType, TimeUnit,
     },
     tags::TagValue,
     types::{BucketSpec, BucketType, ConversionMethod, Dataset, Metric, Parameterized},
@@ -22,6 +22,58 @@ use crate::{
 use super::ast::Ident;
 
 pub(crate) const SYSTEM_PARAM_PREFIX: &str = "__";
+
+/// Error for param parsing.
+#[derive(Debug, thiserror::Error)]
+pub enum ParseParamError {
+    /// The value is not a valid literal of the declared type.
+    #[error("The value is not a valid literal of the declared type: {0:?}")]
+    Invalid(Vec<AstError>),
+    /// The value is a literal of the wrong type.
+    #[error("Param is declared as type {declared}, but the provided value is of type {found}")]
+    TypeMismatch {
+        /// The declared type of the param.
+        declared: ParamType,
+        /// The type the provided value parsed as.
+        found: TerminalParamType,
+    },
+    /// A param of type null carries no value.
+    #[error("None Type Params are not supported")]
+    NoneParam,
+}
+impl From<Vec<AstError>> for ParseParamError {
+    fn from(errors: Vec<AstError>) -> Self {
+        ParseParamError::Invalid(errors)
+    }
+}
+
+pub(crate) fn parse_param_value(
+    param: &ParamDeclaration,
+    src: &str,
+) -> Result<ParamValue, ParseParamError> {
+    match param.typ.typ() {
+        TerminalParamType::Dataset => Ok(ParamValue::Dataset(Dataset::new(
+            ast::parse_ident_value(src)?.into_string(),
+        ))),
+        TerminalParamType::Duration => Ok(ParamValue::Duration(RelativeTime {
+            value: ast::parse_duration_value(src)?,
+            unit: TimeUnit::Second,
+        })),
+        TerminalParamType::Regex => Ok(ParamValue::Regex(ast::parse_regex_value(src)?.into())),
+        TerminalParamType::Tag(TagType::Null) => Err(ParseParamError::NoneParam),
+        TerminalParamType::Tag(tag) => match (tag, ast::parse_const_value(src)?) {
+            (TagType::String, TagValue::String(v)) => Ok(ParamValue::String(v.to_string())),
+            (TagType::Int, TagValue::Int(v)) => Ok(ParamValue::Int(v)),
+            (TagType::Float, TagValue::Float(v)) => Ok(ParamValue::Float(v)),
+            (TagType::Bool, TagValue::Bool(v)) => Ok(ParamValue::Bool(v)),
+            (TagType::Array, TagValue::Array(v)) => Ok(ParamValue::Array(v)),
+            (_, value) => Err(ParseParamError::TypeMismatch {
+                declared: param.typ,
+                found: TerminalParamType::Tag(value.tpe()),
+            }),
+        },
+    }
+}
 
 type Result<T, E = ParseError> = std::result::Result<T, E>;
 
