@@ -49,6 +49,16 @@ pub enum ParseError {
     /// No query was provided
     #[error("No query was provided")]
     MissingQuery,
+    /// A host-registered system param without the reserved prefix
+    #[error("The system param ${param} is missing the system prefix")]
+    #[diagnostic(
+        code(mpl_lang::system_param_missing_prefix),
+        help("The system param is missing the `{SYSTEM_PARAM_PREFIX}` prefix")
+    )]
+    SystemParamMissingPrefix {
+        /// The param
+        param: String,
+    },
     /// `in` used with a non-array right-hand side
     #[error("`in` requires an array on the right-hand side")]
     #[diagnostic(
@@ -310,14 +320,7 @@ impl Parser {
             directives.insert(d.name.to_string(), v);
         }
 
-        let mut params = Vec::new();
-        for (name, typ) in system_params {
-            params.push(ParamDeclaration {
-                span: SourceSpan::new(0.into(), 0),
-                name,
-                typ,
-            });
-        }
+        let mut params = system_param_declarations(system_params, &mut errors);
         while parts.last().is_some_and(Part::is_param)
             && let Some(Part::Param(p)) = parts.pop()
         {
@@ -1076,6 +1079,31 @@ impl QueryParser {
         };
         Ok(r)
     }
+}
+
+/// The declarations a host's registrations stand for.
+///
+/// The reserved prefix is what separates them from the names a query may declare, so a
+/// registration that omits it is reported to the host rather than quietly becoming an
+/// ordinary param.
+fn system_param_declarations<H: BuildHasher>(
+    system_params: HashMap<String, ParamType, H>,
+    errors: &mut Vec<ParseError>,
+) -> Vec<ParamDeclaration> {
+    system_params
+        .into_iter()
+        .filter_map(|(name, typ)| {
+            if !name.starts_with(SYSTEM_PARAM_PREFIX) {
+                errors.push(ParseError::SystemParamMissingPrefix { param: name });
+                return None;
+            }
+            Some(ParamDeclaration {
+                span: SourceSpan::new(0.into(), 0),
+                name,
+                typ,
+            })
+        })
+        .collect()
 }
 
 fn call_to_function(f: &FunctionCall) -> Result<Function> {

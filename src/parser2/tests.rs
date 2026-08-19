@@ -216,3 +216,34 @@ fn in_requires_an_array(src: &str) {
 fn in_accepts_an_array(src: &str) {
     lower(src).unwrap_or_else(|errors| panic!("`{src}` should lower, got: {errors:?}"));
 }
+
+/// System params are injected by the host rather than written in the query, and the `__`
+/// prefix is what keeps them from colliding with names a query may declare. A registration
+/// that omits it is a host mistake, and reporting it is what lets the host find it.
+#[test]
+fn a_system_param_must_carry_the_reserved_prefix() {
+    let mut params = HashMap::new();
+    params.insert(
+        "interval".to_string(),
+        ParamType::Terminal(TerminalParamType::Duration),
+    );
+    let errors =
+        lower_with("ds:m", params).expect_err("a system param without the prefix is rejected");
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ParseError::SystemParamMissingPrefix { param } if param == "interval"
+        )),
+        "expected a missing-prefix error naming `interval`, got: {errors:?}"
+    );
+}
+
+#[test]
+fn a_prefixed_system_param_is_accepted() {
+    let mut params = HashMap::new();
+    params.insert(
+        "__interval".to_string(),
+        ParamType::Terminal(TerminalParamType::Duration),
+    );
+    lower_with("ds:m", params).unwrap_or_else(|e| panic!("a prefixed system param lowers: {e:?}"));
+}
