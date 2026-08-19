@@ -29,9 +29,6 @@ fn report(file_name: &str, content: &str, err: CompileError) -> String {
 fn check<T>(label: &str, file_name: &str, content: &str, r: Result<T, CompileError>) {
     match r {
         Ok(_) => println!("  {label}: parsed successfully"),
-        Err(CompileError::Parse(ParseError::NotSupported { span, rule })) => {
-            println!("  {label}: parsed, unsupported by the backend: {span:?}, {rule:?}");
-        }
         Err(CompileError::Parse(ParseError::NotImplemented(feature))) => {
             println!("  {label}: parsed, not yet implemented: {feature}");
         }
@@ -91,9 +88,6 @@ fn parse_unimplemented_examples() {
             let content = fs::read_to_string(&path).unwrap();
             match mpl_lang::compile(&content, HashMap::new()) {
                 Ok(_) => panic!("{file_name} compiled but is expected to fail"),
-                Err(CompileError::Parse(ParseError::NotSupported { span, rule })) => {
-                    panic!("{file_name} parsed but is unsupported: {span:?}, {rule:?}")
-                }
                 Err(e) => println!("Failing as expected:\n{}", report(file_name, &content, e)),
             }
         });
