@@ -468,8 +468,8 @@ impl<'input> Parser<'input> {
         self.builder.start_node(kind.into());
         self.eat_trivia();
         f(self);
-        self.eat_trivia();
         self.builder.finish_node();
+        self.eat_trivia();
     }
     fn rnode(&mut self, kind: SyntaxKind, f: impl FnOnce(&mut Self)) {
         self.depth += 1;

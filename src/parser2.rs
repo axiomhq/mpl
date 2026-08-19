@@ -906,7 +906,7 @@ impl QueryParser {
             .collect()
     }
 
-    fn expr(&self, SyntaxExpr { node, expr }: SyntaxExpr) -> Result<query::Expr> {
+    fn expr(&self, SyntaxExpr { node: _, expr }: SyntaxExpr) -> Result<query::Expr> {
         match expr {
             ast::Expr::Ident(ident) => Ok(query::Expr::Tag(ident.to_string())),
             ast::Expr::String(string_parts) => Ok(query::Expr::String(
@@ -919,7 +919,7 @@ impl QueryParser {
                     .collect::<Result<Vec<query::StringFragment>>>()?,
             )),
             ast::Expr::Var(variable) => Ok(query::Expr::Param {
-                span: node.span(),
+                span: variable.span(),
                 param: self.get_param_decl(&variable)?,
             }),
             ast::Expr::Const(tag_value) => Ok(query::Expr::Const(tag_value)),

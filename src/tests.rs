@@ -386,8 +386,8 @@ dataset:metric
             assert_eq!(TerminalParamType::Dataset, actual);
             assert_eq!(55, use_span.offset());
             assert_eq!(6, use_span.len());
-            assert_eq!(7, declaration_span.offset());
-            assert_eq!(6, declaration_span.len());
+            assert_eq!(1, declaration_span.offset());
+            assert_eq!(24, declaration_span.len());
         }
         res => panic!("Expected mismatched param type error, got {res:?}"),
     }
