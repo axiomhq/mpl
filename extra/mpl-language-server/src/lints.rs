@@ -28,9 +28,6 @@ const LINT_RULES: &[LintRule] = &[
         check: lint_unnecessary_escape,
     },
 ];
-// Note: lowercase `duration` is now reported by the parser itself as a
-// `WarningReason::OldDuration` and surfaced via `Warning::to_diagnostic_item`.
-// See `diagnostics.rs`.
 
 /// The word that opens a filter rule sits directly under the `FILTER` node,
 /// while a tag of the same name is wrapped in an `IDENT` first. Requiring that

@@ -58,12 +58,8 @@ impl ParamType {
         }
     }
 
-    /// The type a source-level spelling names. `duration` is a legacy lowercase
-    /// alias that the parser accepts with an `OldDuration` warning.
+    /// The type a source-level spelling names.
     pub(crate) fn from_spelling(s: &str) -> Option<Self> {
-        if s == "duration" {
-            return Some(Self::Duration);
-        }
         PARAM_TYPES.into_iter().find(|t| t.spelling() == s)
     }
 

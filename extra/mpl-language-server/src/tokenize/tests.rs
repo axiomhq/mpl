@@ -524,7 +524,7 @@ fn full_query_sequence() {
 
 #[test]
 fn param_keyword_highlighted() {
-    let query = "param $dur: duration;\nds:metric";
+    let query = "param $dur: Duration;\nds:metric";
     let tokens = collect_tokens(query);
     let kw = tokens
         .iter()
@@ -535,18 +535,18 @@ fn param_keyword_highlighted() {
 
 #[test]
 fn param_type_duration_highlighted() {
-    let query = "param $dur: duration;\nds:metric";
+    let query = "param $dur: Duration;\nds:metric";
     let tokens = collect_tokens(query);
     let typ = tokens
         .iter()
-        .find(|t| &query[t.span.from..t.span.to] == "duration")
-        .expect("should have duration type token");
+        .find(|t| &query[t.span.from..t.span.to] == "Duration")
+        .expect("should have Duration type token");
     assert_eq!(typ.kind, TokenType::Type);
 }
 
 #[test]
 fn param_ident_highlighted_as_variable() {
-    let query = "param $dur: duration;\nds:metric";
+    let query = "param $dur: Duration;\nds:metric";
     let tokens = collect_tokens(query);
     let var = tokens
         .iter()
@@ -645,7 +645,7 @@ fn optional_type_all_inner_variants_highlighted() {
 
 #[test]
 fn param_multiple_declarations() {
-    let query = "param $ds: Dataset;\nparam $d: duration;\nds:metric";
+    let query = "param $ds: Dataset;\nparam $d: Duration;\nds:metric";
     let tokens = collect_tokens(query);
     let param_keywords: Vec<_> = tokens
         .iter()

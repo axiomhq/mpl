@@ -595,7 +595,7 @@ fn parse_param_decl_all_valid_optional_inner_types_recognised() {
 
 #[test]
 fn parse_param_decl_invalid_optional_inner_types_are_dropped() {
-    for inner in ["Dataset", "Duration", "duration"] {
+    for inner in ["Dataset", "Duration"] {
         let query = format!("param $x: Option<{inner}>;\nds:metric");
         let params = extract_declared_params(&query);
         assert!(
@@ -1191,16 +1191,6 @@ fn unanchored_regexp() {
 
 #[test]
 fn extract_params_single() {
-    // `duration` is the legacy lowercase alias; scanner must accept it.
-    let params = extract_declared_params("param $interval: duration;\nds:metric");
-    assert_eq!(params.len(), 1);
-    assert_eq!(params[0].label, "$interval");
-    assert_eq!(params[0].typ, ParamType::Duration);
-}
-
-#[test]
-fn extract_params_single_uppercase() {
-    // `Duration` is the canonical PascalCase form.
     let params = extract_declared_params("param $interval: Duration;\nds:metric");
     assert_eq!(params.len(), 1);
     assert_eq!(params[0].label, "$interval");
@@ -1257,16 +1247,6 @@ ds:metric";
             ParamType::Array,
         ]
     );
-}
-
-#[test]
-fn extract_params_legacy_lowercase_duration() {
-    // The grammar accepts `duration` (lowercase) as a legacy alias alongside
-    // canonical `Duration`. Both must round-trip through the scanner.
-    let text = "param $a: duration;\nparam $b: Duration;\nds:metric";
-    let params = extract_declared_params(text);
-    assert_eq!(params.len(), 2);
-    assert!(params.iter().all(|p| p.typ == ParamType::Duration));
 }
 
 #[test]
@@ -1472,9 +1452,9 @@ fn completions_at(input: &str) -> Option<CompletionResult> {
 #[test_case("param $ds: Dataset;\n$#"                    => Some("params")           ; "dollar at dataset position")]
 #[test_case("param $ds: Dataset;\nparam $other: string;\n$d#" => Some("params")      ; "partial dollar at dataset position")]
 #[test_case("param $s: string;\nds:$#"                   => Some("metric")           ; "dollar at metric position")]
-#[test_case("param $w: duration;\nds:metric | align to #" => Some("params")          ; "align to with duration param")]
+#[test_case("param $w: Duration;\nds:metric | align to #" => Some("params")          ; "align to with duration param")]
 #[test_case("ds:metric | bucket using #"                => Some("bucket_functions") ; "bucket using suggests functions")]
-#[test_case("param $w: duration;\nds:metric | bucket to #" => Some("params")         ; "bucket to with duration param")]
+#[test_case("param $w: Duration;\nds:metric | bucket to #" => Some("params")         ; "bucket to with duration param")]
 #[test_case("param $s: string;\nds:metric | align to #"  => None                     ; "align to no duration params")]
 #[test_case("ds:metric | filter tag == #"                => Some("tag")              ; "filter value no params offers tags")]
 #[test_case("ds:metric | where tag == #"                 => Some("tag")              ; "where value no params offers tags")]
@@ -1730,11 +1710,11 @@ fn test_completion_source_dataset(input: &str, expected: &str) {
 #[test_case("param $r: Regex;\nparam $i: int;\nds:metric | filter tag < #", &["$i"]          ; "lt includes int")]
 #[test_case("param $r: Regex;\nparam $f: float;\nds:metric | filter tag >= #", &["$f"]       ; "gte includes float")]
 #[test_case("param $d: Dataset;\nparam $s: string;\nds:metric | filter tag == #", &["$s"] ; "filter value includes string")]
-#[test_case("param $dur: duration;\nparam $b: bool;\nds:metric | filter tag == #", &["$b"]   ; "filter value includes bool")]
+#[test_case("param $dur: Duration;\nparam $b: bool;\nds:metric | filter tag == #", &["$b"]   ; "filter value includes bool")]
 #[test_case("param $foo: string;\nparam $bar: int;\nds:metric | filter tag == $fo#", &["$foo"] ; "partial param filtered")]
-#[test_case("param $w: duration;\nds:metric | align to #", &["$w"]                           ; "align to duration")]
-#[test_case("param $w: duration;\nds:metric | bucket to #", &["$w"]                          ; "bucket to duration")]
-#[test_case("param $s: string;\nparam $w: duration;\nds:metric | align to #", &["$w"]        ; "align to includes duration")]
+#[test_case("param $w: Duration;\nds:metric | align to #", &["$w"]                           ; "align to duration")]
+#[test_case("param $w: Duration;\nds:metric | bucket to #", &["$w"]                          ; "bucket to duration")]
+#[test_case("param $s: string;\nparam $w: Duration;\nds:metric | align to #", &["$w"]        ; "align to includes duration")]
 #[test_case("param $ds: Dataset;\n$#", &["$ds"]                                              ; "source dataset param")]
 #[test_case("param $ds: Dataset;\nparam $other: string;\n$d#", &["$ds"]                      ; "source dataset param partial")]
 #[test_case("param $s: string;\nparam $d: Dataset;\n$#", &["$d"]                             ; "source dataset includes dataset")]
@@ -1774,9 +1754,9 @@ fn test_completion_params_contain(input: &str, expected: &[&str]) {
 #[test_case("param $r: Regex;\nparam $i: int;\nds:metric | filter tag < #",   &["$r"]  ; "lt excludes regex")]
 #[test_case("param $r: Regex;\nparam $f: float;\nds:metric | where tag >= #", &["$r"]  ; "gte excludes regex")]
 #[test_case("param $d: Dataset;\nparam $s: string;\nds:metric | where tag == #", &["$d"] ; "filter excludes dataset")]
-#[test_case("param $dur: duration;\nparam $b: bool;\nds:metric | filter tag == #", &["$dur"] ; "filter excludes duration")]
+#[test_case("param $dur: Duration;\nparam $b: bool;\nds:metric | filter tag == #", &["$dur"] ; "filter excludes duration")]
 #[test_case("param $foo: string;\nparam $bar: int;\nds:metric | filter tag == $fo#", &["$bar"] ; "partial param excludes non-matching")]
-#[test_case("param $s: string;\nparam $w: duration;\nds:metric | align to #", &["$s"]   ; "align excludes non-duration")]
+#[test_case("param $s: string;\nparam $w: Duration;\nds:metric | align to #", &["$s"]   ; "align excludes non-duration")]
 #[test_case("param $s: string;\nparam $d: Dataset;\n$#", &["$s"]                        ; "source excludes non-dataset")]
 #[test_case("param $ds: Dataset;\nparam $other: string;\n$d#", &["$other"]               ; "source partial excludes non-matching")]
 // ── ifdef arg excludes non-optional ─────────────────────────────
@@ -2207,11 +2187,6 @@ fn param_type_spellings_round_trip() {
             typ.spelling()
         );
     }
-    // The legacy lowercase alias resolves to the canonical type.
-    assert_eq!(
-        ParamType::from_spelling("duration"),
-        Some(ParamType::Duration)
-    );
     assert_eq!(ParamType::from_spelling("Nonsense"), None);
 }
 

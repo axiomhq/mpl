@@ -182,18 +182,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_lowercase_duration_accepted() {
-        // Source-level `duration` is a legacy spelling; the system_params
-        // API accepts it for symmetry, mapping to TerminalParamType::Duration.
-        let specs = [spec("__t", "duration", false)];
-        let map = to_compile_params(&specs);
-        assert!(matches!(
-            map["__t"],
-            ParamType::Terminal(TerminalParamType::Duration)
-        ));
-    }
-
-    #[test]
     fn completion_items_normalise_dollar_prefix() {
         // Some hosts will pass names with `$`, others without. Completion
         // labels must always carry the prefix for the autocomplete UI.
@@ -229,7 +217,6 @@ mod tests {
             spec("__e", "int", false),
             spec("__f", "float", false),
             spec("__g", "bool", false),
-            spec("__h", "duration", false),
         ];
         let items = to_completion_items(&specs);
         assert_eq!(
@@ -246,10 +233,5 @@ mod tests {
         assert_eq!(by_label["$__e"].typ, CompletionParamType::Int);
         assert_eq!(by_label["$__f"].typ, CompletionParamType::Float);
         assert_eq!(by_label["$__g"].typ, CompletionParamType::Bool);
-        assert_eq!(
-            by_label["$__h"].typ,
-            CompletionParamType::Duration,
-            "legacy lowercase `duration` must map to Duration on the completion side too"
-        );
     }
 }
