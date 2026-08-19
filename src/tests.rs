@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use miette::NarratableReportHandler;
 
 use crate::{
-    CompileError, ParseError, TypeError,
+    CompileError, TypeError, parser2,
     query::{Cmp, DirectiveValue, Expr, Filter, TagType, TerminalParamType},
 };
 
@@ -306,24 +306,28 @@ param $dataset: Duration;
 $dataset:metric
 ";
 
-    match super::compile(s, HashMap::new()) {
-        Err(CompileError::Parse(ParseError::ParamDefinedMultipleTimes { span: _, param })) => {
-            assert_eq!("dataset", param);
-        }
-        res => panic!("Expected param defined multiple times error, got {res:?}"),
-    }
+    let res = super::compile(s, HashMap::new());
+    let Err(CompileError::ParserV2(errors)) = &res else {
+        panic!("Expected param declared twice error, got {res:?}")
+    };
+    let [parser2::ParseError::ParamDeclaredTwice { name, .. }] = errors.as_slice() else {
+        panic!("Expected param declared twice error, got {errors:?}")
+    };
+    assert_eq!("dataset", name);
 }
 
 #[test]
 fn parse_params_undefined() {
     let s = "$dataset:metric";
 
-    match super::compile(s, HashMap::new()) {
-        Err(CompileError::Parse(ParseError::UndefinedParam { span: _, param })) => {
-            assert_eq!("dataset", param);
-        }
-        res => panic!("Expected undefined param error, got {res:?}"),
-    }
+    let res = super::compile(s, HashMap::new());
+    let Err(CompileError::ParserV2(errors)) = &res else {
+        panic!("Expected undefined variable error, got {res:?}")
+    };
+    let [parser2::ParseError::UndefinedVariable { name, .. }] = errors.as_slice() else {
+        panic!("Expected undefined variable error, got {errors:?}")
+    };
+    assert_eq!("dataset", name);
 }
 
 #[test]
@@ -491,12 +495,15 @@ fn in_non_array_param_requires_array_error() {
     let s = "param $s: string;\nds:m | where t in $s";
     let err =
         super::compile(s, HashMap::new()).expect_err("non-array param for `in` must not compile");
+    let CompileError::ParserV2(errors) = &err else {
+        panic!("expected an in-requires-array error, got: {err:?}")
+    };
     assert!(
         matches!(
-            &err,
-            CompileError::Parse(ParseError::InRequiresArray { .. })
+            errors.as_slice(),
+            [parser2::ParseError::InRequiresArray { .. }]
         ),
-        "expected an in-requires-array error, got: {err:?}"
+        "expected an in-requires-array error, got: {errors:?}"
     );
 }
 
