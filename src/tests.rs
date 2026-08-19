@@ -19,7 +19,7 @@ fn render_diagnostic(err: CompileError, src: &str) -> String {
 #[test]
 fn parse_align_without_time() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_total[1h..]
+`dev.metrics`:http_requests_total //depricated for now [1h..]
 | where path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align using sum
@@ -49,7 +49,7 @@ fn align_with_time_but_without_to_reports_missing_to() {
 #[test]
 fn parse_bucket_without_time() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_duration[1h..]
+`dev.metrics`:http_requests_duration //depricated for now [1h..]
 | where path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | bucket by method, path, code using histogram(max)
@@ -61,7 +61,7 @@ fn parse_bucket_without_time() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn parse_group_by() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_total[1h..]
+`dev.metrics`:http_requests_total //depricated for now [1h..]
 | where path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -74,7 +74,7 @@ fn parse_group_by() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn parse_group_ts() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_total[1747077736092..]
+`dev.metrics`:http_requests_total //depricated for now [1747077736092..]
 | filter path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -87,7 +87,7 @@ fn parse_group_ts() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn parse_group_rfc() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_total[2025-03-01T13:00:00Z..+1h]
+`dev.metrics`:http_requests_total //depricated for now [2025-03-01T13:00:00Z..+1h]
 | filter path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -100,7 +100,7 @@ fn parse_group_rfc() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn parse_group_rate() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_total[2025-03-01T13:00:00Z..+1h]
+`dev.metrics`:http_requests_total //depricated for now [2025-03-01T13:00:00Z..+1h]
 | filter path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -113,7 +113,7 @@ fn parse_group_rate() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn parse_re_escape() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_total[2025-03-01T13:00:00Z..+1h]
+`dev.metrics`:http_requests_total //depricated for now [2025-03-01T13:00:00Z..+1h]
 | filter path == #/\.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -423,7 +423,7 @@ dataset:metric
 #[test]
 fn group_by_two() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_total[1747077736092..]
+`dev.metrics`:http_requests_total //depricated for now [1747077736092..]
 | filter path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -437,7 +437,7 @@ fn group_by_two() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn group_by_two_same() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_total[1747077736092..]
+`dev.metrics`:http_requests_total //depricated for now [1747077736092..]
 | filter path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -451,7 +451,7 @@ fn group_by_two_same() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn group_by_two_error() {
     let s = r"
-`dev.metrics`:http_requests_total[1747077736092..]
+`dev.metrics`:http_requests_total //depricated for now [1747077736092..]
 | filter path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -464,7 +464,7 @@ fn group_by_two_error() {
 #[test]
 fn bucket_group_by() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_total[1747077736092..]
+`dev.metrics`:http_requests_total //depricated for now [1747077736092..]
 | filter path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -509,7 +509,7 @@ fn in_array_param_compiles() {
 #[test]
 fn bucket_group_by_error() {
     let s = r"
-`dev.metrics`:http_requests_total[1747077736092..]
+`dev.metrics`:http_requests_total //depricated for now [1747077736092..]
 | filter path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -522,9 +522,9 @@ fn bucket_group_by_error() {
 fn group_by_compute() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
 (
-  `ds`:m1[1h..]
+  `ds`:m1 //depricated for now [1h..]
   | group by method, code using sum,
-  `ds`:m2[1h..]
+  `ds`:m2 //depricated for now [1h..]
   | group by method, path using sum
 )
 | compute test using +
