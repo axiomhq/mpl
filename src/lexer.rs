@@ -162,6 +162,9 @@ impl Token<'_> {
     pub(crate) fn is_trivia(&self) -> bool {
         self.tpe == TokenType::Whitespace || self.tpe == TokenType::Comment
     }
+    pub(crate) fn is_ident(&self) -> bool {
+        matches!(self.tpe, TokenType::Ident | TokenType::EscapedIdent)
+    }
 }
 
 enum State {
