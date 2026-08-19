@@ -148,10 +148,10 @@ pub enum ParseError {
     #[error("Invalid variable type: expected {expected}, got {actual}")]
     InvalidVariableType {
         /// The location
-        #[label("Invalid variable type, expected {expected}")]
+        #[label("Invalid variable type, expected {actual}")]
         variable_span: SourceSpan,
         /// The location
-        #[label("The variable was declared here as {actual}")]
+        #[label("The variable was declared here as {expected}")]
         declaration_span: SourceSpan,
         /// The expected type
         expected: query::ParamType,

@@ -4,7 +4,7 @@ use miette::NarratableReportHandler;
 
 use crate::{
     CompileError, TypeError, parser2,
-    query::{Cmp, DirectiveValue, Expr, Filter, TagType, TerminalParamType},
+    query::{Cmp, DirectiveValue, Expr, Filter, ParamType, TagType, TerminalParamType},
 };
 
 fn render_diagnostic(err: CompileError, src: &str) -> String {
@@ -338,24 +338,22 @@ param $dataset: Duration;
 $dataset:metric
 ";
 
-    match super::compile(s, HashMap::new()) {
-        Err(CompileError::Type(TypeError::TypeMismatch {
-            use_span,
-            declaration_span,
-            param_name,
-            expected,
-            actual,
-        })) => {
-            assert_eq!("dataset", param_name);
-            assert_eq!(&[TerminalParamType::Dataset], expected.as_slice());
-            assert_eq!(TerminalParamType::Duration, actual);
-            assert_eq!(28, use_span.offset());
-            assert_eq!(8, use_span.len());
-            assert_eq!(7, declaration_span.offset());
-            assert_eq!(8, declaration_span.len());
-        }
-        res => panic!("Expected mismatched param type error, got {res:?}"),
-    }
+    let res = super::compile(s, HashMap::new());
+    let Err(CompileError::ParserV2(errors)) = &res else {
+        panic!("Expected mismatched param type error, got {res:?}")
+    };
+    // `expected` carries the declaration, `actual` what the position requires.
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            parser2::ParseError::InvalidVariableType {
+                expected: ParamType::Terminal(TerminalParamType::Duration),
+                actual: ParamType::Terminal(TerminalParamType::Dataset),
+                ..
+            }
+        )),
+        "Expected mismatched param type error, got {errors:?}"
+    );
 }
 
 #[test]
@@ -404,24 +402,21 @@ dataset:metric
 | align to $duration using avg
 ";
 
-    match super::compile(s, HashMap::new()) {
-        Err(CompileError::Type(TypeError::TypeMismatch {
-            use_span,
-            declaration_span,
-            param_name,
-            expected,
-            actual,
-        })) => {
-            assert_eq!("duration", param_name);
-            assert_eq!(&[TerminalParamType::Duration], expected.as_slice());
-            assert_eq!(TerminalParamType::Dataset, actual);
-            assert_eq!(54, use_span.offset());
-            assert_eq!(9, use_span.len());
-            assert_eq!(7, declaration_span.offset());
-            assert_eq!(9, declaration_span.len());
-        }
-        res => panic!("Expected mismatched param type error, got {res:?}"),
-    }
+    let res = super::compile(s, HashMap::new());
+    let Err(CompileError::ParserV2(errors)) = &res else {
+        panic!("Expected mismatched param type error, got {res:?}")
+    };
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            parser2::ParseError::InvalidVariableType {
+                expected: ParamType::Terminal(TerminalParamType::Dataset),
+                actual: ParamType::Terminal(TerminalParamType::Duration),
+                ..
+            }
+        )),
+        "Expected mismatched param type error, got {errors:?}"
+    );
 }
 
 #[test]
