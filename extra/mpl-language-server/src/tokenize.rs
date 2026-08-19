@@ -98,6 +98,7 @@ fn ident_token_type(token: &SyntaxToken) -> TokenType {
             SyntaxKind::FUNCTION_PATH => {
                 return if node
                     .parent()
+                    .and_then(|call| call.parent())
                     .is_some_and(|p| p.kind() == SyntaxKind::BUCKET)
                 {
                     TokenType::Keyword

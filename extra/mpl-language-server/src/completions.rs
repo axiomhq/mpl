@@ -1599,26 +1599,35 @@ fn extract_enum_values(arg_type: &ArgType) -> Vec<&'static str> {
 /// the parser has not yet read its closing `)`.
 fn suggest_bucket_args(before: &str, span: Span) -> Vec<CompletionResult> {
     let tree = SyntaxParser::new(before).parse().root;
-    let Some(bucket) = tree
+    let Some(call) = tree
         .descendants()
         .filter(|n| n.kind() == SyntaxKind::BUCKET)
         .last()
+        .and_then(|bucket| {
+            bucket
+                .children()
+                .find(|n| n.kind() == SyntaxKind::FUNCTION_CALL)
+        })
     else {
         return vec![];
     };
-    let closed = bucket
+    let Some(arg_list) = call
+        .children()
+        .find(|n| n.kind() == SyntaxKind::FUNCTION_ARGS)
+    else {
+        return vec![];
+    };
+    // The argument list owns the parentheses, so the call is still open for as
+    // long as it has no closing one.
+    let closed = arg_list
         .children_with_tokens()
         .filter_map(NodeOrToken::into_token)
         .any(|t| t.kind() == SyntaxKind::LX_R_PAREN);
-    let Some(arg_list) = bucket
-        .children()
-        .find(|n| n.kind() == SyntaxKind::BUCKET_ARGS)
-        .filter(|_| !closed)
-    else {
+    if closed {
         return vec![];
-    };
+    }
 
-    let fn_name = bucket
+    let fn_name = call
         .children()
         .find(|n| n.kind() == SyntaxKind::FUNCTION_PATH)
         .map(|n| n.text().to_string())
