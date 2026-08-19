@@ -49,6 +49,17 @@ pub enum ParseError {
     /// No query was provided
     #[error("No query was provided")]
     MissingQuery,
+    /// `in` used with a non-array right-hand side
+    #[error("`in` requires an array on the right-hand side")]
+    #[diagnostic(
+        code(mpl_lang::in_requires_array),
+        help("Use an array literal (e.g. `in [200, 201]`) or an array-typed param")
+    )]
+    InRequiresArray {
+        /// The location of the offending right-hand side
+        #[label("expected an array here")]
+        span: SourceSpan,
+    },
     /// Directive in the wrong place
     #[error("Directive in the wrong place")]
     DirectiveInWongPlace {
@@ -955,6 +966,19 @@ impl QueryParser {
             FilterParen::Cmp(f) => self.filter_cmp(f),
         }
     }
+    /// Lowers `field in rhs`, which holds only when `rhs` names a set of values.
+    fn in_cmp(&self, lhs: Ident, rhs: SyntaxExpr) -> Result<Filter> {
+        let span = rhs.node.span();
+        let value = self.expr(rhs)?;
+        if !value.is_array() {
+            return Err(ParseError::InRequiresArray { span });
+        }
+        Ok(Filter::Cmp {
+            field: lhs.into_string(),
+            rhs: Cmp::In(value),
+        })
+    }
+
     fn filter_cmp(&self, f: FilterCmp) -> Result<Filter> {
         let r = match f {
             FilterCmp::Eq {
@@ -1036,10 +1060,7 @@ impl QueryParser {
                 field: lhs.into_string(),
                 rhs: Cmp::Ge(self.expr(rhs)?),
             },
-            FilterCmp::In { lhs, rhs } => Filter::Cmp {
-                field: lhs.into_string(),
-                rhs: Cmp::In(self.expr(rhs)?),
-            },
+            FilterCmp::In { lhs, rhs } => self.in_cmp(lhs, rhs)?,
             FilterCmp::EqRe { lhs, rhs } => Filter::Cmp {
                 field: lhs.into_string(),
                 rhs: Cmp::RegEx(Parameterized::Concrete(rhs.into())),

@@ -2,9 +2,24 @@
 
 use std::fmt::Write as _;
 
-use miette::Diagnostic as _;
-
 pub(crate) fn message(source: &str, err: &mpl_lang::CompileError) -> String {
+    render(source, err)
+}
+
+/// Renders one diagnostic against `source`, pointing at each span it labels.
+///
+/// An error that groups others holds no span itself, so what it relates to is
+/// what can point into the query; those are rendered in its place.
+fn render(source: &str, err: &dyn miette::Diagnostic) -> String {
+    let related: Vec<&dyn miette::Diagnostic> = err.related().into_iter().flatten().collect();
+    if !related.is_empty() {
+        return related
+            .into_iter()
+            .map(|inner| render(source, inner))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+
     let mut message = err.to_string();
 
     if let Some(labels) = err.labels() {
@@ -81,10 +96,10 @@ mod tests {
     fn compile_errors_include_location_and_expected_tokens() {
         let source = "test:metric\n| map + ";
         let err =
-            mpl_lang::compile(source, HashMap::new()).expect_err("query should fail to compile");
+            mpl_lang::compile2(source, HashMap::new()).expect_err("query should fail to compile");
         let message = message(source, &err);
 
-        assert!(message.contains("MPL syntax error"), "{message}");
+        assert!(message.contains("syntax error"), "{message}");
         assert!(message.contains("--> 2:"), "{message}");
         assert!(message.contains("| map +"), "{message}");
         assert!(message.contains("^---"), "{message}");

@@ -4,7 +4,7 @@
 //! `JsValue` arguments into pure Rust types, calls the corresponding
 //! `mpl_language_server::*` function, and re-encodes the result.
 
-use mpl_lang::{Query, compile, query::Source};
+use mpl_lang::{Query, compile2, query::Source};
 use mpl_language_server::SystemParamSpec;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -19,7 +19,7 @@ fn parse_with_system_param_specs(
     system_params: &[SystemParamSpec],
 ) -> Result<Query, String> {
     let params = mpl_language_server::to_compile_params(system_params);
-    compile(query, params)
+    compile2(query, params)
         .map(|(q, _warnings)| q)
         .map_err(|e| format!("{e:?}"))
 }

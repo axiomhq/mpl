@@ -191,3 +191,28 @@ fn map_min_without_its_argument_is_reported() {
         "`{src}`: expected an argument count error, got {errors:?}"
     );
 }
+
+/// `in` compares a tag against a set, so its right-hand side has to name one: an array
+/// literal, or a param declared to carry an array. A scalar is a shape the comparison
+/// cannot use, and saying so at the offending value is what points the editor at it.
+#[test_case("ds:m | where t in 200"                          ; "an int is not a set")]
+#[test_case("ds:m | where t in 2.5"                          ; "a float is not a set")]
+#[test_case("ds:m | where t in \"a\""                        ; "a string is not a set")]
+#[test_case("ds:m | where t in true"                         ; "a bool is not a set")]
+#[test_case("param $s: string;\nds:m | where t in $s"        ; "a scalar param is not a set")]
+fn in_requires_an_array(src: &str) {
+    let errors = errors_of(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ParseError::InRequiresArray { .. })),
+        "expected an in-requires-array error for `{src}`, got: {errors:?}"
+    );
+}
+
+#[test_case("ds:m | where t in [200, 201]"                   ; "an array literal is a set")]
+#[test_case("ds:m | where t in []"                           ; "an empty array is a set")]
+#[test_case("param $a: array;\nds:m | where t in $a"         ; "an array param is a set")]
+fn in_accepts_an_array(src: &str) {
+    lower(src).unwrap_or_else(|errors| panic!("`{src}` should lower, got: {errors:?}"));
+}

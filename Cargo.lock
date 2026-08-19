@@ -692,7 +692,6 @@ dependencies = [
  "getrandom",
  "miette",
  "mpl-lang",
- "pest",
  "rand",
  "serde",
  "serde-wasm-bindgen",

@@ -157,7 +157,7 @@ fn run_path_interpolated_string_filter() {
             s(&[("host", "v2")], vec![0.0], vec![2.0]),
         ],
     );
-    let (query, _) = compile("ds:m | where host == \"v${ 1 }\"", HashMap::new())
+    let (query, _) = compile2("ds:m | where host == \"v${ 1 }\"", HashMap::new())
         .expect("query with interpolation must compile");
     let steps = query_steps(query);
     let results = interpret(&steps, &datasets);
@@ -759,7 +759,7 @@ fn filter_in_unknown_tag_ref_errors() {
     );
 }
 
-/// End-to-end through `compile()`: a real `in` query string is parsed, planned,
+/// End-to-end through `compile2()`: a real `in` query string is parsed, planned,
 /// and evaluated without panicking, keeping only matching series.
 #[test]
 fn run_path_in_filter() {
@@ -772,7 +772,7 @@ fn run_path_in_filter() {
             s(&[("host", "c")], vec![0.0], vec![3.0]),
         ],
     );
-    let (query, _) = compile("ds:m | where host in [\"a\", \"c\"]", HashMap::new())
+    let (query, _) = compile2("ds:m | where host in [\"a\", \"c\"]", HashMap::new())
         .expect("`in` query must compile");
     let steps = query_steps(query);
     let results = interpret(&steps, &datasets);

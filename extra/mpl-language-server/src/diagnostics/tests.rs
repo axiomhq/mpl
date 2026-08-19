@@ -660,3 +660,60 @@ fn a_parser_v2_warning_keeps_its_span() {
         "the warning should cover the string literal"
     );
 }
+
+/// `compute_diagnostics` is the entry point the editor calls, so these cases read what an
+/// editor would draw rather than what one stage of the compiler produced.
+mod compute {
+    use std::collections::HashMap;
+
+    use crate::diagnostics::{Severity, compute_diagnostics};
+
+    fn errors(query: &str) -> Vec<(usize, usize, String)> {
+        compute_diagnostics(query, &HashMap::new())
+            .into_iter()
+            .filter(|d| matches!(d.severity, Severity::Error))
+            .map(|d| (d.span.from, d.span.to, d.message))
+            .collect()
+    }
+
+    /// A squiggle is only useful where the problem is. An error that names no place in the
+    /// query would be drawn at the very start of the document, pointing the reader away from
+    /// the token that caused it.
+    #[test]
+    fn a_syntax_error_is_anchored_where_it_happened() {
+        let query = "test:metric\n| map + ";
+        let found = errors(query);
+        assert!(!found.is_empty(), "expected an error for `{query}`");
+        assert!(
+            found.iter().all(|(from, to, _)| *from > 0 && *to > 0),
+            "every error should point past the start of the query, got: {found:?}"
+        );
+    }
+
+    /// The parser reports what it recovered from at several stages, so the same problem can
+    /// arrive more than once; an editor draws one squiggle per diagnostic.
+    #[test]
+    fn the_same_problem_is_reported_once() {
+        let found = errors("ds:metric | where");
+        let mut seen = found.clone();
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), found.len(), "duplicate diagnostics: {found:?}");
+    }
+
+    /// `in` compares against a set, so a scalar right-hand side is a query the editor has to
+    /// reject rather than pass to the backend.
+    #[test]
+    fn in_with_a_scalar_is_reported() {
+        let found = errors("ds:metric | where t in 200");
+        assert!(
+            found.iter().any(|(.., m)| m.contains("requires an array")),
+            "expected an in-requires-array diagnostic, got: {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_valid_query_reports_nothing() {
+        assert_eq!(errors("ds:metric | where t == 200"), Vec::new());
+    }
+}

@@ -1,5 +1,5 @@
 //! Diagnostics and code actions for `MPL` queries.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use miette::Diagnostic as _;
 use serde::Serialize;
@@ -7,7 +7,7 @@ use strsim::jaro;
 
 use mpl_lang::errors::Suggestion;
 use mpl_lang::query::{ParamType, Warning, WarningReason};
-use mpl_lang::{CompileError, GroupError, IfdefError, ParseError, TypeError, compile};
+use mpl_lang::{CompileError, GroupError, IfdefError, ParseError, TypeError, compile2};
 
 use crate::Span;
 use crate::completions::{
@@ -66,7 +66,7 @@ pub fn compute_diagnostics(
     query: &str,
     system_params: &HashMap<String, ParamType>,
 ) -> Vec<DiagnosticItem> {
-    match compile(query, system_params.clone()) {
+    match compile2(query, system_params.clone()) {
         Ok((_, warnings)) => {
             let mut items: Vec<DiagnosticItem> = warnings
                 .as_slice()
@@ -314,6 +314,11 @@ pub fn group_error_diagnostic_items(e: &GroupError) -> Vec<DiagnosticItem> {
 pub fn parser_v2_error_diagnostic_items(
     errors: &[mpl_lang::parser2::ParseError],
 ) -> Vec<DiagnosticItem> {
+    // One malformed token makes the parser report the same problem from each
+    // stage that trips over it, so an editor would draw the same squiggle
+    // several times over; a diagnostic is keyed by where it points and what it
+    // says.
+    let mut seen = HashSet::new();
     errors
         .iter()
         .flat_map(|e| {
@@ -347,6 +352,7 @@ pub fn parser_v2_error_diagnostic_items(
                 items
             }
         })
+        .filter(|item| seen.insert((item.span.from, item.span.to, item.message.clone())))
         .collect()
 }
 
