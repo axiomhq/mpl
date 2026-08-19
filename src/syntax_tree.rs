@@ -464,6 +464,35 @@ impl<'input> Parser<'input> {
         });
     }
 
+    fn garbage_tail(&mut self) {
+        let rest = self.peek();
+        if rest.tpe() == TokenType::Eof {
+            return;
+        }
+        let mut last = rest;
+        self.node(GARBAGE, |s| {
+            while let t = s.next()
+                && t.tpe() != TokenType::Eof
+            {
+                s.token(t);
+                last = t;
+            }
+        });
+        let start = rest.pos();
+        let end = last.pos() + last.text().len();
+        self.errors.push(SyntaxError::TokenAfterEoq {
+            kind: rest.tpe(),
+            range: SourceSpan::new(start.into(), end - start),
+        });
+    }
+
+    fn finish(self) -> SyntaxTree {
+        SyntaxTree {
+            root: SyntaxNode::new_root(self.builder.finish()),
+            errors: self.errors,
+        }
+    }
+
     fn node(&mut self, kind: SyntaxKind, f: impl FnOnce(&mut Self)) {
         self.builder.start_node(kind.into());
         self.eat_trivia();
@@ -504,30 +533,9 @@ impl Parser<'_> {
             }
 
             s.query();
-            let rest = s.peek();
-            if rest.tpe() != TokenType::Eof {
-                let mut last = rest;
-                s.node(GARBAGE, |s| {
-                    while let t = s.next()
-                        && t.tpe() != TokenType::Eof
-                    {
-                        s.token(t);
-                        last = t;
-                    }
-                });
-                let start = rest.pos();
-                let end = last.pos() + last.text().len();
-                let len = end - start;
-                s.errors.push(SyntaxError::TokenAfterEoq {
-                    kind: rest.tpe(),
-                    range: SourceSpan::new(start.into(), len),
-                });
-            }
+            s.garbage_tail();
         });
-        SyntaxTree {
-            root: SyntaxNode::new_root(self.builder.finish()),
-            errors: self.errors,
-        }
+        self.finish()
     }
 
     fn query(&mut self) {
