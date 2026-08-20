@@ -303,13 +303,35 @@ pub fn group_error_diagnostic_items(e: &GroupError) -> Vec<DiagnosticItem> {
     }
 }
 
+/// The span of the declaration a parser error points back to, as `(offset, len)`.
+///
+/// Some parser errors carry two labels: the place the query goes wrong, and the
+/// declaration that makes it wrong. Which label is the declaration is a
+/// property of the variant, so it is read from the variant — the labels arrive
+/// in field order, which for a re-declaration puts the earlier span first.
+fn declaration_span(e: &mpl_lang::parser::ParseError) -> Option<(usize, usize)> {
+    use mpl_lang::parser::ParseError;
+
+    let span = match e {
+        ParseError::InvalidVariableType {
+            declaration_span, ..
+        } => declaration_span,
+        ParseError::MustBeOptional { decl_span, .. } => decl_span,
+        ParseError::ParamDeclaredTwice { first_span, .. } => first_span,
+        _ => return None,
+    };
+    Some((span.offset(), span.len()))
+}
+
 /// Convert the errors the parser reported to `DiagnosticItem`s.
 ///
 /// The spans come from each error's own miette labels rather than from a
 /// match over the variants: every variant already labels the token it is
 /// about, so an error added to the parser reaches the editor without a
-/// second place to update. An error that labels nothing is still surfaced,
-/// anchored at the start of the query.
+/// second place to update. What the variant decides is severity: a label
+/// naming a declaration is a note beside the error, not a second error. An
+/// error that labels nothing is still surfaced, anchored at the start of the
+/// query.
 pub fn parser_error_diagnostic_items(
     query: &str,
     errors: &[mpl_lang::parser::ParseError],
@@ -325,14 +347,27 @@ pub fn parser_error_diagnostic_items(
             let message = e.to_string();
             let help = e.help().map(|h| h.to_string());
             let actions = parser_error_actions(query, e);
+            let declaration = declaration_span(e);
             let items: Vec<_> = e
                 .labels()
                 .into_iter()
                 .flatten()
                 .map(|label| {
                     let src = label.inner();
+                    let span = Span::new(src.offset(), src.offset() + src.len());
+
+                    if declaration == Some((src.offset(), src.len())) {
+                        return DiagnosticItem {
+                            span,
+                            severity: Severity::Info,
+                            message: label.label().unwrap_or("declared here").to_string(),
+                            help: None,
+                            actions: vec![],
+                        };
+                    }
+
                     DiagnosticItem {
-                        span: Span::new(src.offset(), src.offset() + src.len()),
+                        span,
                         severity: Severity::Error,
                         message: message.clone(),
                         help: help.clone(),

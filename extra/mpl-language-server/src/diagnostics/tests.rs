@@ -129,6 +129,81 @@ fn type_error_puts_error_on_use_and_info_on_declaration() {
     );
 }
 
+/// The two halves of a diagnostic pair, as (error, info).
+///
+/// A parser error that names both a use and the declaration behind it splits
+/// the same way a type error does: the squiggle sits on the use, and the
+/// declaration is an accompanying note.
+fn error_and_info(q: &str) -> (DiagnosticItem, DiagnosticItem) {
+    let items = diagnostic_items(q);
+    assert_eq!(items.len(), 2, "should produce two diagnostics");
+    let (mut errors, mut infos): (Vec<_>, Vec<_>) = items
+        .into_iter()
+        .partition(|i| matches!(i.severity, Severity::Error));
+    (
+        errors.pop().expect("should have an error diagnostic"),
+        infos.pop().expect("should have an info diagnostic"),
+    )
+}
+
+#[test]
+fn invalid_variable_type_puts_error_on_use_and_info_on_declaration() {
+    // $tag is declared as a string but used where a duration is expected
+    let query = "param $tag: string;\nds:metric | align to $tag using avg";
+    let (error_item, info_item) = error_and_info(query);
+
+    assert_eq!(
+        &query[error_item.span.from..error_item.span.to],
+        "$tag",
+        "error should point at the usage of $tag"
+    );
+    assert_eq!(
+        query[info_item.span.from..info_item.span.to].trim_end(),
+        "param $tag: string;",
+        "info should point at the declaration"
+    );
+    assert!(
+        info_item.message.contains("declared"),
+        "info message should name the declaration, got: {:?}",
+        info_item.message
+    );
+}
+
+#[test]
+fn ifdef_on_a_required_param_puts_error_on_guard_and_info_on_declaration() {
+    // $f gates an ifdef, which requires it to be declared Option<..>
+    let query = "param $f: string;\nds:metric | ifdef($f) { filter tag == $f }";
+    let (error_item, info_item) = error_and_info(query);
+
+    assert_eq!(
+        &query[error_item.span.from..error_item.span.to],
+        "$f",
+        "error should point at the ifdef guard"
+    );
+    assert_eq!(
+        query[info_item.span.from..info_item.span.to].trim_end(),
+        "param $f: string;",
+        "info should point at the declaration"
+    );
+}
+
+#[test]
+fn param_declared_twice_puts_error_on_redeclaration_and_info_on_first() {
+    // The two spans arrive in source order, so the squiggle belongs to the
+    // later one: the first declaration is the note that explains the clash.
+    let query = "param $p: string;\nparam $p: string;\nds:metric";
+    let (error_item, info_item) = error_and_info(query);
+
+    assert_eq!(
+        error_item.span.from, 18,
+        "error should point at the second declaration"
+    );
+    assert_eq!(
+        info_item.span.from, 0,
+        "info should point at the first declaration"
+    );
+}
+
 #[test]
 fn optional_param_outside_ifdef_is_error() {
     let query = "param $f: Option<string>;\nds:metric | where tag == $f";
