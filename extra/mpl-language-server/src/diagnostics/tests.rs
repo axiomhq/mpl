@@ -95,8 +95,8 @@ fn action_targets_function_name_range() {
 
 #[test]
 fn type_error_puts_error_on_use_and_info_on_declaration() {
-    // $tag is declared as string but used where duration is expected
-    let query = "param $tag: string;\nds:metric | align to $tag using avg";
+    // $d is declared as a duration but compared against a tag
+    let query = "param $d: Duration;\nds:metric | filter tag == $d";
     let items = match compile(query, HashMap::new()) {
         Ok(_) => panic!("should produce a type error"),
         Err(CompileError::Type(error)) => crate::diagnostics::type_error_diagnostic_items(&error),
@@ -107,15 +107,15 @@ fn type_error_puts_error_on_use_and_info_on_declaration() {
 
     assert_eq!(items.len(), 2, "should produce two diagnostics");
 
-    // The error should be on the usage site ($tag in align)
+    // The error should be on the usage site ($d in the filter)
     let error_item = items
         .iter()
         .find(|i| matches!(i.severity, Severity::Error))
         .expect("should have an error diagnostic");
     assert_eq!(
         &query[error_item.span.from..error_item.span.to],
-        "$tag",
-        "error should point at the usage of $tag"
+        "$d",
+        "error should point at the usage of $d"
     );
 
     // The info should be on the declaration site
