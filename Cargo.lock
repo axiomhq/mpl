@@ -651,7 +651,6 @@ version = "0.6.0"
 dependencies = [
  "mpl-lang",
  "mpl-language-server",
- "ron",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",

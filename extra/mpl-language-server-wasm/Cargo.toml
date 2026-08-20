@@ -16,7 +16,6 @@ mpl-language-server = { path = "../mpl-language-server" }
 mpl-lang = { path = "../..", default-features = false }
 serde = "1"
 serde_json = "1"
-ron = "0.12"
 wasm-bindgen = "0.2.108"
 serde-wasm-bindgen = "0.6.5"
 

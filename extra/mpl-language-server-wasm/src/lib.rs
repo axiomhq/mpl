@@ -47,13 +47,6 @@ fn parse_json_from_query(query: &str, system_params: &[SystemParamSpec]) -> Resu
     serde_json::to_string_pretty(&parsed).map_err(|e| format!("Failed to serialize to JSON: {e}"))
 }
 
-/// Pure rust RON parse helper.
-fn parse_ron_from_query(query: &str, system_params: &[SystemParamSpec]) -> Result<String, String> {
-    let parsed = parse_with_system_param_specs(query, system_params)?;
-    ron::ser::to_string_pretty(&parsed, ron::ser::PrettyConfig::default())
-        .map_err(|e| format!("Failed to serialize to RON: {e}"))
-}
-
 /// Pure rust parse helper.
 fn extract_dataset_from_query(query: &str, system_params: &[SystemParamSpec]) -> Option<String> {
     fn get_dataset(q: &Query) -> String {
@@ -195,26 +188,11 @@ pub fn parse_json(query: &str, system_params: JsValue) -> Result<String, String>
     parse_json_from_query(query, &specs)
 }
 
-/// Parses a query string into a RON representation of the `Query` AST.
-#[wasm_bindgen]
-pub fn parse_ron(query: &str, system_params: JsValue) -> Result<String, String> {
-    let specs = system_params::decode(system_params);
-    parse_ron_from_query(query, &specs)
-}
-
 /// Converts a JSON representation of a `Query` back to an `MPL` query string.
 #[wasm_bindgen]
 pub fn print_json(query: &str) -> Result<String, String> {
     let query: Query =
         serde_json::from_str(query).map_err(|e| format!("Failed to deserialize from JSON: {e}"))?;
-    Ok(query.to_string())
-}
-
-/// Converts a RON representation of a `Query` back to an `MPL` query string.
-#[wasm_bindgen]
-pub fn print_ron(query: &str) -> Result<String, String> {
-    let query: Query =
-        ron::de::from_str(query).map_err(|e| format!("Failed to deserialize from RON: {e}"))?;
     Ok(query.to_string())
 }
 
@@ -246,10 +224,7 @@ mod tests {
     //! `wasm-bindgen-test` and are exercised by `tests/wasm/test-wasm.mjs`
     //! against the built wasm artifact.
 
-    use super::{
-        extract_dataset_from_query, parse_json_from_query, parse_ron_from_query, print_json,
-        print_ron,
-    };
+    use super::{extract_dataset_from_query, parse_json_from_query, print_json};
 
     const QUERY: &str = "my_dataset:my_metric";
 
@@ -274,15 +249,6 @@ mod tests {
         assert!(back.contains("my_dataset"));
         assert!(back.contains("my_metric"));
     }
-
-    #[test]
-    fn parse_print_ron_roundtrips() {
-        let ron = parse_ron_from_query(QUERY, &[]).expect("parse_ron");
-        let back = print_ron(&ron).expect("print_ron");
-        assert!(back.contains("my_dataset"));
-        assert!(back.contains("my_metric"));
-    }
-
     #[test]
     fn parse_json_reports_error_for_invalid_query() {
         assert!(parse_json_from_query("@@@ not a query @@@", &[]).is_err());
@@ -297,10 +263,6 @@ mod tests {
 
         let json = parse_json_from_query(query, &[]).expect("parse_json");
         let back = print_json(&json).expect("print_json");
-        assert!(back.contains("in [200, 2.5, false]"), "got: {back}");
-
-        let ron = parse_ron_from_query(query, &[]).expect("parse_ron");
-        let back = print_ron(&ron).expect("print_ron");
         assert!(back.contains("in [200, 2.5, false]"), "got: {back}");
     }
 }
