@@ -13,7 +13,7 @@
 pub mod ast;
 /// The lexer for the MPL query language.
 pub mod lexer;
-/// new v2 parser
+/// Lowers the AST into a `Query`.
 pub mod parser;
 /// rowan syntax tree for the MPL query language.
 pub mod syntax_tree;
@@ -66,9 +66,9 @@ pub enum CompileError {
     #[error(transparent)]
     #[diagnostic(transparent)]
     Ifdef(#[from] IfdefError),
-    /// v2 parser error
+    /// Parser error
     #[error("Encountered errors during parsing")]
-    ParserV2(#[related] Vec<parser::ParseError>),
+    Parser(#[related] Vec<parser::ParseError>),
 }
 
 /// Parses and typechecks an MPL query into a Query object.
@@ -82,7 +82,7 @@ pub fn compile<H: BuildHasher>(
     let ast = parser.lower();
     let (mut query, warnings) = parser::Parser::new(ast)
         .lower(system_params)
-        .map_err(CompileError::ParserV2)?;
+        .map_err(CompileError::Parser)?;
     // stage 2: typecheck
     let mut visitor = ParamTypecheckVisitor {};
     visitor.walk(&mut query)?;
@@ -388,8 +388,8 @@ impl QueryVisitor for ParamTypecheckVisitor {
             }
             Cmp::Eq(Expr::Param { span, param }) => {
                 if param.typ() == TerminalParamType::Regex {
-                    // we have a regex param in an eq
-                    // this happens because we cannot detect this in pest
+                    // a regex param in an eq: the parser sees a variable, and only
+                    // the declaration says it holds a regex
                     //
                     // this is | filter foo == #/bar/ vs | filter foo == $bar_re
                     *cmp = Cmp::RegEx(Parameterized::Param {
@@ -404,8 +404,8 @@ impl QueryVisitor for ParamTypecheckVisitor {
             }
             Cmp::Ne(Expr::Param { span, param }) => {
                 if param.typ() == TerminalParamType::Regex {
-                    // we have a regex param in ne
-                    // this happens because we cannot detect this in pest
+                    // a regex param in ne: the parser sees a variable, and only
+                    // the declaration says it holds a regex
                     //
                     // this is | filter foo != #/bar/ vs | filter foo != $bar_re
                     *cmp = Cmp::RegExNot(Parameterized::Param {

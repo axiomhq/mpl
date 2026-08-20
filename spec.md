@@ -277,7 +277,8 @@ The `compute` operator queries two metrics and combines the results into a new m
 
 Identifiers are used to represent fields, metrics, datasets, function names, and other named entities.
 
-An identifier consists of an ASCII letter or `_` followed by zero or more ASCII letters, digits, or `_`.
+An identifier consists of a letter or `_` followed by zero or more letters, digits, or `_`.
+Letters and digits are Unicode, so `ünïcöde` is an identifier.
 
 Identifiers are case sensitive and can be any length.
 
@@ -302,6 +303,7 @@ Times can be defined as:
 - a Unix timestamp in seconds
 - an RFC3339 date
 - relative times (e.g. `1h`, `2d`, `3w`, `4M`, `5y`) where the time is relative to the current time. The time unit can be one of the following:
+  - `ms` for milliseconds
   - `s` for seconds
   - `m` for minutes
   - `h` for hours
@@ -309,6 +311,9 @@ Times can be defined as:
   - `w` for weeks
   - `M` for months
   - `y` for years
+
+  A duration resolves to whole seconds: `1500ms` is accepted and warns that it is not
+  second-aligned, and a duration below one second is an error.
 - One of the times can be defined as a modifier of `+` or `-` followed by a relative time. This is then added or subtracted from the other time.
 
 ```mpl
@@ -337,7 +342,10 @@ backslash is used to introduce an escape sequence. The supported escape sequence
 - `\f` — form feed
 - `\n` — line feed
 - `\r` — carriage return
+- `\t` — tab
 - `\$` — dollar sign
+
+Any other escape stands for the character after the backslash, and is reported as a warning.
 
 
 ### String Interpolation
@@ -401,7 +409,7 @@ identify the metric and all its encompassing series.
 A tag is a key-value pair that is used to identify a series. For example, `method="PUT"` is a tag
 that identifies the HTTP request method. Tags can be used in filters.
 
-Tag values can be a string, integer, float, or bool.
+Tag values can be a string, integer, float, bool, or array.
 
 ## Series
 
@@ -578,13 +586,15 @@ WASM functions can be used in `map`, `align`, `group`, and `bucket` operators:
 HTTP query parameters can be passed into the query.
 
 ```mpl
-// expose step query parameter with the type: duration
-param $__interval: Duration;
+// expose query parameters with their types
 param $ds: Dataset;
 param $re: Regex;
 param $str: string;
 param $hosts: array;
 ```
+
+System parameters are named with a leading `__` and are declared by the host, so `$__interval`
+can be referenced without a `param` line — declaring it is an error.
 
 The passed query parameters need to be valid MPL atomics and are prefixed with `param__`.
 

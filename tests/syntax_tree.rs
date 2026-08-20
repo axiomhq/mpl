@@ -457,7 +457,7 @@ fn directives_precede_the_query_as_siblings() {
 //
 // Signs are not part of the number token (`tests/lexer.rs::value_literals`), so `CONST`
 // collects them itself and a negative literal is two children rather than one. `inf` is a
-// float, matching `number = { inf | float | int }` in mpl.pest:30.
+// float (spec.md, Float).
 // ---------------------------------------------------------------------------------------
 
 #[test_case("42"    => "CONST(INTEGER(42))"        ; "integer")]
@@ -917,10 +917,8 @@ fn error_reporting(src: &str) -> String {
     errors(src)
 }
 
-/// A time range is part of MPL — `time_range`, mpl.pest:71, reachable from `source` at :82.
-/// `Parser::time_range` covers the `time_relative` and `time_timestamp` forms; `mpl.pest`
-/// also admits `time_rfc_3339` and `time_modifier`, which the lexer does not yet tokenise
-/// separately, so `d:m[2025-03-01T13:00:00Z..]` is still out of reach.
+/// A time range follows the source (spec.md, Time Range), and `Parser::time_range` covers
+/// the relative and timestamp forms.
 #[test]
 fn time_ranges_parse() {
     for src in ["d:m[5m..]", "d:m[1..2] | group using sum"] {

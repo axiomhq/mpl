@@ -32,10 +32,10 @@ fn parse_align_without_time() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn align_with_time_but_without_to_reports_missing_to() {
     // `align <time> using <fn>` is invalid: a time after `align` must be
-    // introduced by `to` (grammar: `align ("to" time)? ("over" time)? using fn`).
-    // The hygienic error should name the real problem -- a missing `to` after
-    // `align` -- rather than the generic pest fallback that points at `align`
-    // itself and suggests "Did you mean align?".
+    // introduced by `to` (`align ("to" time)? using fn`). The hygienic error
+    // should name the real problem -- a missing `to` after `align` -- rather than
+    // a generic fallback that points at `align` itself and suggests
+    // "Did you mean align?".
     let s = "dataset:metric | align 1m using avg";
     let err = super::compile(s, HashMap::new())
         .expect_err("`align 1m using avg` is missing `to` and must fail");
@@ -307,7 +307,7 @@ $dataset:metric
 ";
 
     let res = super::compile(s, HashMap::new());
-    let Err(CompileError::ParserV2(errors)) = &res else {
+    let Err(CompileError::Parser(errors)) = &res else {
         panic!("Expected param declared twice error, got {res:?}")
     };
     let [parser::ParseError::ParamDeclaredTwice { name, .. }] = errors.as_slice() else {
@@ -321,7 +321,7 @@ fn parse_params_undefined() {
     let s = "$dataset:metric";
 
     let res = super::compile(s, HashMap::new());
-    let Err(CompileError::ParserV2(errors)) = &res else {
+    let Err(CompileError::Parser(errors)) = &res else {
         panic!("Expected undefined variable error, got {res:?}")
     };
     let [parser::ParseError::UndefinedVariable { name, .. }] = errors.as_slice() else {
@@ -339,7 +339,7 @@ $dataset:metric
 ";
 
     let res = super::compile(s, HashMap::new());
-    let Err(CompileError::ParserV2(errors)) = &res else {
+    let Err(CompileError::Parser(errors)) = &res else {
         panic!("Expected mismatched param type error, got {res:?}")
     };
     // `expected` carries the declaration, `actual` what the position requires.
@@ -403,7 +403,7 @@ dataset:metric
 ";
 
     let res = super::compile(s, HashMap::new());
-    let Err(CompileError::ParserV2(errors)) = &res else {
+    let Err(CompileError::Parser(errors)) = &res else {
         panic!("Expected mismatched param type error, got {res:?}")
     };
     assert!(
@@ -490,7 +490,7 @@ fn in_non_array_param_requires_array_error() {
     let s = "param $s: string;\nds:m | where t in $s";
     let err =
         super::compile(s, HashMap::new()).expect_err("non-array param for `in` must not compile");
-    let CompileError::ParserV2(errors) = &err else {
+    let CompileError::Parser(errors) = &err else {
         panic!("expected an in-requires-array error, got: {err:?}")
     };
     assert!(

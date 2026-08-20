@@ -248,8 +248,8 @@ fn ident_escapes(literal: &str) -> String {
     ident_name(literal)
 }
 
-/// `\uXXXX` is a sequence the grammar spells (`src/mpl.pest:9`, `:25`) and this lowering does
-/// not resolve, so it is reported. Asserted through the diagnostic rather than the value,
+/// `\uXXXX` lexes as an escape and sits outside the alphabet this lowering resolves, so it
+/// is reported. Asserted through the diagnostic rather than the value,
 /// because lowering hands back a string either way: a caller that reads the value without
 /// reading `errors()` sees a plausible name and no sign that four hex digits were meant to be
 /// one character.

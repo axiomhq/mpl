@@ -163,30 +163,6 @@ fn provided_params_array_rejects_scalar_value() {
         res => panic!("expected parse param error, got {res:?}"),
     }
 }
-
-// #[test]
-// fn provided_params_array_rejects_interpolated_element() {
-//     // Provided values are literals; an interpolated string element has no
-//     // meaning here and must be rejected rather than silently stringified.
-//     let mpl_params = vec![ParamDeclaration {
-//         span: SourceSpan::from(0..0),
-//         name: "hosts".to_string(),
-//         typ: ParamType::Terminal(TerminalParamType::Tag(TagType::Array)),
-//     }];
-//
-//     let query_params = vec![("param__hosts".to_string(), "[\"${ x }\"]".to_string())];
-//
-//     match ProvidedParams::parse_and_validate(&mpl_params, &query_params) {
-//         Err(ParseProvidedParamsError::ParseParam { err, .. }) => {
-//             assert!(
-//                 err.to_string().contains("Unsupported Array element"),
-//                 "expected an unsupported-element error, got: {err}"
-//             );
-//         }
-//         res => panic!("expected parse param error, got {res:?}"),
-//     }
-// }
-
 #[test]
 fn resolve_array_param_to_const_array() {
     let provided_params = ProvidedParams::new(vec![ProvidedParam::new(

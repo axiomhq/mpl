@@ -26,11 +26,11 @@ fn parse_with_system_param_specs(
 /// What went wrong, as a line the host can show.
 ///
 /// Each variant is rendered through the error it carries. Naming them one by one
-/// keeps miette's formatter and the grammar's rule names out of the wasm bundle,
-/// which is worth more here than the shorter spelling.
+/// keeps miette's formatter out of the wasm bundle, which is worth more here than
+/// the shorter spelling.
 fn describe(e: &CompileError) -> String {
     match e {
-        CompileError::ParserV2(errors) => errors
+        CompileError::Parser(errors) => errors
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()

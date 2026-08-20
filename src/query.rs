@@ -605,8 +605,8 @@ pub enum WarningReason {
     },
     /// lowercase duration
     OldDuration,
-    /// Parser v2 warning
-    ParserV2(parser::Warning),
+    /// Parser warning
+    Parser(parser::Warning),
 }
 
 impl Display for WarningReason {
@@ -626,7 +626,7 @@ impl Display for WarningReason {
                     "The param ${param} uses the `__` prefix reserved for system params"
                 )
             }
-            WarningReason::ParserV2(warning) => warning.fmt(f),
+            WarningReason::Parser(warning) => warning.fmt(f),
         }
     }
 }
@@ -641,7 +641,7 @@ impl From<parser::Warning> for Warning {
     fn from(warning: parser::Warning) -> Self {
         Warning {
             source: Some(warning.span()),
-            warning: WarningReason::ParserV2(warning),
+            warning: WarningReason::Parser(warning),
         }
     }
 }

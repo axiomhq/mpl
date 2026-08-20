@@ -79,8 +79,8 @@ pub fn compute_diagnostics(
         Err(CompileError::Type(error)) => type_error_diagnostic_items(&error),
         Err(CompileError::Group(error)) => group_error_diagnostic_items(&error),
         Err(CompileError::Ifdef(error)) => ifdef_error_diagnostic_items(&error),
-        Err(CompileError::ParserV2(errors)) => {
-            let items = parser_v2_error_diagnostic_items(query, &errors);
+        Err(CompileError::Parser(errors)) => {
+            let items = parser_error_diagnostic_items(query, &errors);
             maybe_rewrite_escaped_dataset_error(query, items)
         }
     }
@@ -124,7 +124,7 @@ pub fn warning_to_diagnostic_item(w: &Warning) -> DiagnosticItem {
             },
             WarningReason::ParamNotDeclared(_)
             | WarningReason::ParamUsingSystemPrefix { .. }
-            | WarningReason::ParserV2(_) => DiagnosticItem {
+            | WarningReason::Parser(_) => DiagnosticItem {
                 span,
                 severity: Severity::Warning,
                 message: w.warning().to_string(),
@@ -303,14 +303,14 @@ pub fn group_error_diagnostic_items(e: &GroupError) -> Vec<DiagnosticItem> {
     }
 }
 
-/// Convert the errors the v2 parser reported to `DiagnosticItem`s.
+/// Convert the errors the parser reported to `DiagnosticItem`s.
 ///
 /// The spans come from each error's own miette labels rather than from a
 /// match over the variants: every variant already labels the token it is
 /// about, so an error added to the parser reaches the editor without a
 /// second place to update. An error that labels nothing is still surfaced,
 /// anchored at the start of the query.
-pub fn parser_v2_error_diagnostic_items(
+pub fn parser_error_diagnostic_items(
     query: &str,
     errors: &[mpl_lang::parser::ParseError],
 ) -> Vec<DiagnosticItem> {
@@ -324,7 +324,7 @@ pub fn parser_v2_error_diagnostic_items(
         .flat_map(|e| {
             let message = e.to_string();
             let help = e.help().map(|h| h.to_string());
-            let actions = parser_v2_error_actions(query, e);
+            let actions = parser_error_actions(query, e);
             let items: Vec<_> = e
                 .labels()
                 .into_iter()
@@ -357,11 +357,11 @@ pub fn parser_v2_error_diagnostic_items(
         .collect()
 }
 
-/// Quick-fixes for one error the v2 parser produced.
+/// Quick-fixes for one error the parser produced.
 ///
 /// A misspelled function is the case worth repairing: the name is close to one
 /// the slot accepts, so the fix is to offer those names.
-fn parser_v2_error_actions(query: &str, e: &mpl_lang::parser::ParseError) -> Vec<DiagnosticAction> {
+fn parser_error_actions(query: &str, e: &mpl_lang::parser::ParseError) -> Vec<DiagnosticAction> {
     let mpl_lang::parser::ParseError::UnknownFunction { name, span } = e else {
         return vec![];
     };
