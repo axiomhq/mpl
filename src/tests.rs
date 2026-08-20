@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use miette::NarratableReportHandler;
 
 use crate::{
-    CompileError, TypeError, parser2,
+    CompileError, TypeError, parser,
     query::{Cmp, DirectiveValue, Expr, Filter, ParamType, TagType, TerminalParamType},
 };
 
@@ -310,7 +310,7 @@ $dataset:metric
     let Err(CompileError::ParserV2(errors)) = &res else {
         panic!("Expected param declared twice error, got {res:?}")
     };
-    let [parser2::ParseError::ParamDeclaredTwice { name, .. }] = errors.as_slice() else {
+    let [parser::ParseError::ParamDeclaredTwice { name, .. }] = errors.as_slice() else {
         panic!("Expected param declared twice error, got {errors:?}")
     };
     assert_eq!("dataset", name);
@@ -324,7 +324,7 @@ fn parse_params_undefined() {
     let Err(CompileError::ParserV2(errors)) = &res else {
         panic!("Expected undefined variable error, got {res:?}")
     };
-    let [parser2::ParseError::UndefinedVariable { name, .. }] = errors.as_slice() else {
+    let [parser::ParseError::UndefinedVariable { name, .. }] = errors.as_slice() else {
         panic!("Expected undefined variable error, got {errors:?}")
     };
     assert_eq!("dataset", name);
@@ -346,7 +346,7 @@ $dataset:metric
     assert!(
         errors.iter().any(|e| matches!(
             e,
-            parser2::ParseError::InvalidVariableType {
+            parser::ParseError::InvalidVariableType {
                 expected: ParamType::Terminal(TerminalParamType::Duration),
                 actual: ParamType::Terminal(TerminalParamType::Dataset),
                 ..
@@ -409,7 +409,7 @@ dataset:metric
     assert!(
         errors.iter().any(|e| matches!(
             e,
-            parser2::ParseError::InvalidVariableType {
+            parser::ParseError::InvalidVariableType {
                 expected: ParamType::Terminal(TerminalParamType::Dataset),
                 actual: ParamType::Terminal(TerminalParamType::Duration),
                 ..
@@ -496,7 +496,7 @@ fn in_non_array_param_requires_array_error() {
     assert!(
         matches!(
             errors.as_slice(),
-            [parser2::ParseError::InRequiresArray { .. }]
+            [parser::ParseError::InRequiresArray { .. }]
         ),
         "expected an in-requires-array error, got: {errors:?}"
     );

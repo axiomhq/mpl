@@ -14,7 +14,7 @@ pub mod ast;
 /// The lexer for the MPL query language.
 pub mod lexer;
 /// new v2 parser
-pub mod parser2;
+pub mod parser;
 /// rowan syntax tree for the MPL query language.
 pub mod syntax_tree;
 
@@ -68,7 +68,7 @@ pub enum CompileError {
     Ifdef(#[from] IfdefError),
     /// v2 parser error
     #[error("Encountered errors during parsing")]
-    ParserV2(#[related] Vec<parser2::ParseError>),
+    ParserV2(#[related] Vec<parser::ParseError>),
 }
 
 /// Parses and typechecks an MPL query into a Query object.
@@ -80,7 +80,7 @@ pub fn compile<H: BuildHasher>(
     // stage 1: parse
     let parser = ast::Parser::new(query);
     let ast = parser.lower();
-    let (mut query, warnings) = parser2::Parser::new(ast)
+    let (mut query, warnings) = parser::Parser::new(ast)
         .lower(system_params)
         .map_err(CompileError::ParserV2)?;
     // stage 2: typecheck

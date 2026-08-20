@@ -312,7 +312,7 @@ pub fn group_error_diagnostic_items(e: &GroupError) -> Vec<DiagnosticItem> {
 /// anchored at the start of the query.
 pub fn parser_v2_error_diagnostic_items(
     query: &str,
-    errors: &[mpl_lang::parser2::ParseError],
+    errors: &[mpl_lang::parser::ParseError],
 ) -> Vec<DiagnosticItem> {
     // One malformed token makes the parser report the same problem from each
     // stage that trips over it, so an editor would draw the same squiggle
@@ -361,11 +361,8 @@ pub fn parser_v2_error_diagnostic_items(
 ///
 /// A misspelled function is the case worth repairing: the name is close to one
 /// the slot accepts, so the fix is to offer those names.
-fn parser_v2_error_actions(
-    query: &str,
-    e: &mpl_lang::parser2::ParseError,
-) -> Vec<DiagnosticAction> {
-    let mpl_lang::parser2::ParseError::UnknownFunction { name, span } = e else {
+fn parser_v2_error_actions(query: &str, e: &mpl_lang::parser::ParseError) -> Vec<DiagnosticAction> {
+    let mpl_lang::parser::ParseError::UnknownFunction { name, span } = e else {
         return vec![];
     };
     let span = Span::new(span.offset(), span.offset() + span.len());

@@ -3,7 +3,7 @@ use test_case::test_case;
 
 use crate::{
     enc_regex::EncodableRegex,
-    parser2::ParseParamError,
+    parser::ParseParamError,
     query::{
         Cmp, Expr, Filter, FilterOrIfDef, ParamDeclaration, ParamType, ParamValue,
         ParseProvidedParamsError, ProvidedParam, ProvidedParams, Query, RelativeTime, ResolveError,

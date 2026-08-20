@@ -14,7 +14,7 @@ use strumbra::SharedString;
 use crate::{
     enc_regex::EncodableRegex,
     linker::{AlignFunction, ComputeFunction, GroupFunction, MapFunction},
-    parser2::{self, ParseParamError},
+    parser::{self, ParseParamError},
     tags::TagValue,
     time::{Resolution, ResolutionError},
     types::{BucketSpec, BucketType, Dataset, Metric, Parameterized},
@@ -606,7 +606,7 @@ pub enum WarningReason {
     /// lowercase duration
     OldDuration,
     /// Parser v2 warning
-    ParserV2(parser2::Warning),
+    ParserV2(parser::Warning),
 }
 
 impl Display for WarningReason {
@@ -637,8 +637,8 @@ pub struct Warning {
     source: Option<SourceSpan>,
     warning: WarningReason,
 }
-impl From<parser2::Warning> for Warning {
-    fn from(warning: parser2::Warning) -> Self {
+impl From<parser::Warning> for Warning {
+    fn from(warning: parser::Warning) -> Self {
         Warning {
             source: Some(warning.span()),
             warning: WarningReason::ParserV2(warning),
@@ -763,7 +763,7 @@ impl ProvidedParams {
                 continue;
             };
 
-            let value = parser2::parse_param_value(mpl_param, value).map_err(|err| {
+            let value = parser::parse_param_value(mpl_param, value).map_err(|err| {
                 ParseProvidedParamsError::ParseParam {
                     param_name: name.to_string(),
                     expected_type: mpl_param.typ,
