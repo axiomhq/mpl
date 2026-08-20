@@ -601,3 +601,31 @@ fn a_negative_float_keeps_its_sign() {
     });
     assert_eq!(TagValue::Float(-1.5), value);
 }
+
+/// The constant an expression lowers to. `Parser::expr_value` is the second place a `CONST`
+/// is reached — an argument rather than a filter operand — and it walks its own children.
+fn const_expr_value(src: &str) -> TagValue {
+    let SyntaxExpr {
+        expr: Expr::Const(value),
+        ..
+    } = lower_first(src, SyntaxKind::CONST, Parser::expr_value)
+    else {
+        panic!("{src:?} did not lower to a constant")
+    };
+    value
+}
+
+/// An argument keeps the sign the source wrote, so an assigned value is the number it reads as.
+#[test]
+fn a_negative_integer_argument_keeps_its_sign() {
+    assert_eq!(
+        TagValue::Int(-42),
+        const_expr_value("ds:m | extend x = -42")
+    );
+}
+
+/// The same for a float, so `map * -1.5` flips the sign of what it scales.
+#[test]
+fn a_negative_float_argument_keeps_its_sign() {
+    assert_eq!(TagValue::Float(-1.5), const_expr_value("ds:m | map * -1.5"));
+}
