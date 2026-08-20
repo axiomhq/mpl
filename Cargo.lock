@@ -623,7 +623,6 @@ dependencies = [
  "rowan",
  "serde",
  "serde_json",
- "serde_regex",
  "strsim",
  "strum",
  "strumbra",
@@ -933,16 +932,6 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
-]
-
-[[package]]
-name = "serde_regex"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bafc8d0c5330cecff10f16b459b479fd9acaa5b4acd7167301414e21b0057012"
-dependencies = [
- "regex",
- "serde",
 ]
 
 [[package]]
