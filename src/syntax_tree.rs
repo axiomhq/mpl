@@ -156,6 +156,8 @@ pub enum SyntaxKind {
     EXPR,
     REGEX,
     CONST,
+    PLUS,
+    MINUS,
     INTEGER,
     FLOAT,
     BOOL,
@@ -511,6 +513,7 @@ impl<'input> Parser<'input> {
     }
 }
 
+#[derive(Debug)]
 /// Represents a parsed syntax tree.
 pub struct SyntaxTree {
     /// root node
@@ -700,7 +703,15 @@ impl Parser<'_> {
     fn constant(&mut self) {
         self.node(CONST, |s| {
             // we first consume all the + and - in the world
-            while s.try_structural(TokenType::Plus) || s.try_structural(TokenType::Minus) {}
+            loop {
+                if s.is_structural(TokenType::Plus) {
+                    s.node(PLUS, |s| s.eat_token_type(TokenType::Plus));
+                } else if s.is_structural(TokenType::Minus) {
+                    s.node(MINUS, |s| s.eat_token_type(TokenType::Minus));
+                } else {
+                    break;
+                }
+            }
             let token = s.peek();
             match token.tpe() {
                 TokenType::Inf => {

@@ -731,10 +731,7 @@ impl ProvidedParams {
         let params = query_params
             .iter()
             .filter_map(|(name, value)| {
-                if !name.starts_with(PREFIX) {
-                    return None;
-                }
-                let name = name.trim_start_matches(PREFIX);
+                let name = name.strip_prefix(PREFIX)?;
                 if name.is_empty() {
                     return None;
                 }
