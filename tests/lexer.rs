@@ -71,7 +71,8 @@ fn lex_ws(input: &str) -> String {
 // Operators
 //
 // The `<>` / `=<` / `=>` cases are regression guards: each was accepted as a single
-// comparison token at some point, and none of them is an MPL operator (mpl.pest:84).
+// comparison token at some point, and none of them is an MPL operator (spec.md, Filter
+// Expression).
 // ---------------------------------------------------------------------------------------
 
 #[test_case("a == 1" => "Ident(a) == Integer(1)"     ; "equal equal")]
@@ -103,7 +104,7 @@ fn operators(src: &str) -> String {
 #[test_case("0"        => "Integer(0)"                 ; "zero")]
 #[test_case("42"       => "Integer(42)"                ; "integer")]
 #[test_case("1.5"      => "Float(1.5)"             ; "float")]
-#[test_case("2."       => "Float(2.)"              ; "trailing dot float is legal per mpl.pest:31")]
+#[test_case("2."       => "Float(2.)"              ; "a trailing dot is part of the float")]
 #[test_case("f(2., 3)" => "Ident(f) ( Float(2.) , Integer(3) )" ; "trailing dot before delimiter")]
 #[test_case("300..600" => "Integer(300) .. Integer(600)"   ; "timestamp range")]
 #[test_case("1..2"     => "Integer(1) .. Integer(2)"       ; "single digit range")]
@@ -127,8 +128,8 @@ fn numbers_and_ranges(src: &str) -> String {
 // it would buy nothing, because the parser matches the text either way.
 //
 // `filter` and `is` are why the alternative cannot be patched into working: each is both a
-// grammar keyword (mpl.pest:96, :87) and a stdlib module (src/stdlib.rs), and `func` is
-// `(module ~ "::")* ~ ident` (mpl.pest:124), so there is no keyword reading of
+// a rule name and a stdlib module (src/stdlib.rs), and a function path is
+// `(module ::)* ident` (`Parser::function_path`), so there is no keyword reading of
 // `map filter::gt(1)` — a query that ships in tests/examples/map-gt.mpl:2.
 // ---------------------------------------------------------------------------------------
 
@@ -149,13 +150,12 @@ fn identifiers(src: &str) -> String {
 // Value literals
 //
 // `true`, `false` and `inf` are the only words the lexer resolves, because they are values
-// rather than names — `inf` is a number in the grammar (`number = { inf | float | int }`,
-// mpl.pest:30). They therefore behave like the numeric tokens, sign included: `+inf` splits
-// its sign exactly as `-5` lexes as `-` `Integer(5)`.
+// rather than names — `inf` is a number (spec.md, Float). They therefore behave like the
+// numeric tokens, sign included: `+inf` splits its sign exactly as `-5` lexes as `-`
+// `Integer(5)`.
 //
-// The grammar spells the boundary out as `word_boundary` (mpl.pest:27-33); the lexer gets it
-// from maximal munch instead, so the cases worth having are the ones where a longer ident
-// starts with a literal.
+// The lexer takes the word boundary from maximal munch, so the cases worth having are the
+// ones where a longer ident starts with a literal.
 // ---------------------------------------------------------------------------------------
 
 #[test_case("true"           => "true"                    ; "true literal")]
@@ -198,8 +198,8 @@ fn escaped_identifiers(src: &str) -> String {
 // ---------------------------------------------------------------------------------------
 // Strings
 //
-// A string literal and an escaped identifier are different productions (mpl.pest:19 vs :5),
-// so they must not collapse to the same token kind.
+// A string literal and an escaped identifier are different things (spec.md, String and
+// Identifiers), so they must not collapse to the same token kind.
 // ---------------------------------------------------------------------------------------
 
 #[test_case("\"foo\""       => "String(\"foo\")"                  ; "plain")]

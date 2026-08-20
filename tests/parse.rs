@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::fs;
 
 use miette::{GraphicalReportHandler, GraphicalTheme, NamedSource, Report};
+use mpl_lang::CompileError;
 use mpl_lang::query::{ParamType, TerminalParamType};
-use mpl_lang::{CompileError, ParseError};
 
 /// Renders `err` the way a user would see it: the labels point into the
 /// example and the report is named for the file it came from, so a failure
@@ -29,12 +29,6 @@ fn report(file_name: &str, content: &str, err: CompileError) -> String {
 fn check<T>(label: &str, file_name: &str, content: &str, r: Result<T, CompileError>) {
     match r {
         Ok(_) => println!("  {label}: parsed successfully"),
-        Err(CompileError::Parse(ParseError::NotSupported { span, rule })) => {
-            println!("  {label}: parsed, unsupported by the backend: {span:?}, {rule:?}");
-        }
-        Err(CompileError::Parse(ParseError::NotImplemented(feature))) => {
-            println!("  {label}: parsed, not yet implemented: {feature}");
-        }
         Err(e) => panic!(
             "{label} rejected {file_name}:\n{}",
             report(file_name, content, e)
@@ -65,10 +59,10 @@ fn parse_examples() {
                 mpl_lang::compile(&content, params.clone()),
             );
             check(
-                "compile2",
+                "compile",
                 file_name,
                 &content,
-                mpl_lang::compile2(&content, params),
+                mpl_lang::compile(&content, params),
             );
         });
 }
@@ -91,9 +85,6 @@ fn parse_unimplemented_examples() {
             let content = fs::read_to_string(&path).unwrap();
             match mpl_lang::compile(&content, HashMap::new()) {
                 Ok(_) => panic!("{file_name} compiled but is expected to fail"),
-                Err(CompileError::Parse(ParseError::NotSupported { span, rule })) => {
-                    panic!("{file_name} parsed but is unsupported: {span:?}, {rule:?}")
-                }
                 Err(e) => println!("Failing as expected:\n{}", report(file_name, &content, e)),
             }
         });

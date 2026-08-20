@@ -248,8 +248,8 @@ fn ident_escapes(literal: &str) -> String {
     ident_name(literal)
 }
 
-/// `\uXXXX` is a sequence the grammar spells (`src/mpl.pest:9`, `:25`) and this lowering does
-/// not resolve, so it is reported. Asserted through the diagnostic rather than the value,
+/// `\uXXXX` lexes as an escape and sits outside the alphabet this lowering resolves, so it
+/// is reported. Asserted through the diagnostic rather than the value,
 /// because lowering hands back a string either way: a caller that reads the value without
 /// reading `errors()` sees a plausible name and no sign that four hex digits were meant to be
 /// one character.
@@ -581,4 +581,51 @@ fn test_e_notation() {
     }
     assert!(ast.errors.is_empty());
     dbg!(&ast.parts);
+}
+
+/// A sign is a token `CONST` collects alongside the number it wraps
+/// (`tests/syntax_tree.rs::constants`), so lowering has to fold it into the value.
+#[test]
+fn a_negative_integer_keeps_its_sign() {
+    let value = lower_first("ds:m | where x == -42", SyntaxKind::CONST, |p, n| {
+        p.constant(&n)
+    });
+    assert_eq!(TagValue::Int(-42), value);
+}
+
+/// The same for floats: the sign sits outside `FLOAT`, so lowering has to apply it.
+#[test]
+fn a_negative_float_keeps_its_sign() {
+    let value = lower_first("ds:m | where x == -1.5", SyntaxKind::CONST, |p, n| {
+        p.constant(&n)
+    });
+    assert_eq!(TagValue::Float(-1.5), value);
+}
+
+/// The constant an expression lowers to. `Parser::expr_value` is the second place a `CONST`
+/// is reached — an argument rather than a filter operand — and it walks its own children.
+fn const_expr_value(src: &str) -> TagValue {
+    let SyntaxExpr {
+        expr: Expr::Const(value),
+        ..
+    } = lower_first(src, SyntaxKind::CONST, Parser::expr_value)
+    else {
+        panic!("{src:?} did not lower to a constant")
+    };
+    value
+}
+
+/// An argument keeps the sign the source wrote, so an assigned value is the number it reads as.
+#[test]
+fn a_negative_integer_argument_keeps_its_sign() {
+    assert_eq!(
+        TagValue::Int(-42),
+        const_expr_value("ds:m | extend x = -42")
+    );
+}
+
+/// The same for a float, so `map * -1.5` flips the sign of what it scales.
+#[test]
+fn a_negative_float_argument_keeps_its_sign() {
+    assert_eq!(TagValue::Float(-1.5), const_expr_value("ds:m | map * -1.5"));
 }

@@ -13,12 +13,10 @@
 pub mod ast;
 /// The lexer for the MPL query language.
 pub mod lexer;
-mod parser;
-/// new v2 parser
-pub mod parser2;
+/// Lowers the AST into a `Query`.
+pub mod parser;
 /// rowan syntax tree for the MPL query language.
 pub mod syntax_tree;
-pub use parser::{MPLParser, Rule};
 
 pub mod enc_regex;
 pub mod errors;
@@ -38,9 +36,7 @@ use std::{
     hash::BuildHasher,
 };
 
-pub use errors::ParseError;
 use miette::{Diagnostic, SourceOffset, SourceSpan};
-use pest::Parser as _;
 pub use query::Query;
 
 pub use stdlib::STDLIB;
@@ -57,10 +53,6 @@ use crate::{
 /// Compile error
 #[derive(Debug, thiserror::Error, Diagnostic)]
 pub enum CompileError {
-    /// Parse error
-    #[error(transparent)]
-    #[diagnostic(transparent)]
-    Parse(#[from] ParseError),
     /// Typecheck error
     #[error(transparent)]
     #[diagnostic(transparent)]
@@ -74,45 +66,23 @@ pub enum CompileError {
     #[error(transparent)]
     #[diagnostic(transparent)]
     Ifdef(#[from] IfdefError),
-    /// v2 parser error
+    /// Parser error
     #[error("Encountered errors during parsing")]
-    ParserV2(#[related] Vec<parser2::ParseError>),
+    Parser(#[related] Vec<parser::ParseError>),
 }
 
 /// Parses and typechecks an MPL query into a Query object.
 #[allow(clippy::result_large_err)]
-pub fn compile<S: BuildHasher>(
-    query: &str,
-    system_params: HashMap<String, ParamType, S>,
-) -> Result<(Query, Warnings), CompileError> {
-    // stage 1: parse
-    let mut parse = MPLParser::parse(Rule::file, query).map_err(ParseError::from)?;
-    let (mut query, warnings) = parser::Parser::default().parse_query(&mut parse, system_params)?;
-    // stage 2: typecheck
-    let mut visitor = ParamTypecheckVisitor {};
-    visitor.walk(&mut query)?;
-    // stage 3: group check
-    let mut visitor = GroupCheckVisitor::default();
-    visitor.walk(&mut query)?;
-
-    let mut visitor = OptionCheckVisitor::default();
-    visitor.walk(&mut query)?;
-
-    Ok((query, warnings))
-}
-
-/// Parses and typechecks an MPL query into a Query object.
-#[allow(clippy::result_large_err)]
-pub fn compile2<H: BuildHasher>(
+pub fn compile<H: BuildHasher>(
     query: &str,
     system_params: HashMap<String, ParamType, H>,
 ) -> Result<(Query, Warnings), CompileError> {
     // stage 1: parse
     let parser = ast::Parser::new(query);
     let ast = parser.lower();
-    let (mut query, warnings) = parser2::Parser::new(ast)
+    let (mut query, warnings) = parser::Parser::new(ast)
         .lower(system_params)
-        .map_err(CompileError::ParserV2)?;
+        .map_err(CompileError::Parser)?;
     // stage 2: typecheck
     let mut visitor = ParamTypecheckVisitor {};
     visitor.walk(&mut query)?;
@@ -418,8 +388,8 @@ impl QueryVisitor for ParamTypecheckVisitor {
             }
             Cmp::Eq(Expr::Param { span, param }) => {
                 if param.typ() == TerminalParamType::Regex {
-                    // we have a regex param in an eq
-                    // this happens because we cannot detect this in pest
+                    // a regex param in an eq: the parser sees a variable, and only
+                    // the declaration says it holds a regex
                     //
                     // this is | filter foo == #/bar/ vs | filter foo == $bar_re
                     *cmp = Cmp::RegEx(Parameterized::Param {
@@ -434,8 +404,8 @@ impl QueryVisitor for ParamTypecheckVisitor {
             }
             Cmp::Ne(Expr::Param { span, param }) => {
                 if param.typ() == TerminalParamType::Regex {
-                    // we have a regex param in ne
-                    // this happens because we cannot detect this in pest
+                    // a regex param in ne: the parser sees a variable, and only
+                    // the declaration says it holds a regex
                     //
                     // this is | filter foo != #/bar/ vs | filter foo != $bar_re
                     *cmp = Cmp::RegExNot(Parameterized::Param {

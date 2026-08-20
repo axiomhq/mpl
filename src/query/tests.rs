@@ -1,7 +1,9 @@
 use miette::SourceSpan;
+use test_case::test_case;
 
 use crate::{
     enc_regex::EncodableRegex,
+    parser::ParseParamError,
     query::{
         Cmp, Expr, Filter, FilterOrIfDef, ParamDeclaration, ParamType, ParamValue,
         ParseProvidedParamsError, ProvidedParam, ProvidedParams, Query, RelativeTime, ResolveError,
@@ -161,30 +163,6 @@ fn provided_params_array_rejects_scalar_value() {
         res => panic!("expected parse param error, got {res:?}"),
     }
 }
-
-#[test]
-fn provided_params_array_rejects_interpolated_element() {
-    // Provided values are literals; an interpolated string element has no
-    // meaning here and must be rejected rather than silently stringified.
-    let mpl_params = vec![ParamDeclaration {
-        span: SourceSpan::from(0..0),
-        name: "hosts".to_string(),
-        typ: ParamType::Terminal(TerminalParamType::Tag(TagType::Array)),
-    }];
-
-    let query_params = vec![("param__hosts".to_string(), "[\"${ x }\"]".to_string())];
-
-    match ProvidedParams::parse_and_validate(&mpl_params, &query_params) {
-        Err(ParseProvidedParamsError::ParseParam { err, .. }) => {
-            assert!(
-                err.to_string().contains("Unsupported Array element"),
-                "expected an unsupported-element error, got: {err}"
-            );
-        }
-        res => panic!("expected parse param error, got {res:?}"),
-    }
-}
-
 #[test]
 fn resolve_array_param_to_const_array() {
     let provided_params = ProvidedParams::new(vec![ProvidedParam::new(
@@ -265,8 +243,8 @@ fn provided_params_duplicates() {
 
     let query_params = [
         ("lol", "whatever, this should be ignored"),
-        ("param__dataset", "my-metrics"),
-        ("param__dataset", "my-metrics-2"),
+        ("param__dataset", "mymetrics"),
+        ("param__dataset", "`my-metrics-2`"),
         ("param____interval", "1m"),
         ("param____interval", "5m"),
     ]
@@ -382,6 +360,150 @@ fn too_many_provided_params() {
             // ok
         }
         res => panic!("expected too many params error, got {res:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// Provided param values
+//
+// A provided value is parsed on its own, against the type its declaration gives it: the
+// value tree holds one node and the declared type picks the production that reads it
+// (`parser2::parse_param_value`). So a case here pins a pair — the same text is a different
+// value, or an error, depending on what the query declared.
+// ---------------------------------------------------------------------------------------
+
+/// The value `src` carries when it arrives for a param declared as `typ`.
+fn provided_value(typ: ParamType, src: &str) -> Result<ParamValue, ParseProvidedParamsError> {
+    let declared = vec![ParamDeclaration {
+        span: SourceSpan::from(0..0),
+        name: "p".to_string(),
+        typ,
+    }];
+    let provided = [("param__p".to_string(), src.to_string())];
+    let (params, _) = ProvidedParams::parse_and_validate(&declared, &provided)?;
+    Ok(params
+        .as_slice()
+        .first()
+        .expect("the provided param")
+        .value
+        .clone())
+}
+
+#[test_case(TerminalParamType::Tag(TagType::Int),    "42 43"       ; "a number followed by another")]
+#[test_case(TerminalParamType::Tag(TagType::String), "\"a\" \"b\"" ; "two strings")]
+#[test_case(TerminalParamType::Tag(TagType::Array),  "[1] [2]"     ; "two arrays")]
+#[test_case(TerminalParamType::Dataset,              "`a` `b`"     ; "two dataset names")]
+#[test_case(TerminalParamType::Duration,             "42s 1m"      ; "two durations")]
+#[test_case(TerminalParamType::Regex,                "#/a/ #/b/"   ; "two regexes")]
+fn a_provided_value_is_the_whole_string(typ: TerminalParamType, src: &str) {
+    match provided_value(ParamType::Terminal(typ), src) {
+        Err(ParseProvidedParamsError::ParseParam { param_name, .. }) => {
+            assert_eq!("p", param_name);
+        }
+        res => panic!("{src:?} was expected to be rejected, got {res:?}"),
+    }
+}
+
+/// A provided value carries the sign the caller sent, so a bound given as a negative number
+/// filters below zero rather than above its mirror.
+#[test_case(TagType::Int,   "-42"  => ParamValue::Int(-42)    ; "a negative integer")]
+#[test_case(TagType::Float, "-1.5" => ParamValue::Float(-1.5) ; "a negative float")]
+fn a_provided_value_keeps_its_sign(tag: TagType, src: &str) -> ParamValue {
+    provided_value(ParamType::Terminal(TerminalParamType::Tag(tag)), src).expect("a signed value")
+}
+
+/// An empty value is a value the declared type has no text to read.
+#[test]
+fn an_empty_provided_value_is_rejected() {
+    match provided_value(
+        ParamType::Terminal(TerminalParamType::Tag(TagType::String)),
+        "",
+    ) {
+        Err(ParseProvidedParamsError::ParseParam { param_name, .. }) => {
+            assert_eq!("p", param_name);
+        }
+        res => panic!("an empty value was expected to be rejected, got {res:?}"),
+    }
+}
+
+/// `Option` says whether a value has to arrive, so a value that does arrive is read as the
+/// terminal type it wraps.
+#[test]
+fn an_optional_param_reads_its_value_as_the_terminal_type() {
+    assert_eq!(
+        ParamValue::Int(42),
+        provided_value(
+            ParamType::Optional(TerminalParamType::Tag(TagType::Int)),
+            "42"
+        )
+        .expect("an optional int")
+    );
+}
+
+/// The declaration decides what the text has to spell, so a quoted number is a string and a
+/// param declared `int` says so rather than coercing it.
+#[test]
+fn a_value_of_the_wrong_type_reports_both_types() {
+    match provided_value(
+        ParamType::Terminal(TerminalParamType::Tag(TagType::Int)),
+        "\"42\"",
+    ) {
+        Err(ParseProvidedParamsError::ParseParam {
+            err: ParseParamError::TypeMismatch { declared, found },
+            ..
+        }) => {
+            assert_eq!(
+                ParamType::Terminal(TerminalParamType::Tag(TagType::Int)),
+                declared
+            );
+            assert_eq!(TerminalParamType::Tag(TagType::String), found);
+        }
+        res => panic!("expected a type mismatch, got {res:?}"),
+    }
+}
+
+/// `null` names the absence of a value, so a param declared with it has nothing a caller
+/// could send.
+#[test]
+fn a_null_param_takes_no_value() {
+    match provided_value(
+        ParamType::Terminal(TerminalParamType::Tag(TagType::Null)),
+        "null",
+    ) {
+        Err(ParseProvidedParamsError::ParseParam { err, .. }) => {
+            assert!(
+                matches!(err, ParseParamError::NoneParam),
+                "expected a null param to be refused, got: {err}"
+            );
+        }
+        res => panic!("expected a parse param error, got {res:?}"),
+    }
+}
+
+#[test_case("42s"    => 42    ; "seconds are the unit already")]
+#[test_case("5m"     => 300   ; "minutes")]
+#[test_case("2h"     => 7200  ; "hours")]
+#[test_case("1d"     => 86400 ; "days")]
+#[test_case("2000ms" => 2     ; "milliseconds divide down")]
+fn a_duration_param_arrives_in_seconds(src: &str) -> u64 {
+    let value =
+        provided_value(ParamType::Terminal(TerminalParamType::Duration), src).expect("a duration");
+    let ParamValue::Duration(RelativeTime { value, unit }) = value else {
+        panic!("{src:?} parsed as {value:?}")
+    };
+    assert_eq!(TimeUnit::Second, unit);
+    value
+}
+
+/// A second is the smallest step a duration resolves to, so a shorter one is reported rather
+/// than rounded up behind the caller's back.
+#[test]
+fn a_duration_param_below_a_second_is_rejected() {
+    match provided_value(ParamType::Terminal(TerminalParamType::Duration), "500ms") {
+        Err(ParseProvidedParamsError::ParseParam { param_name, .. }) => {
+            assert_eq!("p", param_name);
+        }
+        res => panic!("expected a sub-second duration to be rejected, got {res:?}"),
     }
 }
 

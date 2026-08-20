@@ -50,17 +50,15 @@ struct Args {
 /// Corpus mode
 #[derive(Default, Clone, Copy, clap::ValueEnum)]
 enum CorpusMode {
-    /// Full v1 style corpus parsing
+    /// Compile every query end to end
     #[default]
     Full,
-    /// v2 Lexer
+    /// Lex only
     Lex,
-    /// v2 lexer -> sytnax tree
+    /// Lex, then build the syntax tree
     SyntaxTree,
-    /// v2 lexer -> syntax tree -> ast
+    /// Lex, syntax tree, then lower to the AST
     Ast,
-    /// Parse v2 the AST
-    Parse,
 }
 
 impl CorpusMode {
@@ -71,7 +69,6 @@ impl CorpusMode {
             CorpusMode::Lex => "lex",
             CorpusMode::SyntaxTree => "syntax-tree",
             CorpusMode::Ast => "ast",
-            CorpusMode::Parse => "parse",
         }
     }
 }
@@ -236,15 +233,6 @@ fn diagnose(
 ) -> Vec<MietteDiagnostic> {
     let diagnostics: Vec<MietteDiagnostic> = match mode {
         CorpusMode::Full => mpl_lang::compile(&entry.query, system_params.clone())
-            .err()
-            .iter()
-            .flat_map(|error| {
-                let mut out = Vec::new();
-                leaves(error, &mut out);
-                out
-            })
-            .collect(),
-        CorpusMode::Parse => mpl_lang::compile2(&entry.query, system_params.clone())
             .err()
             .iter()
             .flat_map(|error| {
@@ -673,18 +661,18 @@ mod tests {
         );
     }
 
-    /// The parse mode reports through an error that only wraps the ones the
+    /// The full mode reports through an error that only wraps the ones the
     /// parser raised: its own sentence names no query and labels no source, so
     /// a report that counted it would say a query failed without saying what
     /// about it failed. What it wraps is what reaches the report.
     #[test]
     fn a_wrapping_error_reports_what_it_wraps() {
         let entry = entry("a:b | map nosuchfn()");
-        let found = diagnose(&entry, CorpusMode::Parse, &system_params());
+        let found = diagnose(&entry, CorpusMode::Full, &system_params());
 
         assert!(
             !found.is_empty(),
-            "the parse mode accepted an unknown function"
+            "the full mode accepted an unknown function"
         );
         for diagnostic in &found {
             assert!(
@@ -704,7 +692,7 @@ mod tests {
     fn every_mode_points_into_the_source() {
         let modes = [
             (CorpusMode::Full, "a:b | filter"),
-            (CorpusMode::Parse, "a:b | map nosuchfn()"),
+            (CorpusMode::Full, "a:b | map nosuchfn()"),
             (CorpusMode::Lex, "a:b | filter x == \"unterminated"),
             (CorpusMode::SyntaxTree, "a:b | filter"),
             (CorpusMode::Ast, "a:b | filter"),

@@ -7,7 +7,7 @@ use strsim::jaro;
 
 use mpl_lang::query::{ParamType, Warning, WarningReason};
 use mpl_lang::syntax_tree::{Parser as SyntaxParser, SyntaxKind};
-use mpl_lang::{CompileError, GroupError, IfdefError, TypeError, compile2};
+use mpl_lang::{CompileError, GroupError, IfdefError, TypeError, compile};
 
 use crate::Span;
 use crate::completions::{
@@ -66,7 +66,7 @@ pub fn compute_diagnostics(
     query: &str,
     system_params: &HashMap<String, ParamType>,
 ) -> Vec<DiagnosticItem> {
-    match compile2(query, system_params.clone()) {
+    match compile(query, system_params.clone()) {
         Ok((_, warnings)) => {
             let mut items: Vec<DiagnosticItem> = warnings
                 .as_slice()
@@ -76,14 +76,11 @@ pub fn compute_diagnostics(
             items.extend(crate::lints::detect_hints(query));
             items
         }
-        // `compile2` reports a parse failure through `ParserV2`; this arm keeps
-        // the match total.
-        Err(CompileError::Parse(_)) => vec![],
         Err(CompileError::Type(error)) => type_error_diagnostic_items(&error),
         Err(CompileError::Group(error)) => group_error_diagnostic_items(&error),
         Err(CompileError::Ifdef(error)) => ifdef_error_diagnostic_items(&error),
-        Err(CompileError::ParserV2(errors)) => {
-            let items = parser_v2_error_diagnostic_items(query, &errors);
+        Err(CompileError::Parser(errors)) => {
+            let items = parser_error_diagnostic_items(query, &errors);
             maybe_rewrite_escaped_dataset_error(query, items)
         }
     }
@@ -127,7 +124,7 @@ pub fn warning_to_diagnostic_item(w: &Warning) -> DiagnosticItem {
             },
             WarningReason::ParamNotDeclared(_)
             | WarningReason::ParamUsingSystemPrefix { .. }
-            | WarningReason::ParserV2(_) => DiagnosticItem {
+            | WarningReason::Parser(_) => DiagnosticItem {
                 span,
                 severity: Severity::Warning,
                 message: w.warning().to_string(),
@@ -306,16 +303,38 @@ pub fn group_error_diagnostic_items(e: &GroupError) -> Vec<DiagnosticItem> {
     }
 }
 
-/// Convert the errors the v2 parser reported to `DiagnosticItem`s.
+/// The span of the declaration a parser error points back to, as `(offset, len)`.
+///
+/// Some parser errors carry two labels: the place the query goes wrong, and the
+/// declaration that makes it wrong. Which label is the declaration is a
+/// property of the variant, so it is read from the variant — the labels arrive
+/// in field order, which for a re-declaration puts the earlier span first.
+fn declaration_span(e: &mpl_lang::parser::ParseError) -> Option<(usize, usize)> {
+    use mpl_lang::parser::ParseError;
+
+    let span = match e {
+        ParseError::InvalidVariableType {
+            declaration_span, ..
+        } => declaration_span,
+        ParseError::MustBeOptional { decl_span, .. } => decl_span,
+        ParseError::ParamDeclaredTwice { first_span, .. } => first_span,
+        _ => return None,
+    };
+    Some((span.offset(), span.len()))
+}
+
+/// Convert the errors the parser reported to `DiagnosticItem`s.
 ///
 /// The spans come from each error's own miette labels rather than from a
 /// match over the variants: every variant already labels the token it is
 /// about, so an error added to the parser reaches the editor without a
-/// second place to update. An error that labels nothing is still surfaced,
-/// anchored at the start of the query.
-pub fn parser_v2_error_diagnostic_items(
+/// second place to update. What the variant decides is severity: a label
+/// naming a declaration is a note beside the error, not a second error. An
+/// error that labels nothing is still surfaced, anchored at the start of the
+/// query.
+pub fn parser_error_diagnostic_items(
     query: &str,
-    errors: &[mpl_lang::parser2::ParseError],
+    errors: &[mpl_lang::parser::ParseError],
 ) -> Vec<DiagnosticItem> {
     // One malformed token makes the parser report the same problem from each
     // stage that trips over it, so an editor would draw the same squiggle
@@ -327,15 +346,28 @@ pub fn parser_v2_error_diagnostic_items(
         .flat_map(|e| {
             let message = e.to_string();
             let help = e.help().map(|h| h.to_string());
-            let actions = parser_v2_error_actions(query, e);
+            let actions = parser_error_actions(query, e);
+            let declaration = declaration_span(e);
             let items: Vec<_> = e
                 .labels()
                 .into_iter()
                 .flatten()
                 .map(|label| {
                     let src = label.inner();
+                    let span = Span::new(src.offset(), src.offset() + src.len());
+
+                    if declaration == Some((src.offset(), src.len())) {
+                        return DiagnosticItem {
+                            span,
+                            severity: Severity::Info,
+                            message: label.label().unwrap_or("declared here").to_string(),
+                            help: None,
+                            actions: vec![],
+                        };
+                    }
+
                     DiagnosticItem {
-                        span: Span::new(src.offset(), src.offset() + src.len()),
+                        span,
                         severity: Severity::Error,
                         message: message.clone(),
                         help: help.clone(),
@@ -360,15 +392,12 @@ pub fn parser_v2_error_diagnostic_items(
         .collect()
 }
 
-/// Quick-fixes for one error the v2 parser produced.
+/// Quick-fixes for one error the parser produced.
 ///
 /// A misspelled function is the case worth repairing: the name is close to one
 /// the slot accepts, so the fix is to offer those names.
-fn parser_v2_error_actions(
-    query: &str,
-    e: &mpl_lang::parser2::ParseError,
-) -> Vec<DiagnosticAction> {
-    let mpl_lang::parser2::ParseError::UnknownFunction { name, span } = e else {
+fn parser_error_actions(query: &str, e: &mpl_lang::parser::ParseError) -> Vec<DiagnosticAction> {
+    let mpl_lang::parser::ParseError::UnknownFunction { name, span } = e else {
         return vec![];
     };
     let span = Span::new(span.offset(), span.offset() + span.len());

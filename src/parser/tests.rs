@@ -1,167 +1,249 @@
+//! Tests for lowering the AST to a `Query`.
+//!
+//! A child module rather than a file under `tests/`, because the cases read the `ParseError`
+//! variants `lower` produces. Going through `compile` would fold them into a `CompileError`
+//! and run the typecheck visitors on top, so a case could no longer say which stage rejected
+//! the query.
 use std::collections::HashMap;
 
-use ordered_float::OrderedFloat;
-use pest::Parser;
+use test_case::test_case;
 
 use super::*;
 
-#[test]
-fn test_relative_time() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let mut parse = MPLParser::parse(Rule::time, "1h")?;
-    assert_eq!(parse.len(), 1);
-    assert_eq!(parse.as_str(), "1h");
-    let next = parse.next().expect("EOF");
-    assert_eq!(next.as_rule(), Rule::time_relative);
-    let mut inner = next.into_inner();
-    assert_eq!(inner.len(), 2);
-    assert_eq!(inner.as_str(), "1h");
-    let next = inner.next().expect("EOF");
-    assert_eq!(next.as_rule(), Rule::time_unit_digits);
-    assert_eq!(next.as_str(), "1");
-    let next = inner.next().expect("EOF");
-    assert_eq!(next.as_rule(), Rule::time_unit_hour);
-    assert_eq!(next.as_str(), "h");
-    Ok(())
-}
-#[test]
-fn test_timestamp() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let mut parse = MPLParser::parse(Rule::time, "11233145")?;
-    assert_eq!(parse.len(), 1);
-    assert_eq!(parse.as_str(), "11233145");
-    let next = parse.next().expect("EOF");
-    assert_eq!(next.as_rule(), Rule::time_timestamp);
-    assert_eq!(next.as_str(), "11233145");
-
-    Ok(())
+/// Runs the two stages `compile` runs before its visitors, so a case states a query and reads
+/// the errors a user would be shown.
+fn lower_with(
+    src: &str,
+    system_params: HashMap<String, ParamType>,
+) -> Result<(crate::Query, Vec<Warning>), Vec<ParseError>> {
+    Parser::new(ast::Parser::new(src).lower()).lower(system_params)
 }
 
-#[test]
-fn test_number() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let mut parse = MPLParser::parse(Rule::number, "123")?;
-    match parse_number(parse.next().expect("EOF"))? {
-        Number::Int(i) => assert_eq!(i, 123),
-        Number::Float(_) => panic!("Expected integer"),
+fn lower(src: &str) -> Result<(crate::Query, Vec<Warning>), Vec<ParseError>> {
+    lower_with(src, HashMap::new())
+}
+
+/// Lowers `src` and hands back its errors, printing the accepted query when there are none so
+/// a regression names what got through.
+fn errors_of(src: &str) -> Vec<ParseError> {
+    match lower(src) {
+        Ok((query, _)) => panic!("`{src}` lowered cleanly to {query:?}"),
+        Err(errors) => errors,
     }
-    Ok(())
 }
 
-#[test]
-fn test_number_float() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let mut parse = MPLParser::parse(Rule::number, "123.456")?;
-    match parse_number(parse.next().expect("EOF"))? {
-        Number::Float(f) => assert_eq!(OrderedFloat(f), OrderedFloat(123.456)),
-        Number::Int(_) => panic!("Expected float"),
-    }
-    Ok(())
-}
-
-#[test]
-fn test_compute_query_post_compute_aggregates()
--> std::result::Result<(), Box<dyn std::error::Error>> {
-    let query = "
-    (
-        test:metric_a[30m..]
-        | align to 1m using sum,
-        test:metric_b[30m..]
-        | align to 1m using sum,
-    )
-    | compute result using /
-    | map * 100
-    | align to 5m using last
-    ";
-
-    let (parsed, _) = crate::compile(query, HashMap::new())?;
-    let Query::Compute { aggregates, .. } = &parsed else {
-        panic!("expected Query::Compute, got {parsed:?}");
+/// The time an `align` or `bucket` clause carries, so a case can name the value without walking
+/// the aggregate list itself.
+fn aggregate_time(query: &crate::Query) -> Option<&Parameterized<RelativeTime>> {
+    let crate::Query::Simple { aggregates, .. } = query else {
+        return None;
     };
-
-    assert!(
-        matches!(&aggregates[0], Aggregate::Map(_)),
-        "first aggregate should be Map, got {:?}",
-        aggregates[0]
-    );
-    assert!(
-        matches!(&aggregates[1], Aggregate::Align(_)),
-        "second aggregate should be Align, got {:?}",
-        aggregates[1]
-    );
-
-    Ok(())
-}
-#[test]
-fn optional_ok() {
-    let query = "
-        param $t: Option<string>;
-        dataset:metric
-        | ifdef($t) { where tag == $t }
-    ";
-
-    assert!(crate::compile(query, HashMap::new()).is_ok());
+    aggregates.iter().find_map(|a| match a {
+        Aggregate::Align(align) => align.time.as_ref(),
+        Aggregate::Bucket(bucket) => bucket.time.as_ref(),
+        _ => None,
+    })
 }
 
+/// The AST records an error and drops the construct it belongs to. `lower` owns passing that
+/// error on: a query that reaches the backend with a construct missing runs something the user
+/// did not write.
 #[test]
-fn optional_use_without_ifdef() {
-    let query = "
-        param $t: Option<string>;
-        dataset:metric
-        | where tag == $t
-    ";
-    assert!(crate::compile(query, HashMap::new()).is_err());
-}
-
-#[test]
-fn optional_ok_with_else_branch() {
-    // Regression: `parse_where_part` used to `assert_empty()` after the
-    // if-branch, which rejected any trailing `kw_else` tokens even though
-    // the grammar accepted them. This test pins the round-trip: parsed
-    // query must compile, and the canonical Display must include the
-    // `else { ... }` clause.
-    let query = "
-        param $t: Option<string>;
-        dataset:metric
-        | ifdef($t) { where tag == $t } else { where tag == \"default\" }
-    ";
-    let (q, _) = crate::compile(query, HashMap::new()).expect("ifdef with else should compile");
-    let rendered = q.to_string();
+fn an_invalid_regex_in_a_conjunct_is_reported() {
+    let src = r#"d:m | where a == #/[/ and b == "y""#;
+    let errors = errors_of(src);
     assert!(
-        rendered.contains("} else { where "),
-        "canonical form should preserve the else branch, got:\n{rendered}"
+        errors
+            .iter()
+            .any(|e| matches!(e, ParseError::AST(AstError::InvalidRegex { .. }))),
+        "`{src}`: expected an invalid regex error, got {errors:?}"
     );
 }
 
+/// Directive values are literals. An identifier is rejected, and the rejection has to reach the
+/// caller because a dropped `set` changes how the result is rendered.
 #[test]
-fn optional_ifdef_else_without_param_reference_in_either_branch_errors() {
-    // Symmetric to `optional_ok`: when the gating param is referenced in
-    // *neither* branch, `OptionalNotUsed` still fires. The else branch is
-    // walked by the visitor too, so this proves the walker reaches it.
-    let query = "
-        param $t: Option<string>;
-        dataset:metric
-        | ifdef($t) { where tag == \"a\" } else { where tag == \"b\" }
-    ";
-    assert!(crate::compile(query, HashMap::new()).is_err());
+fn a_directive_value_that_is_not_a_literal_is_reported() {
+    let src = "set unit = bytes; d:m";
+    let errors = errors_of(src);
+    assert!(!errors.is_empty(), "`{src}`: expected an error");
+}
+
+/// `TimeType::Avg` declares no arguments, so `avg(1)` is an arity error rather than an argument
+/// the lowering may drop.
+#[test]
+fn align_rejects_an_argument_its_function_does_not_take() {
+    let src = "a:b | align using avg(1)";
+    let errors = errors_of(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ParseError::InvalidArgumentCount { .. })),
+        "`{src}`: expected an argument count error, got {errors:?}"
+    );
+}
+
+/// `TagsType::Sum` declares no arguments; the tags come from the `by` list.
+#[test]
+fn group_by_rejects_an_argument_its_function_does_not_take() {
+    let src = "a:b | group by c using sum(9)";
+    let errors = errors_of(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ParseError::InvalidArgumentCount { .. })),
+        "`{src}`: expected an argument count error, got {errors:?}"
+    );
+}
+
+/// `BucketType::args` declares the spec list as `Repeated { min: 1 }`: a bucket aggregate with
+/// no spec has no bucket to produce.
+#[test_case("a:b | bucket using histogram" ; "no parens")]
+#[test_case("a:b | bucket using histogram()" ; "empty parens")]
+fn bucket_requires_at_least_one_spec(src: &str) {
+    let errors = errors_of(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ParseError::MissingBucketSpec { .. })),
+        "`{src}`: expected a missing bucket spec error, got {errors:?}"
+    );
+}
+
+/// A duration keeps the unit it was written in, or the user is told it could not. Rounding
+/// `1500ms` down to `1s` is a 1.5x wider window than the query asked for.
+#[test_case("d:m | align to 1500ms using avg", 1500 ; "align")]
+#[test_case("d:m | bucket to 1500ms using histogram(0.5)", 1500 ; "bucket")]
+fn a_sub_second_duration_survives_or_is_reported(src: &str, millis: u64) {
+    let Ok((query, warnings)) = lower(src) else {
+        // Rejecting the duration also tells the user; what this pins is the silent rounding.
+        return;
+    };
+    let time = aggregate_time(&query).unwrap_or_else(|| panic!("`{src}` carries a time"));
+    let kept = matches!(time, Parameterized::Concrete(t) if t.value == millis && t.unit == TimeUnit::Millisecond);
+    if !kept {
+        warnings.first().unwrap_or_else(|| {
+            panic!(
+                "`{src}` lowered to {time:?} and warned about nothing.\n\
+                 NOTE: saying so needs a warning `parser2` raises itself. `Warning` carries one \
+                 variant, `Ast(AstWarning)`, and the AST raises `TimeNotSecondAligned` for \
+                 `align` only, so `bucket` has nothing to report with."
+            )
+        });
+    }
+}
+
+/// `get_param_decl` resolves a name by taking the first declaration that matches, so a second
+/// declaration of the same name has to be reported rather than kept and ignored.
+#[test]
+fn a_parameter_declared_twice_is_reported() {
+    let src = "param $x: string; param $x: string; a:b";
+    let errors = errors_of(src);
+    assert!(!errors.is_empty(), "`{src}`: expected an error");
+}
+
+/// The other half of the reserved prefix: a query may declare `$__foo`, and is warned that the
+/// host can shadow it.
+#[test]
+fn a_user_parameter_using_the_reserved_prefix_warns() {
+    let src = "param $__foo: string; a:b";
+    let (_, warnings) = lower(src).unwrap_or_else(|e| panic!("`{src}` did not lower: {e:?}"));
+    warnings
+        .first()
+        .unwrap_or_else(|| panic!("`{src}` warned about nothing."));
+}
+
+/// A query samples at one rate. Two `sample` clauses have to be reported, because taking either
+/// one silently returns a different amount of data than the query reads as asking for.
+#[test]
+fn a_second_sample_clause_is_reported() {
+    let src = "d:m | sample 0.1 | sample 0.9";
+    let errors = errors_of(src);
+    assert!(!errors.is_empty(), "`{src}`: expected an error");
+}
+
+/// `interpolate_cumulative_histogram` takes the conversion mode first and the specs after it, so
+/// the spec numbering an error reports counts from the start of the argument list.
+#[test]
+fn cumulative_histogram_numbers_specs_after_the_conversion_mode() {
+    let src = r#"a:b | bucket using interpolate_cumulative_histogram(rate, "x")"#;
+    let errors = errors_of(src);
+    let n = errors
+        .iter()
+        .find_map(|e| match e {
+            ParseError::InvalidArgumentType { n, .. } => Some(*n),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("`{src}`: expected an argument type error, got {errors:?}"));
+    assert_eq!(n, 2, "`{src}`: the string is the second argument");
+}
+
+/// `MapType::Min` declares one required `Float`, the value each datapoint is clamped to, so
+/// `map min` is missing an argument.
+#[test]
+fn map_min_without_its_argument_is_reported() {
+    let src = "a:b | map min";
+    let errors = errors_of(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ParseError::InvalidArgumentCount { .. })),
+        "`{src}`: expected an argument count error, got {errors:?}"
+    );
+}
+
+/// `in` compares a tag against a set, so its right-hand side has to name one: an array
+/// literal, or a param declared to carry an array. A scalar is a shape the comparison
+/// cannot use, and saying so at the offending value is what points the editor at it.
+#[test_case("ds:m | where t in 200"                          ; "an int is not a set")]
+#[test_case("ds:m | where t in 2.5"                          ; "a float is not a set")]
+#[test_case("ds:m | where t in \"a\""                        ; "a string is not a set")]
+#[test_case("ds:m | where t in true"                         ; "a bool is not a set")]
+#[test_case("param $s: string;\nds:m | where t in $s"        ; "a scalar param is not a set")]
+fn in_requires_an_array(src: &str) {
+    let errors = errors_of(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ParseError::InRequiresArray { .. })),
+        "expected an in-requires-array error for `{src}`, got: {errors:?}"
+    );
+}
+
+#[test_case("ds:m | where t in [200, 201]"                   ; "an array literal is a set")]
+#[test_case("ds:m | where t in []"                           ; "an empty array is a set")]
+#[test_case("param $a: array;\nds:m | where t in $a"         ; "an array param is a set")]
+fn in_accepts_an_array(src: &str) {
+    lower(src).unwrap_or_else(|errors| panic!("`{src}` should lower, got: {errors:?}"));
+}
+
+/// System params are injected by the host rather than written in the query, and the `__`
+/// prefix is what keeps them from colliding with names a query may declare. A registration
+/// that omits it is a host mistake, and reporting it is what lets the host find it.
+#[test]
+fn a_system_param_must_carry_the_reserved_prefix() {
+    let mut params = HashMap::new();
+    params.insert(
+        "interval".to_string(),
+        ParamType::Terminal(TerminalParamType::Duration),
+    );
+    let errors =
+        lower_with("ds:m", params).expect_err("a system param without the prefix is rejected");
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ParseError::SystemParamMissingPrefix { param } if param == "interval"
+        )),
+        "expected a missing-prefix error naming `interval`, got: {errors:?}"
+    );
 }
 
 #[test]
-fn optional_ifdef_else_with_param_reference_in_else_branch_only_ok() {
-    // The visitor's `seen_param` is set if *either* branch references the
-    // gating param. An else-only reference is enough to satisfy the
-    // `OptionalNotUsed` check.
-    let query = "
-        param $t: Option<string>;
-        dataset:metric
-        | ifdef($t) { where tag == \"a\" } else { where tag == $t }
-    ";
-    assert!(crate::compile(query, HashMap::new()).is_ok());
-}
-
-#[test]
-fn optional_ifdef_without_optional() {
-    let query = "
-        param $t: string;
-        dataset:metric
-        | ifdef($t) { where tag == $t }
-    ";
-
-    assert!(crate::compile(query, HashMap::new()).is_err());
+fn a_prefixed_system_param_is_accepted() {
+    let mut params = HashMap::new();
+    params.insert(
+        "__interval".to_string(),
+        ParamType::Terminal(TerminalParamType::Duration),
+    );
+    lower_with("ds:m", params).unwrap_or_else(|e| panic!("a prefixed system param lowers: {e:?}"));
 }

@@ -802,6 +802,21 @@ pub enum Rule {
     As(Ident),
 }
 
+impl Rule {
+    pub(crate) fn is_sample(&self) -> bool {
+        matches!(self, Rule::Sample(_))
+    }
+    pub(crate) fn is_filter(&self) -> bool {
+        matches!(self, Rule::Filter(_) | Rule::IfDef { .. })
+    }
+    pub(crate) fn is_aggr(&self) -> bool {
+        matches!(
+            self,
+            Rule::Group { .. } | Rule::Bucket { .. } | Rule::Align { .. } | Rule::Map(_)
+        )
+    }
+}
+
 /// A rule with attatched syntax node
 #[derive(Debug)]
 pub struct SyntaxRule {
@@ -815,6 +830,11 @@ impl Deref for SyntaxRule {
     type Target = Rule;
 
     fn deref(&self) -> &Self::Target {
+        &self.rule
+    }
+}
+impl AsRef<Rule> for SyntaxRule {
+    fn as_ref(&self) -> &Rule {
         &self.rule
     }
 }
@@ -899,6 +919,70 @@ impl Parser {
         &self.parts
     }
 }
+
+type ParamResult<T> = std::result::Result<T, Vec<AstError>>;
+
+pub(crate) fn parse_ident_value(input: &str) -> ParamResult<Ident> {
+    lower_value(
+        syntax_tree::Parser::new(input).parse_ident_value(),
+        Parser::ident,
+    )
+}
+
+pub(crate) fn parse_duration_value(input: &str) -> ParamResult<u64> {
+    lower_value(
+        syntax_tree::Parser::new(input).parse_duration_value(),
+        |p, node| p.duration_const(&node),
+    )
+}
+
+pub(crate) fn parse_regex_value(input: &str) -> ParamResult<Regex> {
+    lower_value(
+        syntax_tree::Parser::new(input).parse_regex_value(),
+        |p, node| p.regex(&node),
+    )
+}
+
+pub(crate) fn parse_const_value(input: &str) -> ParamResult<TagValue> {
+    lower_value(
+        syntax_tree::Parser::new(input).parse_const_value(),
+        |p, node| p.constant(&node),
+    )
+}
+
+/// Lowers the single node a value tree carries, reporting the errors both stages produced.
+fn lower_value<T>(
+    SyntaxTree { root, errors }: SyntaxTree,
+    lower: impl FnOnce(&mut Parser, SyntaxNode) -> Result<T>,
+) -> ParamResult<T> {
+    let mut errors: Vec<_> = errors.into_iter().map(AstError::InvalidSyntax).collect();
+    let mut children = root.children();
+    let Some(node) = children.n() else {
+        errors.push(AstError::MissingToken {
+            expected: SyntaxKind::EXPR,
+            span: root.span(),
+        });
+        return Err(errors);
+    };
+    let mut parser = Parser {
+        root,
+        errors,
+        warnings: Vec::new(),
+        parts: Vec::new(),
+    };
+    parser.assert_end(children);
+    match lower(&mut parser, node) {
+        Ok(value) if parser.errors.is_empty() => Ok(value),
+        _ => {
+            if parser.errors.is_empty() {
+                let span = parser.root.span();
+                parser.errors.push(AstError::ExpectedConst { span });
+            }
+            Err(parser.errors)
+        }
+    }
+}
+
 impl Parser {
     fn n<T: Nontrivial>(
         &mut self,
@@ -1133,11 +1217,11 @@ impl Parser {
         let r = match c.kind() {
             SyntaxKind::INTEGER => SyntaxExpr {
                 node,
-                expr: Expr::Const(self.integer_const(&c)?),
+                expr: Expr::Const(self.integer_const(false, &c)?),
             },
             SyntaxKind::FLOAT => SyntaxExpr {
                 node,
-                expr: Expr::Const(self.float_const(&c)?),
+                expr: Expr::Const(self.float_const(false, &c)?),
             },
             SyntaxKind::BOOL => SyntaxExpr {
                 node,
@@ -1149,6 +1233,33 @@ impl Parser {
             },
             SyntaxKind::STRING => self.string_expr(c)?,
             SyntaxKind::ARRAY => self.array_expr(c)?,
+            SyntaxKind::PLUS | SyntaxKind::MINUS => {
+                let mut neg = c.kind() == SyntaxKind::MINUS;
+                let mut c = self.n(&mut children, &node, SyntaxKind::CONST)?;
+                while matches!(c.kind(), SyntaxKind::PLUS | SyntaxKind::MINUS) {
+                    // swap the negation flag
+                    neg ^= c.kind() == SyntaxKind::MINUS;
+                    c = self.n(&mut children, &node, SyntaxKind::CONST)?;
+                }
+                match c.kind() {
+                    SyntaxKind::INTEGER => SyntaxExpr {
+                        node,
+                        expr: Expr::Const(self.integer_const(neg, &c)?),
+                    },
+                    SyntaxKind::FLOAT => SyntaxExpr {
+                        node,
+                        expr: Expr::Const(self.float_const(neg, &c)?),
+                    },
+                    _ => {
+                        self.errors.push(AstError::UnexpectedSyntaxRule {
+                            expected: &[SyntaxKind::INTEGER, SyntaxKind::FLOAT],
+                            found: c.kind(),
+                            span: c.span(),
+                        });
+                        return Err(Error("unexpected syntax"));
+                    }
+                }
+            }
             found => {
                 self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[
@@ -1158,6 +1269,8 @@ impl Parser {
                         SyntaxKind::BOOL,
                         SyntaxKind::ARRAY,
                         SyntaxKind::NULL,
+                        SyntaxKind::PLUS,
+                        SyntaxKind::MINUS,
                     ],
                     found,
                     span: c.span(),
@@ -1387,7 +1500,7 @@ impl Parser {
         self.assert_type(node, SyntaxKind::SAMPLE)?;
         let mut children = node.children();
         let n = self.n(&mut children, node, SyntaxKind::FLOAT)?;
-        let TagValue::Float(f) = self.float_const(&n)? else {
+        let TagValue::Float(f) = self.float_const(false, &n)? else {
             return Err(Error("expected float"));
         };
         self.assert_end(children);
@@ -1497,15 +1610,11 @@ impl Parser {
         Ok(Rule::Map(f))
     }
 
-    fn duration(&mut self, node: SyntaxNode) -> Result<Duration> {
-        if node.kind() == SyntaxKind::VARIABLE {
-            let v = self.variable(node)?;
-            return Ok(Duration::Var(v));
-        }
-        self.assert_type(&node, SyntaxKind::DURATION)?;
+    fn duration_const(&mut self, node: &SyntaxNode) -> Result<u64> {
+        self.assert_type(node, SyntaxKind::DURATION)?;
         let mut children = node.children();
-        let n = self.n(&mut children, &node, SyntaxKind::INTEGER)?;
-        let TagValue::Int(i) = self.integer_const(&n)? else {
+        let n = self.n(&mut children, node, SyntaxKind::INTEGER)?;
+        let TagValue::Int(i) = self.integer_const(false, &n)? else {
             return Err(Error("expected integer (this should be unreachable!)"));
         };
         let i = if let Ok(i) = u64::try_from(i) {
@@ -1515,7 +1624,7 @@ impl Parser {
                 .push(AstError::NegativeDuration { span: n.span() });
             0
         };
-        let n = self.n(&mut children, &node, SyntaxKind::TIME_UNIT)?;
+        let n = self.n(&mut children, node, SyntaxKind::TIME_UNIT)?;
         let unit = self.time_unit(&n)?;
         let duration = match unit.as_str() {
             "ms" if i < 1000 => {
@@ -1547,7 +1656,15 @@ impl Parser {
                 return Err(Error("invalid time unit"));
             }
         };
-        Ok(Duration::Const(duration))
+        Ok(duration)
+    }
+
+    fn duration(&mut self, node: SyntaxNode) -> Result<Duration> {
+        if node.kind() == SyntaxKind::VARIABLE {
+            let v = self.variable(node)?;
+            return Ok(Duration::Var(v));
+        }
+        self.duration_const(&node).map(Duration::Const)
     }
 
     fn tags(&mut self, node: &SyntaxNode) -> Result<Vec<Ident>> {
@@ -2004,9 +2121,11 @@ impl Parser {
         r
     }
 
-    fn integer_const(&mut self, node: &SyntaxNode) -> Result<TagValue> {
+    fn integer_const(&mut self, neg: bool, node: &SyntaxNode) -> Result<TagValue> {
         self.assert_type(node, SyntaxKind::INTEGER)?;
         let value = self.token_of_type(node, SyntaxKind::LX_INTEGER)?;
+        // avoid overflow by parsing as i64 first
+        let value = if neg { format!("-{value}") } else { value };
         if let Ok(value) = value.parse::<i64>() {
             Ok(TagValue::Int(value))
         } else {
@@ -2022,13 +2141,15 @@ impl Parser {
         Ok(value)
     }
 
-    fn float_const(&mut self, node: &SyntaxNode) -> Result<TagValue> {
+    fn float_const(&mut self, neg: bool, node: &SyntaxNode) -> Result<TagValue> {
         self.assert_type(node, SyntaxKind::FLOAT)?;
         let mut children = node.children_with_tokens();
         let c = self.n(&mut children, node, SyntaxKind::FLOAT)?;
         let r = match c.kind() {
             SyntaxKind::LX_FLOAT => {
-                if let Ok(value) = c.token_string().parse::<f64>() {
+                let s = c.token_string();
+                let s = if neg { format!("-{s}") } else { s };
+                if let Ok(value) = s.parse::<f64>() {
                     Ok(TagValue::Float(value))
                 } else {
                     self.errors
@@ -2036,6 +2157,7 @@ impl Parser {
                     Err(Error("invalid integer"))
                 }
             }
+            SyntaxKind::LX_INF if neg => Ok(TagValue::Float(f64::NEG_INFINITY)),
             SyntaxKind::LX_INF => Ok(TagValue::Float(f64::INFINITY)),
             found => {
                 self.errors.push(AstError::UnexpectedSyntaxRule {
@@ -2103,12 +2225,33 @@ impl Parser {
         let c = self.n(&mut children, node, SyntaxKind::CONST)?;
 
         let r = match c.kind() {
-            SyntaxKind::INTEGER => self.integer_const(&c),
-            SyntaxKind::FLOAT => self.float_const(&c),
+            SyntaxKind::INTEGER => self.integer_const(false, &c),
+            SyntaxKind::FLOAT => self.float_const(false, &c),
             SyntaxKind::STRING => self.string_const(&c),
             SyntaxKind::BOOL => self.bool_const(&c),
             SyntaxKind::ARRAY => self.array_const(&c),
             SyntaxKind::NULL => self.null_const(&c),
+            SyntaxKind::PLUS | SyntaxKind::MINUS => {
+                let mut neg = c.kind() == SyntaxKind::MINUS;
+                let mut c = self.n(&mut children, node, SyntaxKind::CONST)?;
+                while matches!(c.kind(), SyntaxKind::PLUS | SyntaxKind::MINUS) {
+                    // swap the negation flag
+                    neg ^= c.kind() == SyntaxKind::MINUS;
+                    c = self.n(&mut children, node, SyntaxKind::CONST)?;
+                }
+                match c.kind() {
+                    SyntaxKind::INTEGER => self.integer_const(neg, &c),
+                    SyntaxKind::FLOAT => self.float_const(neg, &c),
+                    _ => {
+                        self.errors.push(AstError::UnexpectedSyntaxRule {
+                            expected: &[SyntaxKind::INTEGER, SyntaxKind::FLOAT],
+                            found: c.kind(),
+                            span: c.span(),
+                        });
+                        Err(Error("unexpected syntax"))
+                    }
+                }
+            }
             found => {
                 self.errors.push(AstError::UnexpectedSyntaxRule {
                     expected: &[
@@ -2118,6 +2261,8 @@ impl Parser {
                         SyntaxKind::BOOL,
                         SyntaxKind::ARRAY,
                         SyntaxKind::NULL,
+                        SyntaxKind::PLUS,
+                        SyntaxKind::MINUS,
                     ],
                     found,
                     span: c.span(),

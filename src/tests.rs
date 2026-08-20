@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use miette::NarratableReportHandler;
 
 use crate::{
-    CompileError, ParseError, TypeError,
-    query::{Cmp, DirectiveValue, Expr, Filter, TagType, TerminalParamType},
+    CompileError, TypeError, parser,
+    query::{Cmp, DirectiveValue, Expr, Filter, ParamType, TagType, TerminalParamType},
 };
 
 fn render_diagnostic(err: CompileError, src: &str) -> String {
@@ -19,7 +19,7 @@ fn render_diagnostic(err: CompileError, src: &str) -> String {
 #[test]
 fn parse_align_without_time() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_total[1h..]
+`dev.metrics`:http_requests_total //depricated for now [1h..]
 | where path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align using sum
@@ -32,10 +32,10 @@ fn parse_align_without_time() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn align_with_time_but_without_to_reports_missing_to() {
     // `align <time> using <fn>` is invalid: a time after `align` must be
-    // introduced by `to` (grammar: `align ("to" time)? ("over" time)? using fn`).
-    // The hygienic error should name the real problem -- a missing `to` after
-    // `align` -- rather than the generic pest fallback that points at `align`
-    // itself and suggests "Did you mean align?".
+    // introduced by `to` (`align ("to" time)? using fn`). The hygienic error
+    // should name the real problem -- a missing `to` after `align` -- rather than
+    // a generic fallback that points at `align` itself and suggests
+    // "Did you mean align?".
     let s = "dataset:metric | align 1m using avg";
     let err = super::compile(s, HashMap::new())
         .expect_err("`align 1m using avg` is missing `to` and must fail");
@@ -49,7 +49,7 @@ fn align_with_time_but_without_to_reports_missing_to() {
 #[test]
 fn parse_bucket_without_time() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_duration[1h..]
+`dev.metrics`:http_requests_duration //depricated for now [1h..]
 | where path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | bucket by method, path, code using histogram(max)
@@ -61,7 +61,7 @@ fn parse_bucket_without_time() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn parse_group_by() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_total[1h..]
+`dev.metrics`:http_requests_total //depricated for now [1h..]
 | where path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -74,7 +74,7 @@ fn parse_group_by() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn parse_group_ts() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_total[1747077736092..]
+`dev.metrics`:http_requests_total //depricated for now [1747077736092..]
 | filter path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -87,7 +87,7 @@ fn parse_group_ts() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn parse_group_rfc() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_total[2025-03-01T13:00:00Z..+1h]
+`dev.metrics`:http_requests_total //depricated for now [2025-03-01T13:00:00Z..+1h]
 | filter path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -100,7 +100,7 @@ fn parse_group_rfc() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn parse_group_rate() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_total[2025-03-01T13:00:00Z..+1h]
+`dev.metrics`:http_requests_total //depricated for now [2025-03-01T13:00:00Z..+1h]
 | filter path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -113,7 +113,7 @@ fn parse_group_rate() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn parse_re_escape() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_total[2025-03-01T13:00:00Z..+1h]
+`dev.metrics`:http_requests_total //depricated for now [2025-03-01T13:00:00Z..+1h]
 | filter path == #/\.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -306,24 +306,28 @@ param $dataset: Duration;
 $dataset:metric
 ";
 
-    match super::compile(s, HashMap::new()) {
-        Err(CompileError::Parse(ParseError::ParamDefinedMultipleTimes { span: _, param })) => {
-            assert_eq!("dataset", param);
-        }
-        res => panic!("Expected param defined multiple times error, got {res:?}"),
-    }
+    let res = super::compile(s, HashMap::new());
+    let Err(CompileError::Parser(errors)) = &res else {
+        panic!("Expected param declared twice error, got {res:?}")
+    };
+    let [parser::ParseError::ParamDeclaredTwice { name, .. }] = errors.as_slice() else {
+        panic!("Expected param declared twice error, got {errors:?}")
+    };
+    assert_eq!("dataset", name);
 }
 
 #[test]
 fn parse_params_undefined() {
     let s = "$dataset:metric";
 
-    match super::compile(s, HashMap::new()) {
-        Err(CompileError::Parse(ParseError::UndefinedParam { span: _, param })) => {
-            assert_eq!("dataset", param);
-        }
-        res => panic!("Expected undefined param error, got {res:?}"),
-    }
+    let res = super::compile(s, HashMap::new());
+    let Err(CompileError::Parser(errors)) = &res else {
+        panic!("Expected undefined variable error, got {res:?}")
+    };
+    let [parser::ParseError::UndefinedVariable { name, .. }] = errors.as_slice() else {
+        panic!("Expected undefined variable error, got {errors:?}")
+    };
+    assert_eq!("dataset", name);
 }
 
 #[test]
@@ -334,24 +338,22 @@ param $dataset: Duration;
 $dataset:metric
 ";
 
-    match super::compile(s, HashMap::new()) {
-        Err(CompileError::Type(TypeError::TypeMismatch {
-            use_span,
-            declaration_span,
-            param_name,
-            expected,
-            actual,
-        })) => {
-            assert_eq!("dataset", param_name);
-            assert_eq!(&[TerminalParamType::Dataset], expected.as_slice());
-            assert_eq!(TerminalParamType::Duration, actual);
-            assert_eq!(28, use_span.offset());
-            assert_eq!(8, use_span.len());
-            assert_eq!(7, declaration_span.offset());
-            assert_eq!(8, declaration_span.len());
-        }
-        res => panic!("Expected mismatched param type error, got {res:?}"),
-    }
+    let res = super::compile(s, HashMap::new());
+    let Err(CompileError::Parser(errors)) = &res else {
+        panic!("Expected mismatched param type error, got {res:?}")
+    };
+    // `expected` carries the declaration, `actual` what the position requires.
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            parser::ParseError::InvalidVariableType {
+                expected: ParamType::Terminal(TerminalParamType::Duration),
+                actual: ParamType::Terminal(TerminalParamType::Dataset),
+                ..
+            }
+        )),
+        "Expected mismatched param type error, got {errors:?}"
+    );
 }
 
 #[test]
@@ -384,8 +386,8 @@ dataset:metric
             assert_eq!(TerminalParamType::Dataset, actual);
             assert_eq!(55, use_span.offset());
             assert_eq!(6, use_span.len());
-            assert_eq!(7, declaration_span.offset());
-            assert_eq!(6, declaration_span.len());
+            assert_eq!(1, declaration_span.offset());
+            assert_eq!(24, declaration_span.len());
         }
         res => panic!("Expected mismatched param type error, got {res:?}"),
     }
@@ -400,30 +402,27 @@ dataset:metric
 | align to $duration using avg
 ";
 
-    match super::compile(s, HashMap::new()) {
-        Err(CompileError::Type(TypeError::TypeMismatch {
-            use_span,
-            declaration_span,
-            param_name,
-            expected,
-            actual,
-        })) => {
-            assert_eq!("duration", param_name);
-            assert_eq!(&[TerminalParamType::Duration], expected.as_slice());
-            assert_eq!(TerminalParamType::Dataset, actual);
-            assert_eq!(54, use_span.offset());
-            assert_eq!(9, use_span.len());
-            assert_eq!(7, declaration_span.offset());
-            assert_eq!(9, declaration_span.len());
-        }
-        res => panic!("Expected mismatched param type error, got {res:?}"),
-    }
+    let res = super::compile(s, HashMap::new());
+    let Err(CompileError::Parser(errors)) = &res else {
+        panic!("Expected mismatched param type error, got {res:?}")
+    };
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            parser::ParseError::InvalidVariableType {
+                expected: ParamType::Terminal(TerminalParamType::Dataset),
+                actual: ParamType::Terminal(TerminalParamType::Duration),
+                ..
+            }
+        )),
+        "Expected mismatched param type error, got {errors:?}"
+    );
 }
 
 #[test]
 fn group_by_two() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_total[1747077736092..]
+`dev.metrics`:http_requests_total //depricated for now [1747077736092..]
 | filter path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -437,7 +436,7 @@ fn group_by_two() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn group_by_two_same() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_total[1747077736092..]
+`dev.metrics`:http_requests_total //depricated for now [1747077736092..]
 | filter path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -451,7 +450,7 @@ fn group_by_two_same() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn group_by_two_error() {
     let s = r"
-`dev.metrics`:http_requests_total[1747077736092..]
+`dev.metrics`:http_requests_total //depricated for now [1747077736092..]
 | filter path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -464,7 +463,7 @@ fn group_by_two_error() {
 #[test]
 fn bucket_group_by() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
-`dev.metrics`:http_requests_total[1747077736092..]
+`dev.metrics`:http_requests_total //depricated for now [1747077736092..]
 | filter path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -491,12 +490,15 @@ fn in_non_array_param_requires_array_error() {
     let s = "param $s: string;\nds:m | where t in $s";
     let err =
         super::compile(s, HashMap::new()).expect_err("non-array param for `in` must not compile");
+    let CompileError::Parser(errors) = &err else {
+        panic!("expected an in-requires-array error, got: {err:?}")
+    };
     assert!(
         matches!(
-            &err,
-            CompileError::Parse(ParseError::InRequiresArray { .. })
+            errors.as_slice(),
+            [parser::ParseError::InRequiresArray { .. }]
         ),
-        "expected an in-requires-array error, got: {err:?}"
+        "expected an in-requires-array error, got: {errors:?}"
     );
 }
 
@@ -509,7 +511,7 @@ fn in_array_param_compiles() {
 #[test]
 fn bucket_group_by_error() {
     let s = r"
-`dev.metrics`:http_requests_total[1747077736092..]
+`dev.metrics`:http_requests_total //depricated for now [1747077736092..]
 | filter path == #/.*(elastic\/_bulk|ingest|(?:v1\/(traces|logs|metrics))).*/
 | filter code == #/[123]../
 | align to 3m using prom::rate
@@ -522,9 +524,9 @@ fn bucket_group_by_error() {
 fn group_by_compute() -> Result<(), Box<dyn std::error::Error>> {
     let s = r"
 (
-  `ds`:m1[1h..]
+  `ds`:m1 //depricated for now [1h..]
   | group by method, code using sum,
-  `ds`:m2[1h..]
+  `ds`:m2 //depricated for now [1h..]
   | group by method, path using sum
 )
 | compute test using +

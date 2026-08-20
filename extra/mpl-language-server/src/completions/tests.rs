@@ -1100,9 +1100,8 @@ fn completions_filter_value_position_gte_suggests_tag() {
 }
 
 /// Leading `//` comment lines (which every example query has) must not break
-/// source extraction. Regression: the commented header was fed into pest's
-/// `source` rule, which does not skip leading comments, so the parse failed and
-/// tag completion silently vanished — the playground showed no tag suggestions.
+/// source extraction: a query whose header is comments still offers tag
+/// completions.
 #[test]
 fn completions_tag_survives_leading_comments() {
     for input in [

@@ -9,15 +9,12 @@ use std::{
 use chrono::Utc;
 use chrono::{DateTime, Duration, FixedOffset};
 use miette::SourceSpan;
-use pest::Parser as _;
 use strumbra::SharedString;
 
 use crate::{
-    ParseError,
     enc_regex::EncodableRegex,
     linker::{AlignFunction, ComputeFunction, GroupFunction, MapFunction},
-    parser::{self, MPLParser, ParseParamError, Rule},
-    parser2,
+    parser::{self, ParseParamError},
     tags::TagValue,
     time::{Resolution, ResolutionError},
     types::{BucketSpec, BucketType, Dataset, Metric, Parameterized},
@@ -576,14 +573,14 @@ pub enum ResolveError {
 /// The error returned from `ProvidedParams::parse`.
 #[derive(Debug, thiserror::Error)]
 pub enum ParseProvidedParamsError {
-    /// Parse failed
+    /// A provided value could not be parsed as its declared type
     #[error("Failed to parse the value for ${param_name} as {expected_type}: {err}")]
     ParseParam {
-        /// Param name
+        /// The name of the param
         param_name: String,
-        /// Expected t ype
+        /// The type the param was declared as
         expected_type: ParamType,
-        /// Parse param error
+        /// Why the value could not be parsed
         err: ParseParamError,
     },
     /// Params provided more than once
@@ -608,8 +605,8 @@ pub enum WarningReason {
     },
     /// lowercase duration
     OldDuration,
-    /// Parser v2 warning
-    ParserV2(parser2::Warning),
+    /// Parser warning
+    Parser(parser::Warning),
 }
 
 impl Display for WarningReason {
@@ -629,7 +626,7 @@ impl Display for WarningReason {
                     "The param ${param} uses the `__` prefix reserved for system params"
                 )
             }
-            WarningReason::ParserV2(warning) => warning.fmt(f),
+            WarningReason::Parser(warning) => warning.fmt(f),
         }
     }
 }
@@ -640,11 +637,11 @@ pub struct Warning {
     source: Option<SourceSpan>,
     warning: WarningReason,
 }
-impl From<parser2::Warning> for Warning {
-    fn from(warning: parser2::Warning) -> Self {
+impl From<parser::Warning> for Warning {
+    fn from(warning: parser::Warning) -> Self {
         Warning {
             source: Some(warning.span()),
-            warning: WarningReason::ParserV2(warning),
+            warning: WarningReason::Parser(warning),
         }
     }
 }
@@ -734,10 +731,7 @@ impl ProvidedParams {
         let params = query_params
             .iter()
             .filter_map(|(name, value)| {
-                if !name.starts_with(PREFIX) {
-                    return None;
-                }
-                let name = name.trim_start_matches(PREFIX);
+                let name = name.strip_prefix(PREFIX)?;
                 if name.is_empty() {
                     return None;
                 }
@@ -769,17 +763,7 @@ impl ProvidedParams {
                 continue;
             };
 
-            // parse mpl
-            let parsed = MPLParser::parse(Rule::param_value, value).map_err(|err| {
-                ParseProvidedParamsError::ParseParam {
-                    param_name: name.to_string(),
-                    expected_type: mpl_param.typ,
-                    err: ParseParamError::Parse(ParseError::from(err)),
-                }
-            })?;
-
-            // parse as correct type
-            let value = parser::parse_param_value(mpl_param, parsed).map_err(|err| {
+            let value = parser::parse_param_value(mpl_param, value).map_err(|err| {
                 ParseProvidedParamsError::ParseParam {
                     param_name: name.to_string(),
                     expected_type: mpl_param.typ,

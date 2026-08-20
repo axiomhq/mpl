@@ -995,8 +995,9 @@ fn suggest_expr_position(
 // ── suggestion logic ────────────────────────────────────────────
 
 /// Controls whether filter/where keywords are included in pipe completions.
-/// The grammar's `compute_query` uses `pipe_rule*` (no filter) for the tail
-/// after `compute_rule`, while simple queries use the full set.
+/// A filter after a compute is refused when the query is lowered
+/// (`ParseError::RuleNotSupportedAfterCompute`), so offering one there would
+/// complete to a query that cannot compile; a simple query takes the full set.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FilterPolicy {
     Include,
@@ -1513,8 +1514,9 @@ fn is_extend_value_literal(tok: &str) -> bool {
     if tok.starts_with('"') && tok.len() >= 2 && tok.ends_with('"') {
         return true;
     }
-    // Numbers: leading digit (the grammar's `number` rule), tolerating a
-    // trailing comma which the dispatcher already strips for the comma case.
+    // Numbers: a leading digit or `-`, the way the lexer starts a number token,
+    // tolerating a trailing comma which the dispatcher already strips for the
+    // comma case.
     tok.chars()
         .next()
         .is_some_and(|c| c.is_ascii_digit() || c == '-')

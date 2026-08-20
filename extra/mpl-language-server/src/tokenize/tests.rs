@@ -288,8 +288,8 @@ fn operator_compute() {
     assert_eq!(op.kind, TokenType::Operator);
 }
 
-// `in` shares `Rule::cmp` with the symbolic operators but is word-shaped, so
-// it is styled as a keyword (matching `is`), not an operator.
+// `in` compares like the symbolic operators but is word-shaped, so it is
+// styled as a keyword (matching `is`), not an operator.
 #[test]
 fn keyword_in_cmp() {
     let query = r#"ds:metric | where tag in ["a", 2, true]"#;
@@ -390,9 +390,8 @@ fn keyword_ifdef() {
 
 #[test]
 fn keyword_else() {
-    // The `else` clause was added alongside `ifdef`; without an explicit
-    // `Rule::kw_else` arm in `token_type`, the highlighter would emit no
-    // token for `else` and the editor would render it as plain text.
+    // `else` belongs to `ifdef`, so the highlighter emits a keyword token for
+    // it; without one the editor renders it as plain text.
     let query = "param $f: Option<string>;\nds:metric | ifdef($f) { where tag == $f } else { where tag == \"x\" }";
     let tokens = collect_tokens(query);
     let kw = tokens

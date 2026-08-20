@@ -4,7 +4,7 @@
 //! `JsValue` arguments into pure Rust types, calls the corresponding
 //! `mpl_language_server::*` function, and re-encodes the result.
 
-use mpl_lang::{CompileError, Query, compile2, query::Source};
+use mpl_lang::{CompileError, Query, compile, query::Source};
 use mpl_language_server::SystemParamSpec;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -18,7 +18,7 @@ fn parse_with_system_param_specs(
     system_params: &[SystemParamSpec],
 ) -> Result<Query, String> {
     let params = mpl_language_server::to_compile_params(system_params);
-    compile2(query, params)
+    compile(query, params)
         .map(|(q, _warnings)| q)
         .map_err(|e| describe(&e))
 }
@@ -26,11 +26,11 @@ fn parse_with_system_param_specs(
 /// What went wrong, as a line the host can show.
 ///
 /// Each variant is rendered through the error it carries. Naming them one by one
-/// keeps miette's formatter and the grammar's rule names out of the wasm bundle,
-/// which is worth more here than the shorter spelling.
+/// keeps miette's formatter out of the wasm bundle, which is worth more here than
+/// the shorter spelling.
 fn describe(e: &CompileError) -> String {
     match e {
-        CompileError::ParserV2(errors) => errors
+        CompileError::Parser(errors) => errors
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()
@@ -38,7 +38,6 @@ fn describe(e: &CompileError) -> String {
         CompileError::Type(e) => e.to_string(),
         CompileError::Group(e) => e.to_string(),
         CompileError::Ifdef(e) => e.to_string(),
-        CompileError::Parse(_) => "parse error".to_string(),
     }
 }
 

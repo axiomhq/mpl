@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use mpl_lang::query::{WarningReason, Warnings};
-use mpl_lang::{CompileError, compile, compile2};
+use mpl_lang::{CompileError, compile};
 
 use crate::diagnostics::{DiagnosticItem, Severity, compute_diagnostics};
 
@@ -23,7 +23,7 @@ fn error_items(q: &str) -> Vec<DiagnosticItem> {
 
 /// Run the full success-path pipeline: compile -> warnings -> diagnostic items.
 fn warning_items(q: &str) -> Vec<DiagnosticItem> {
-    let (_, warnings) = compile2(q, HashMap::new()).expect("query should compile");
+    let (_, warnings) = compile(q, HashMap::new()).expect("query should compile");
     warnings
         .as_slice()
         .iter()
@@ -95,28 +95,27 @@ fn action_targets_function_name_range() {
 
 #[test]
 fn type_error_puts_error_on_use_and_info_on_declaration() {
-    // $tag is declared as string but used where duration is expected
-    let query = "param $tag: string;\nds:metric | align to $tag using avg";
+    // $d is declared as a duration but compared against a tag
+    let query = "param $d: Duration;\nds:metric | filter tag == $d";
     let items = match compile(query, HashMap::new()) {
         Ok(_) => panic!("should produce a type error"),
-        Err(CompileError::Parse(_)) => panic!("should be a type error, not parse error"),
         Err(CompileError::Type(error)) => crate::diagnostics::type_error_diagnostic_items(&error),
         Err(CompileError::Group(error)) => crate::diagnostics::group_error_diagnostic_items(&error),
         Err(CompileError::Ifdef(_)) => panic!("should be a type error, not ifdef error"),
-        Err(CompileError::ParserV2(_)) => panic!("`compile` does not run the v2 parser"),
+        Err(CompileError::Parser(_)) => panic!("should be a type error, not a parser error"),
     };
 
     assert_eq!(items.len(), 2, "should produce two diagnostics");
 
-    // The error should be on the usage site ($tag in align)
+    // The error should be on the usage site ($d in the filter)
     let error_item = items
         .iter()
         .find(|i| matches!(i.severity, Severity::Error))
         .expect("should have an error diagnostic");
     assert_eq!(
         &query[error_item.span.from..error_item.span.to],
-        "$tag",
-        "error should point at the usage of $tag"
+        "$d",
+        "error should point at the usage of $d"
     );
 
     // The info should be on the declaration site
@@ -127,6 +126,81 @@ fn type_error_puts_error_on_use_and_info_on_declaration() {
     assert!(
         info_item.message.contains("declaration"),
         "info message should mention declaration"
+    );
+}
+
+/// The two halves of a diagnostic pair, as (error, info).
+///
+/// A parser error that names both a use and the declaration behind it splits
+/// the same way a type error does: the squiggle sits on the use, and the
+/// declaration is an accompanying note.
+fn error_and_info(q: &str) -> (DiagnosticItem, DiagnosticItem) {
+    let items = diagnostic_items(q);
+    assert_eq!(items.len(), 2, "should produce two diagnostics");
+    let (mut errors, mut infos): (Vec<_>, Vec<_>) = items
+        .into_iter()
+        .partition(|i| matches!(i.severity, Severity::Error));
+    (
+        errors.pop().expect("should have an error diagnostic"),
+        infos.pop().expect("should have an info diagnostic"),
+    )
+}
+
+#[test]
+fn invalid_variable_type_puts_error_on_use_and_info_on_declaration() {
+    // $tag is declared as a string but used where a duration is expected
+    let query = "param $tag: string;\nds:metric | align to $tag using avg";
+    let (error_item, info_item) = error_and_info(query);
+
+    assert_eq!(
+        &query[error_item.span.from..error_item.span.to],
+        "$tag",
+        "error should point at the usage of $tag"
+    );
+    assert_eq!(
+        query[info_item.span.from..info_item.span.to].trim_end(),
+        "param $tag: string;",
+        "info should point at the declaration"
+    );
+    assert!(
+        info_item.message.contains("declared"),
+        "info message should name the declaration, got: {:?}",
+        info_item.message
+    );
+}
+
+#[test]
+fn ifdef_on_a_required_param_puts_error_on_guard_and_info_on_declaration() {
+    // $f gates an ifdef, which requires it to be declared Option<..>
+    let query = "param $f: string;\nds:metric | ifdef($f) { filter tag == $f }";
+    let (error_item, info_item) = error_and_info(query);
+
+    assert_eq!(
+        &query[error_item.span.from..error_item.span.to],
+        "$f",
+        "error should point at the ifdef guard"
+    );
+    assert_eq!(
+        query[info_item.span.from..info_item.span.to].trim_end(),
+        "param $f: string;",
+        "info should point at the declaration"
+    );
+}
+
+#[test]
+fn param_declared_twice_puts_error_on_redeclaration_and_info_on_first() {
+    // The two spans arrive in source order, so the squiggle belongs to the
+    // later one: the first declaration is the note that explains the clash.
+    let query = "param $p: string;\nparam $p: string;\nds:metric";
+    let (error_item, info_item) = error_and_info(query);
+
+    assert_eq!(
+        error_item.span.from, 18,
+        "error should point at the second declaration"
+    );
+    assert_eq!(
+        info_item.span.from, 0,
+        "info should point at the first declaration"
     );
 }
 
@@ -513,19 +587,19 @@ fn system_param_missing_prefix_is_reported() {
     );
 }
 
-// ── v2 parser errors and warnings ────────────────────────────────
+// ── parser errors and warnings ───────────────────────────────────
 
-/// A v2 parser error reaches the editor anchored to the token it is about.
-/// Driven through `compile2` rather than a hand-built error, so the offsets
+/// A parser error reaches the editor anchored to the token it is about.
+/// Driven through `compile` rather than a hand-built error, so the offsets
 /// asserted here are the ones a user would see highlighted.
 #[test]
-fn a_parser_v2_error_is_anchored_to_its_token() {
+fn a_parser_error_is_anchored_to_its_token() {
     let query = "d:m | map unknownfn()";
-    let Err(CompileError::ParserV2(errors)) = compile2(query, HashMap::new()) else {
-        panic!("{query:?} should fail in the v2 parser")
+    let Err(CompileError::Parser(errors)) = compile(query, HashMap::new()) else {
+        panic!("{query:?} should fail in the parser")
     };
 
-    let items = crate::diagnostics::parser_v2_error_diagnostic_items(query, &errors);
+    let items = crate::diagnostics::parser_error_diagnostic_items(query, &errors);
 
     assert_eq!(items.len(), 1, "one error should yield one diagnostic");
     assert!(matches!(items[0].severity, Severity::Error));
@@ -546,12 +620,12 @@ fn a_parser_v2_error_is_anchored_to_its_token() {
 /// relation rather than an exact list, because what matters is that a
 /// failure is never swallowed on the way to the editor.
 #[test]
-fn no_parser_v2_error_is_dropped() {
-    let Err(CompileError::ParserV2(errors)) = compile2("", HashMap::new()) else {
-        panic!("an empty query should fail in the v2 parser")
+fn no_parser_error_is_dropped() {
+    let Err(CompileError::Parser(errors)) = compile("", HashMap::new()) else {
+        panic!("an empty query should fail in the parser")
     };
 
-    let items = crate::diagnostics::parser_v2_error_diagnostic_items("", &errors);
+    let items = crate::diagnostics::parser_error_diagnostic_items("", &errors);
 
     assert!(
         items.len() >= errors.len(),
@@ -567,12 +641,12 @@ fn no_parser_v2_error_is_dropped() {
     );
 }
 
-/// A warning the v2 parser raised is surfaced as a warning, at the span it
+/// A warning the parser raised is surfaced as a warning, at the span it
 /// was raised for — `"x\qy"` flags the unknown escape at the string.
 #[test]
-fn a_parser_v2_warning_keeps_its_span() {
+fn a_parser_warning_keeps_its_span() {
     let query = r#"d:m | where a == "x\qy""#;
-    let (_, warnings) = compile2(query, HashMap::new()).expect("the query should compile");
+    let (_, warnings) = compile(query, HashMap::new()).expect("the query should compile");
 
     let items: Vec<_> = warnings
         .as_slice()
