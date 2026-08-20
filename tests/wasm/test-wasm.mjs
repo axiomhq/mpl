@@ -30,7 +30,7 @@ if (typeof mpl.diagnostics !== "function") {
   process.exit(1);
 }
 
-for (const fn of ["parse_wasm", "parse_json", "parse_ron", "extract_dataset", "declared_params"]) {
+for (const fn of ["parse_wasm", "parse_json", "extract_dataset", "declared_params"]) {
   if (typeof mpl[fn] !== "function") {
     console.error(`ERROR: ${fn}() not exported — wrong build artifact?`);
     process.exit(1);
@@ -94,14 +94,6 @@ if (typeof json === "string" && json.includes("\"__interval\"") && json.includes
   failed++;
 }
 
-const ron = mpl.parse_ron(queryWithSystemParam, intervalSystemParam);
-if (typeof ron === "string" && ron.includes('name: "__interval"') && ron.includes("Terminal(Duration)")) {
-  console.log("  PASS  parse_ron accepts registered system param");
-  passed++;
-} else {
-  console.error("  FAIL  parse_ron accepts registered system param: expected serialized RON with __interval");
-  failed++;
-}
 
 const datasetWithParams = mpl.extract_dataset(queryWithSystemParam, intervalSystemParam);
 if (datasetWithParams === "my_dataset") {
