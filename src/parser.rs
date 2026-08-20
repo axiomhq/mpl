@@ -200,7 +200,7 @@ pub enum ParseError {
     #[error("Invalid variable type: expected {expected}, got {actual}")]
     InvalidVariableType {
         /// The location
-        #[label("Invalid variable type, expected {actual}")]
+        #[label("Invalid variable type, expected {expected}")]
         variable_span: SourceSpan,
         /// The location
         #[label("The variable was declared here as {expected}")]
