@@ -279,11 +279,11 @@ pub enum ParseError {
         #[label("Parameter re-declared here")]
         span: SourceSpan,
     },
-    /// Sample declared twice
-    #[error("Sample declared twice")]
-    SampleDeclaredTwice {
-        /// The location of the second declaration
-        #[label("Sample re-declared here")]
+    /// This rule is not supported here
+    #[error("This rule is not supported here")]
+    RuleNotSupportedHere {
+        /// The location
+        #[label("This rule is not supported here")]
         span: SourceSpan,
     },
 }
@@ -462,6 +462,7 @@ impl QueryParser {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn simple_query(
         &mut self,
         SimpleQuery {
@@ -500,13 +501,21 @@ impl QueryParser {
         }
         let mut extends = Vec::new();
         let mut filters = Vec::new();
-        let mut sample = None;
-        for SyntaxRule { node, rule } in rules {
+        let mut rules = rules.into_iter().peekable();
+        let sample = if rules.peek().is_some_and(|r| r.is_sample())
+            && let Some(SyntaxRule {
+                rule: Rule::Sample(s),
+                ..
+            }) = rules.next()
+        {
+            Some(s)
+        } else {
+            None
+        };
+        while rules.peek().is_some_and(|r| r.is_filter())
+            && let Some(SyntaxRule { node, rule }) = rules.next()
+        {
             match rule {
-                Rule::Sample(s) if sample.is_none() => sample = Some(s),
-                Rule::Sample(_) => {
-                    return Err(ParseError::SampleDeclaredTwice { span: node.span() });
-                }
                 Rule::Filter(f) => filters.push(FilterOrIfDef::Filter(self.filter(f)?)),
                 Rule::IfDef {
                     var,
@@ -540,15 +549,15 @@ impl QueryParser {
                         else_filter,
                     });
                 }
-
-                // TODO: Remove pipe as
-                Rule::As(alias) => {
-                    let name = Metric::new(&alias).map_err(|_| ParseError::InvalidMetric {
-                        metric: alias.to_string(),
-                        span: alias.span(),
-                    })?;
-                    aggregates.push(Aggregate::As(As { name }));
+                _ => {
+                    return Err(ParseError::RuleNotSupportedHere { span: node.span() });
                 }
+            }
+        }
+        while rules.peek().is_some_and(|r| r.is_aggr())
+            && let Some(SyntaxRule { node, rule }) = rules.next()
+        {
+            match rule {
                 Rule::Map(func) => aggregates.push(self.map_to_aggr(&func)?),
                 Rule::Align { duration, func } => {
                     aggregates.push(self.align_to_aggr(duration, &func)?);
@@ -559,7 +568,25 @@ impl QueryParser {
                     duration,
                     func,
                 } => aggregates.push(self.bucket_to_aggr(groups, duration, func)?),
+                _ => {
+                    return Err(ParseError::RuleNotSupportedHere { span: node.span() });
+                }
+            }
+        }
+        for SyntaxRule { node, rule } in rules {
+            match rule {
+                // TODO: Remove pipe as
+                Rule::As(alias) => {
+                    let name = Metric::new(&alias).map_err(|_| ParseError::InvalidMetric {
+                        metric: alias.to_string(),
+                        span: alias.span(),
+                    })?;
+                    aggregates.push(Aggregate::As(As { name }));
+                }
                 Rule::Extern(extend_parts) => extends.append(&mut self.extend(extend_parts)?),
+                _ => {
+                    return Err(ParseError::RuleNotSupportedHere { span: node.span() });
+                }
             }
         }
 
@@ -608,6 +635,30 @@ impl QueryParser {
 
         let mut aggregates = Vec::new();
         let mut extends = Vec::new();
+        let mut rules = rules.into_iter().peekable();
+        while rules.peek().is_some_and(|r| r.is_aggr())
+            && let Some(SyntaxRule { node, rule }) = rules.next()
+        {
+            match rule {
+                Rule::IfDef { .. } | Rule::Sample(_) | Rule::Filter(_) => {
+                    return Err(ParseError::RuleNotSupportedAfterCompute { span: node.span() });
+                }
+                Rule::Map(func) => aggregates.push(self.map_to_aggr(&func)?),
+                Rule::Align { duration, func } => {
+                    aggregates.push(self.align_to_aggr(duration, &func)?);
+                }
+                Rule::Group { groups, func } => aggregates.push(self.group_to_aggr(groups, &func)?),
+                Rule::Bucket {
+                    groups,
+                    duration,
+                    func,
+                } => aggregates.push(self.bucket_to_aggr(groups, duration, func)?),
+                _ => {
+                    return Err(ParseError::RuleNotSupportedHere { span: node.span() });
+                }
+            }
+            {}
+        }
         for SyntaxRule { node, rule } in rules {
             match rule {
                 Rule::IfDef { .. } | Rule::Sample(_) | Rule::Filter(_) => {
@@ -621,17 +672,8 @@ impl QueryParser {
                     })?;
                     aggregates.push(Aggregate::As(As { name }));
                 }
-                Rule::Map(func) => aggregates.push(self.map_to_aggr(&func)?),
-                Rule::Align { duration, func } => {
-                    aggregates.push(self.align_to_aggr(duration, &func)?);
-                }
-                Rule::Group { groups, func } => aggregates.push(self.group_to_aggr(groups, &func)?),
-                Rule::Bucket {
-                    groups,
-                    duration,
-                    func,
-                } => aggregates.push(self.bucket_to_aggr(groups, duration, func)?),
                 Rule::Extern(extend_parts) => extends.append(&mut self.extend(extend_parts)?),
+                _ => return Err(ParseError::RuleNotSupportedHere { span: node.span() }),
             }
         }
         let name = Metric::new(&name).map_err(|_| ParseError::InvalidMetric {

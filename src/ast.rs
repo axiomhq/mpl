@@ -802,6 +802,21 @@ pub enum Rule {
     As(Ident),
 }
 
+impl Rule {
+    pub(crate) fn is_sample(&self) -> bool {
+        matches!(self, Rule::Sample(_))
+    }
+    pub(crate) fn is_filter(&self) -> bool {
+        matches!(self, Rule::Filter(_) | Rule::IfDef { .. })
+    }
+    pub(crate) fn is_aggr(&self) -> bool {
+        matches!(
+            self,
+            Rule::Group { .. } | Rule::Bucket { .. } | Rule::Align { .. } | Rule::Map(_)
+        )
+    }
+}
+
 /// A rule with attatched syntax node
 #[derive(Debug)]
 pub struct SyntaxRule {
@@ -815,6 +830,11 @@ impl Deref for SyntaxRule {
     type Target = Rule;
 
     fn deref(&self) -> &Self::Target {
+        &self.rule
+    }
+}
+impl AsRef<Rule> for SyntaxRule {
+    fn as_ref(&self) -> &Rule {
         &self.rule
     }
 }

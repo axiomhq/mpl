@@ -13,7 +13,7 @@
 | where time_window == "1m"
 | where service == #/axiomdb-[a-f]/
 | group using max
-| as cookie
 | map is::lt(0.4)
 | align to 7d using avg
+| as cookie
 | as cake
