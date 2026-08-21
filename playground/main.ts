@@ -4,7 +4,7 @@ import wasmInitLanguageServer from "@axiomhq/mpl";
 import wasmInitPlayground, { Interpreter, RunOutput } from "@axiomhq/mpl-playground";
 import Alpine from "alpinejs";
 import { renderCharts, type ChartEntry } from "./charts";
-import { datasets } from "./datasets";
+import { datasets, queryWindow } from "./datasets";
 import { createEditor, substituteSystemParams, type EditorInstance } from "./editor";
 
 const exampleModules = import.meta.glob("./examples/*.mpl", {
@@ -42,7 +42,7 @@ function resolveTheme(theme: Theme): "dark" | "light" {
 }
 
 await Promise.all([wasmInitLanguageServer(), wasmInitPlayground()]);
-const interpreter = new Interpreter(datasets);
+const interpreter = new Interpreter(datasets, queryWindow);
 
 function onEditorChange() {
   const panel = document.getElementById("charts-panel");

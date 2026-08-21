@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import type { StepOutput, Series } from "@axiomhq/mpl-playground";
 import { Interpreter } from "@axiomhq/mpl-playground";
-import { datasets } from "./datasets";
+import { datasets, queryWindow } from "./datasets";
 import { substituteSystemParams } from "./editor";
 
-const interp = new Interpreter(datasets);
+const interp = new Interpreter(datasets, queryWindow);
 
 function run(query: string): StepOutput[] {
   return interp.run(query);
@@ -404,5 +404,51 @@ describe("parse + interpret end-to-end", () => {
       const finite = series[0].values.filter(v => Number.isFinite(v)).length;
       expect(finite).toBeGreaterThan(0);
     });
+  });
+});
+
+describe("the query window", () => {
+  // The window is the runtime's, not the query's: the playground hands it to
+  // the interpreter, which reads only the samples it covers.
+  function windowed(start: number, end: number): Interpreter {
+    return new Interpreter(datasets, { start, end });
+  }
+
+  function timestamps(series: Series[]): number[] {
+    return series.flatMap(s => s.timestamps);
+  }
+
+  it("reads only the samples inside it", () => {
+    const cutoff = queryWindow.start + 600;
+    const result = windowed(queryWindow.start, cutoff).run("test:http_requests_total");
+    const points = timestamps(ok(result[0]));
+
+    expect(points.length).toBeGreaterThan(0);
+    expect(Math.min(...points)).toBeGreaterThanOrEqual(queryWindow.start);
+    expect(Math.max(...points)).toBeLessThan(cutoff);
+  });
+
+  it("reads the whole series when it spans the data", () => {
+    const all = timestamps(ok(run("test:http_requests_total")[0]));
+    const narrowed = timestamps(
+      ok(windowed(queryWindow.start, queryWindow.start + 600).run("test:http_requests_total")[0]),
+    );
+
+    expect(all.length).toBeGreaterThan(narrowed.length);
+    expect(Math.min(...all)).toBeGreaterThanOrEqual(queryWindow.start);
+  });
+
+  it("returns no series for a window the data misses", () => {
+    const result = windowed(1, 2).run("test:http_requests_total");
+    expect(ok(result[0]).length).toBe(0);
+  });
+
+  it("leaves a query unbounded when the host supplies no window", () => {
+    // A host that runs without a window reads the datasets whole — the
+    // behaviour every existing pipeline test relies on.
+    const unbounded = new Interpreter(datasets, undefined);
+    const all = timestamps(ok(run("test:http_requests_total")[0]));
+    const same = timestamps(ok(unbounded.run("test:http_requests_total")[0]));
+    expect(same).toEqual(all);
   });
 });

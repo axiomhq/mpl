@@ -53,4 +53,12 @@ describe("SYSTEM_PARAM_FACET", () => {
     const names = SYSTEM_PARAM_FACET.map(p => p.name);
     expect(names).toContain("__interval");
   });
+
+  it("registers the query window a runtime binds", () => {
+    // `$__start` and `$__end` are typed `Timestamp`, so the language server
+    // treats them as declared for the whole query.
+    const byName = new Map(SYSTEM_PARAM_FACET.map(p => [p.name, p]));
+    expect(byName.get("__start")?.type).toBe("Timestamp");
+    expect(byName.get("__end")?.type).toBe("Timestamp");
+  });
 });
