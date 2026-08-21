@@ -5,9 +5,9 @@ use regex::Regex;
 
 use crate::ast;
 
-/// A wrapper around `regex::Regex` that can be serialized and deserialized via bincode
-#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
-pub struct EncodableRegex(#[serde(with = "serde_regex")] Regex);
+/// A wrapper around `regex::Regex` that encodes as its pattern string.
+#[derive(Debug, Clone)]
+pub struct EncodableRegex(Regex);
 impl From<ast::Regex> for EncodableRegex {
     fn from(regex: ast::Regex) -> Self {
         EncodableRegex(regex.into())
@@ -52,6 +52,21 @@ impl Deref for EncodableRegex {
     }
 }
 
+impl serde::Serialize for EncodableRegex {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.0.as_str())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for EncodableRegex {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let pattern = String::deserialize(deserializer)?;
+        Regex::new(&pattern)
+            .map(EncodableRegex)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
 #[cfg(feature = "bincode")]
 mod bincode_impls {
     use super::{EncodableRegex, Regex};
@@ -76,4 +91,42 @@ mod bincode_impls {
         }
     }
     bincode::impl_borrow_decode!(EncodableRegex);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EncodableRegex;
+    use test_case::test_case;
+
+    #[test_case("^/api" ; "anchored literal")]
+    #[test_case("[a-z]+" ; "character class")]
+    #[test_case(r"\d{3}-\d{4}" ; "escapes and repetition")]
+    #[test_case(r"\p{Greek}+" ; "unicode property class")]
+    #[test_case("" ; "empty pattern")]
+    fn json_round_trip_preserves_the_pattern(pattern: &str) {
+        let regex = EncodableRegex::new(pattern).expect("valid pattern");
+        let json = serde_json::to_string(&regex).expect("serialize");
+        let back: EncodableRegex = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(back.as_str(), pattern);
+    }
+
+    /// The serialized form is the pattern string itself. The wasm JSON entry
+    /// points and any stored query rely on that shape, so it is part of the
+    /// contract rather than an implementation detail.
+    #[test_case("^/api" ; "anchored literal")]
+    #[test_case(r"\d{3}-\d{4}" ; "escapes and repetition")]
+    fn serializes_as_a_bare_json_string(pattern: &str) {
+        let regex = EncodableRegex::new(pattern).expect("valid pattern");
+
+        assert_eq!(
+            serde_json::to_string(&regex).expect("serialize"),
+            serde_json::to_string(pattern).expect("serialize str")
+        );
+    }
+
+    #[test]
+    fn deserializing_an_invalid_pattern_fails() {
+        assert!(serde_json::from_str::<EncodableRegex>(r#""[unclosed""#).is_err());
+    }
 }

@@ -43,7 +43,7 @@ panic = "abort"
 chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }
 clap = { version = "4", optional = true, features = ["derive"] }
 strum = { version = "0.28", features = ["derive"] }
-regex =  "1"
+regex = { version = "1", default-features = false, features = ["std", "unicode"] }
 thiserror = "2"
 serde_json = "1"
 serde = "1"
@@ -52,7 +52,6 @@ strumbra = { version = "0.6", features = ["serde"] }
 ordered-float = "5"
 ron = { version = "0.12", optional = true }
 arborium = { version = "2", optional = true, default-features = false, features = ["lang-ron", "lang-json"] }
-serde_regex = "1"
 strsim = "0.11.1"
 miette = { version = "7.6", features = ["serde"] }
 rowan = "0.17"
@@ -63,8 +62,10 @@ test-case = "3"
 miette = { version = "7.6", features = ["fancy"] }
 
 [features]
-default = ["bincode", "clock"]
+default = ["bincode", "clock", "regex-perf"]
 clock = ["chrono/clock"]
+# regex engines tuned for throughput; size-sensitive builds omit them
+regex-perf = ["regex/perf"]
 # Include examples in the build
 examples = []
 # for CLI tools
