@@ -719,3 +719,40 @@ mod compute {
         assert_eq!(errors("ds:metric | where t == 200"), Vec::new());
     }
 }
+
+#[test]
+fn unreferenced_timestamp_system_params_leave_the_query_clean() {
+    // The window is bound by the runtime rather than written into the query,
+    // so the registration is the whole of its presence in the editor: a query
+    // that never names `$__start` or `$__end` compiles exactly as it would
+    // without them.
+    use mpl_lang::query::{ParamType, TerminalParamType};
+
+    let mut params = HashMap::new();
+    for name in ["__start", "__end"] {
+        params.insert(
+            name.to_string(),
+            ParamType::Terminal(TerminalParamType::Timestamp),
+        );
+    }
+
+    let items = diagnostic_items_with_params("ds:metric | align to 1m using avg", params);
+    assert!(
+        items.is_empty(),
+        "registering the window must not disturb the query, got: {:?}",
+        items.iter().map(|i| &i.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_source_declared_timestamp_is_rejected() {
+    // `Timestamp` names a value the runtime supplies. The types a `param`
+    // line may spell are the ones a caller can pass, so a query asking for
+    // one is a type error the editor reports.
+    let items = error_items("param $x: Timestamp;\nds:metric");
+    assert!(
+        items.iter().any(|i| i.message.contains("invalid MPL type")),
+        "expected an invalid-type report, got: {:?}",
+        items.iter().map(|i| &i.message).collect::<Vec<_>>()
+    );
+}

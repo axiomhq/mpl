@@ -60,6 +60,13 @@ pub(crate) fn parse_param_value(
             unit: TimeUnit::Second,
         })),
         TerminalParamType::Regex => Ok(ParamValue::Regex(ast::parse_regex_value(src)?.into())),
+        TerminalParamType::Timestamp => match ast::parse_const_value(src)? {
+            TagValue::Int(v) if let Ok(v) = u64::try_from(v) => Ok(ParamValue::Timestamp(v)),
+            value => Err(ParseParamError::TypeMismatch {
+                declared: param.typ,
+                found: TerminalParamType::Tag(value.tpe()),
+            }),
+        },
         TerminalParamType::Tag(TagType::Null) => Err(ParseParamError::NoneParam),
         TerminalParamType::Tag(tag) => match (tag, ast::parse_const_value(src)?) {
             (TagType::String, TagValue::String(v)) => Ok(ParamValue::String(v.to_string())),

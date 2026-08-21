@@ -34,6 +34,20 @@ describe("mplSystemParams facet", () => {
     expect(flat.map(p => p.name)).toEqual(["__interval", "__resolution"]);
   });
 
+  it("carries the runtime-bound query window", () => {
+    // `$__start` and `$__end` are typed `Timestamp` and bound by whoever runs
+    // the query, so the facet is how the editor learns they exist at all.
+    const params: MplSystemParam[] = [
+      { name: "__start", type: "Timestamp" },
+      { name: "__end", type: "Timestamp" },
+    ];
+    const state = EditorState.create({
+      doc: "",
+      extensions: [mplSystemParams.of(params)],
+    });
+    expect(state.facet(mplSystemParams)).toEqual(params);
+  });
+
   it("preserves the optional flag through the facet", () => {
     const state = EditorState.create({
       doc: "",

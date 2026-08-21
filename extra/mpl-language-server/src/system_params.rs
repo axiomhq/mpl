@@ -10,6 +10,11 @@
 //! `bool`) rather than the lowercase completion-internal representation —
 //! a host registering `{ name: "__interval", type: "Duration" }` matches what
 //! they would have written had they declared the param inline.
+//!
+//! `Timestamp` extends that vocabulary to the query window a runtime hands the
+//! engine as `$__start` and `$__end`. The runtime binds those itself, so they
+//! arrive as registrations rather than as a type a `param` line spells, and a
+//! query reads them back through string interpolation.
 use std::collections::HashMap;
 
 use serde::Deserialize;
@@ -35,7 +40,7 @@ impl SystemParamSpec {
     /// or returns `None` for unknown spellings (silently dropped — invalid
     /// host registrations must not break the editor).
     fn to_query_param_type(&self) -> Option<ParamType> {
-        let terminal = CompletionParamType::from_spelling(&self.type_name)?.into();
+        let terminal = registered_type(&self.type_name)?.into();
         Some(if self.optional {
             ParamType::Optional(terminal)
         } else {
@@ -46,13 +51,29 @@ impl SystemParamSpec {
     /// Maps the spec to the completion-side `ParamItem` used to render
     /// the `$param` autocomplete list.
     fn to_completion_item(&self) -> Option<ParamItem> {
-        let typ = CompletionParamType::from_spelling(&self.type_name)?;
+        let typ = registered_type(&self.type_name)?;
         Some(ParamItem {
             label: ensure_dollar_prefix(&self.name),
             typ,
             optional: self.optional,
         })
     }
+}
+
+/// The spelling a `Timestamp` registration arrives with, pinned to the query
+/// type's own `Display` by `the_timestamp_spelling_matches_the_query_type`.
+const TIMESTAMP_SPELLING: &str = "Timestamp";
+
+/// The type a registration's `type` string names.
+///
+/// Declarable spellings resolve through the editor's type table, the same one
+/// completion offers inside a `param` declaration. `Timestamp` is the runtime's
+/// to bind, so it resolves against its own spelling here.
+fn registered_type(spelling: &str) -> Option<CompletionParamType> {
+    if spelling == TIMESTAMP_SPELLING {
+        return Some(CompletionParamType::Timestamp);
+    }
+    CompletionParamType::from_spelling(spelling)
 }
 
 /// The editor keeps its own param type so completion results can travel as the
@@ -70,6 +91,7 @@ impl From<CompletionParamType> for TerminalParamType {
             CompletionParamType::Float => TerminalParamType::Tag(TagType::Float),
             CompletionParamType::Bool => TerminalParamType::Tag(TagType::Bool),
             CompletionParamType::Array => TerminalParamType::Tag(TagType::Array),
+            CompletionParamType::Timestamp => TerminalParamType::Timestamp,
         }
     }
 }
@@ -201,6 +223,58 @@ mod tests {
         let items = to_completion_items(&specs);
         assert_eq!(items.len(), 1);
         assert!(items[0].optional);
+    }
+
+    /// The wire spelling and the query type's `Display` are one vocabulary, so
+    /// a registration written as `Timestamp` has to name the type the compiler
+    /// resolves it to. `spellings_agree_with_the_query_types` pins the same
+    /// property for every type the editor offers.
+    #[test]
+    fn the_timestamp_spelling_matches_the_query_type() {
+        assert_eq!(
+            TIMESTAMP_SPELLING,
+            TerminalParamType::Timestamp.to_string(),
+            "the registration spelling names the query type"
+        );
+    }
+
+    /// The window a runtime supplies arrives as two `Timestamp` registrations.
+    /// Both have to reach `compile`, or the editor reports `$__start` and
+    /// `$__end` as undeclared in a query the runtime executes happily.
+    #[test]
+    fn timestamp_registrations_reach_the_compiler() {
+        let specs = [
+            spec("__start", "Timestamp", false),
+            spec("__end", "Timestamp", false),
+        ];
+        let map = to_compile_params(&specs);
+        assert_eq!(map.len(), 2);
+        assert!(matches!(
+            map["__start"],
+            ParamType::Terminal(TerminalParamType::Timestamp)
+        ));
+        assert!(matches!(
+            map["__end"],
+            ParamType::Terminal(TerminalParamType::Timestamp)
+        ));
+    }
+
+    /// A runtime binds `Timestamp`, so the type table completion offers inside
+    /// a `param` declaration stays the set of types a `param` line may spell.
+    /// The registration still reaches the `$param` list, so a query can read
+    /// the window back where an expression is accepted.
+    #[test]
+    fn a_timestamp_registration_completes_without_being_declarable() {
+        assert_eq!(
+            CompletionParamType::from_spelling(TIMESTAMP_SPELLING),
+            None,
+            "the declarable-type table names the types a `param` line spells"
+        );
+
+        let items = to_completion_items(&[spec("__start", "Timestamp", false)]);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].label, "$__start");
+        assert_eq!(items[0].typ, CompletionParamType::Timestamp);
     }
 
     #[test]

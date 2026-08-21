@@ -19,6 +19,17 @@ describe("mergeSystemParamsInto", () => {
     });
   });
 
+  it("types the runtime-bound query window", () => {
+    // Hovering `$__start` in a query has to name the type the runtime binds
+    // it with, the same way an inline declaration would.
+    const decls = new Map<string, ParamDecl>();
+    mergeSystemParamsInto(decls, [{ name: "__start", type: "Timestamp" }]);
+    expect(decls.get("$__start")).toEqual({
+      type: "Timestamp",
+      optional: false,
+    });
+  });
+
   it("normalises names supplied without a leading $", () => {
     // Hosts that store names internally without `$` shouldn't have to add
     // it; the merge layer matches whatever `extractParamAt` produces, which

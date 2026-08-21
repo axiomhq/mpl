@@ -72,7 +72,16 @@ interface WasmMetricCompletion {
   dataset: string;
 }
 
-type WasmParamType = "dataset" | "duration" | "string" | "int" | "float" | "bool" | "array" | "regex";
+type WasmParamType =
+  | "dataset"
+  | "duration"
+  | "string"
+  | "int"
+  | "float"
+  | "bool"
+  | "array"
+  | "regex"
+  | "timestamp";
 
 interface WasmParamItem {
   label: string;

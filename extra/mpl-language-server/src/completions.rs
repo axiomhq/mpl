@@ -28,9 +28,12 @@ pub enum ParamType {
     Bool,
     Array,
     Regex,
+    Timestamp,
 }
 
-/// Every param type, in the order the editor offers them.
+/// Every type a `param` declaration may name, in the order the editor offers
+/// them. `Timestamp` values are bound by the runtime, which registers them as
+/// system params instead.
 pub(crate) const PARAM_TYPES: [ParamType; 8] = [
     ParamType::Dataset,
     ParamType::Duration,
@@ -55,10 +58,11 @@ impl ParamType {
             Self::Float => "float",
             Self::Bool => "bool",
             Self::Array => "array",
+            Self::Timestamp => "Timestamp",
         }
     }
 
-    /// The type a source-level spelling names.
+    /// The type a `param` declaration's spelling names.
     pub(crate) fn from_spelling(s: &str) -> Option<Self> {
         PARAM_TYPES.into_iter().find(|t| t.spelling() == s)
     }

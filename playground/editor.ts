@@ -14,7 +14,7 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import { EditorView } from "@codemirror/view";
 import { basicSetup } from "codemirror";
 import { vim } from "@replit/codemirror-vim";
-import { datasets } from "./datasets";
+import { datasets, queryWindow } from "./datasets";
 
 /**
  * Host-supplied parameters the query service injects at execution time.
@@ -22,10 +22,11 @@ import { datasets } from "./datasets";
  * Each entry serves two roles:
  *  - `{ name, type }` feeds the `mplSystemParams` facet so the language
  *    server stops flagging `$__interval` as undeclared.
- *  - `value` is the concrete string the playground splices in for the
- *    name before handing the query to the interpreter, which has no
- *    binding step of its own (`Parameterized::Param` would otherwise
- *    fail with “Parameterized values are not supported” at runtime).
+ *  - `value` is the concrete value bound for the name. The playground
+ *    splices it in for any reference before handing the query to the
+ *    interpreter, which has no binding step of its own
+ *    (`Parameterized::Param` would otherwise fail with “Parameterized
+ *    values are not supported” at runtime), and shows it in the header.
  *
  * System param names must use the `__` prefix — the parser surfaces a
  * diagnostic for any registration that doesn't.
@@ -40,6 +41,11 @@ const SYSTEM_PARAMS: PlaygroundSystemParam[] = [
   // Hosts in production compute this from the query window; the playground
   // pins it for reproducibility.
   { name: "__interval", type: "Duration", value: "1m" },
+  // The window the query runs in, as unix seconds. A query service derives it
+  // from the time picker; the playground pins it to the span of the demo data
+  // so every example sees all of its series.
+  { name: "__start", type: "Timestamp", value: String(queryWindow.start) },
+  { name: "__end", type: "Timestamp", value: String(queryWindow.end) },
 ];
 
 export const SYSTEM_PARAM_FACET: MplSystemParam[] = SYSTEM_PARAMS.map(

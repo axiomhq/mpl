@@ -402,8 +402,8 @@ pub enum TerminalParamType {
     Dataset,
     /// Regex
     Regex,
-    // /// Timestamp
-    // Timestamp,
+    /// Timestamp
+    Timestamp,
     /// A tag value type
     Tag(TagType),
 }
@@ -413,6 +413,7 @@ impl std::fmt::Display for TerminalParamType {
             TerminalParamType::Dataset => write!(f, "Dataset"),
             TerminalParamType::Duration => write!(f, "Duration"),
             TerminalParamType::Regex => write!(f, "Regex"),
+            TerminalParamType::Timestamp => write!(f, "Timestamp"),
             TerminalParamType::Tag(t) => t.fmt(f),
         }
     }
@@ -502,6 +503,8 @@ pub enum ParamValue {
     Regex(EncodableRegex),
     /// Array
     Array(Vec<TagValue>),
+    /// Timestamp
+    Timestamp(u64),
 }
 
 impl ParamValue {
@@ -512,6 +515,7 @@ impl ParamValue {
             ParamValue::Dataset(_) => TerminalParamType::Dataset,
             ParamValue::Duration(_) => TerminalParamType::Duration,
             ParamValue::Regex(_) => TerminalParamType::Regex,
+            ParamValue::Timestamp(_) => TerminalParamType::Timestamp,
             ParamValue::String(_) => TerminalParamType::Tag(TagType::String),
             ParamValue::Int(_) => TerminalParamType::Tag(TagType::Int),
             ParamValue::Float(_) => TerminalParamType::Tag(TagType::Float),

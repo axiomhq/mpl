@@ -4,7 +4,7 @@ import wasmInitLanguageServer from "@axiomhq/mpl";
 import wasmInitPlayground, { Interpreter, RunOutput } from "@axiomhq/mpl-playground";
 import Alpine from "alpinejs";
 import { renderCharts, type ChartEntry } from "./charts";
-import { datasets } from "./datasets";
+import { datasets, formatQueryWindow, queryWindow } from "./datasets";
 import { createEditor, substituteSystemParams, type EditorInstance } from "./editor";
 
 const exampleModules = import.meta.glob("./examples/*.mpl", {
@@ -42,7 +42,7 @@ function resolveTheme(theme: Theme): "dark" | "light" {
 }
 
 await Promise.all([wasmInitLanguageServer(), wasmInitPlayground()]);
-const interpreter = new Interpreter(datasets);
+const interpreter = new Interpreter(datasets, queryWindow);
 
 function onEditorChange() {
   const panel = document.getElementById("charts-panel");
@@ -78,6 +78,11 @@ const playgroundStore = {
   resolvedTheme: "light" as "dark" | "light",
   selectedExampleIndex: 0,
   examples,
+  // The window every query runs in, shown in the header. A query service
+  // computes it from its time picker and binds it as `$__start` and `$__end`;
+  // here it is fixed to the span of the demo data.
+  queryWindowLabel: formatQueryWindow(queryWindow),
+  queryWindowTitle: `$__start = ${queryWindow.start}, $__end = ${queryWindow.end}`,
 
   init() {
     this.resolvedTheme = resolveTheme(this.theme);
