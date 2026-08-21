@@ -58,6 +58,19 @@ export function datasetsWindow(datasets: Datasets): QueryWindow {
   return { start: first, end: last + 1 };
 }
 
+/** One second as an ISO-8601 UTC instant, to the second. */
+function isoSecond(timestamp: number): string {
+  return `${new Date(timestamp * 1000).toISOString().slice(0, 19)}Z`;
+}
+
+/**
+ * The window as a reader sees it: the first instant it covers through the
+ * instant it stops at, both in UTC.
+ */
+export function formatQueryWindow(window: QueryWindow): string {
+  return `${isoSecond(window.start)} \u2192 ${isoSecond(window.end)}`;
+}
+
 /**
  * The window the playground runs every query in. Pinned to the span of the
  * demo data so each example sees all of its own series.

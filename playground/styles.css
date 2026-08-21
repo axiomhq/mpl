@@ -232,6 +232,28 @@ h1 {
   background: var(--bg-color);
 }
 
+#query-window {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-left: auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--toggle-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.query-window-name {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+#query-window-range {
+  font-family: "Ioskeley Mono", ui-monospace, monospace;
+}
+
 #panel-toolbars {
   display: flex;
   padding: 2px 20px;
@@ -449,6 +471,11 @@ h1 {
   #example-select {
     min-width: 0;
     flex: 1;
+  }
+
+  #query-window {
+    margin-left: 0;
+    flex-basis: 100%;
   }
 
   #panel-toolbars {
