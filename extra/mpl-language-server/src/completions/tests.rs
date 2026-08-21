@@ -1977,6 +1977,40 @@ fn system_param_is_offered_in_value_position() {
     );
 }
 
+/// A runtime binds the query window, and a query reads it back inside a
+/// `${ … }` interpolation — the one place an expression may name it. The
+/// value slot of `align to` takes a duration, so the same param is not one of
+/// the choices there.
+#[test]
+fn a_timestamp_system_param_is_offered_where_an_expression_is_read() {
+    let window = ParamItem {
+        label: "$__start".to_string(),
+        typ: ParamType::Timestamp,
+        optional: false,
+    };
+
+    let interpolated = completions_at_with_params(
+        "ds:metric | extend at = \"${ $#\"",
+        std::slice::from_ref(&window),
+    )
+    .expect("interpolation should produce completions");
+    assert!(
+        interpolated.option_labels().contains(&"$__start"),
+        "the window reads as a value in an interpolation, got: {:?}",
+        interpolated.option_labels()
+    );
+
+    let duration_slot = completions_at_with_params("ds:metric | align to #", &[window]);
+    let labels: Vec<String> = duration_slot
+        .as_ref()
+        .map(|r| r.option_labels().into_iter().map(str::to_string).collect())
+        .unwrap_or_default();
+    assert!(
+        !labels.iter().any(|l| l == "$__start"),
+        "the align value slot takes a duration, got: {labels:?}"
+    );
+}
+
 #[test]
 fn system_param_is_filtered_by_partial() {
     // Filtering is applied uniformly to inline and system params: typing

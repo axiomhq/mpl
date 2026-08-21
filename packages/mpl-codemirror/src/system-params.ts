@@ -1,18 +1,20 @@
 import { Facet } from "@codemirror/state";
 
 /**
- * Source-level type names accepted by the MPL parser for `param` declarations.
- * The system-params API mirrors this set verbatim so a host registration
- * reads like the language it shadows — `{ type: "Duration" }` is the same
- * token a user would have written inline.
+ * Type names a host registers a system parameter with. The declarable ones
+ * mirror the source-level spellings verbatim, so a registration reads like
+ * the language it shadows — `{ type: "Duration" }` is the same token a user
+ * would have written inline.
  *
  * Lowercase entries are tag-value types; capitalised ones are language
- * built-ins.
+ * built-ins. `Timestamp` types the query window a runtime binds itself,
+ * `$__start` and `$__end`.
  */
 export type MplParamType =
   | "Dataset"
   | "Duration"
   | "Regex"
+  | "Timestamp"
   | "string"
   | "int"
   | "float"
