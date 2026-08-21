@@ -166,6 +166,67 @@ pub struct Series {
     pub values: Vec<f64>,
 }
 
+/// The window a runtime runs a query in, in whole seconds: `$__start` is
+/// included, `$__end` is not.
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct QueryWindow {
+    /// First second the query covers.
+    pub start: u64,
+    /// Second the query stops before.
+    pub end: u64,
+}
+
+impl QueryWindow {
+    /// Whether the window covers `timestamp`.
+    fn covers(self, timestamp: f64) -> bool {
+        timestamp >= self.start as f64 && timestamp < self.end as f64
+    }
+
+    /// The datasets as the query sees them: every series keeps the samples the
+    /// window covers, and a series the window covers nothing of is no part of
+    /// the result.
+    #[must_use]
+    pub fn clip(self, datasets: &Datasets) -> Datasets {
+        datasets
+            .iter()
+            .map(|dataset| DatasetEntry {
+                name: dataset.name.clone(),
+                metrics: dataset
+                    .metrics
+                    .iter()
+                    .map(|metric| MetricEntry {
+                        name: metric.name.clone(),
+                        series: metric
+                            .series
+                            .iter()
+                            .filter_map(|series| self.clip_series(series))
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// One series reduced to the samples inside the window, dropped once the
+    /// window holds none of them.
+    fn clip_series(self, series: &Series) -> Option<Series> {
+        let (timestamps, values): (Vec<f64>, Vec<f64>) = series
+            .timestamps
+            .iter()
+            .zip(&series.values)
+            .filter(|(ts, _)| self.covers(**ts))
+            .map(|(ts, value)| (*ts, *value))
+            .unzip();
+
+        (!timestamps.is_empty()).then(|| Series {
+            name: series.name.clone(),
+            tags: series.tags.clone(),
+            timestamps,
+            values,
+        })
+    }
+}
+
 /// An interpreter error.
 #[derive(Debug, Clone, Deref, Serialize, Tsify)]
 #[serde(transparent)]
@@ -202,15 +263,19 @@ pub struct RunOutput(pub Vec<StepOutput>);
 #[wasm_bindgen]
 pub struct Interpreter {
     datasets: Datasets,
+    window: Option<QueryWindow>,
 }
 
 #[wasm_bindgen]
 impl Interpreter {
-    /// Create an interpreter with the given datasets.
+    /// Create an interpreter with the given datasets, running queries in
+    /// `window` when the host supplies one — the same `$__start` and `$__end`
+    /// a query service binds. Datasets are read whole without it.
     #[wasm_bindgen(constructor)]
-    pub fn new(datasets: JsValue) -> Result<Self, String> {
+    pub fn new(datasets: JsValue, window: JsValue) -> Result<Self, String> {
         Ok(Self {
             datasets: serde_wasm_bindgen::from_value(datasets).map_err(|e| e.to_string())?,
+            window: serde_wasm_bindgen::from_value(window).map_err(|e| e.to_string())?,
         })
     }
 
@@ -219,7 +284,8 @@ impl Interpreter {
         let (query, _) =
             compile(code, HashMap::new()).map_err(|e| crate::diagnostics::message(code, &e))?;
         let steps = query_steps(query);
-        let results = interpret(&steps, &self.datasets);
+        let windowed = self.window.map(|window| window.clip(&self.datasets));
+        let results = interpret(&steps, windowed.as_ref().unwrap_or(&self.datasets));
 
         Ok(RunOutput(
             steps

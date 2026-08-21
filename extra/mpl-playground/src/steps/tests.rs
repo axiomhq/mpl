@@ -10,6 +10,7 @@ use mpl_lang::{
     tags::TagValue,
     types::{BucketSpec, BucketType, ComputeType, Dataset, MapType, Metric},
 };
+use test_case::test_case;
 
 fn span() -> SourceSpan {
     SourceSpan::new(SourceOffset::from(0), 0)
@@ -2263,4 +2264,94 @@ fn group_count_all_nan_column_yields_zero() {
     let result = interpret(&steps, &datasets);
     let grouped = result[1].as_ref().expect("group must succeed");
     assert_eq!(grouped[0].values, vec![0.0, 2.0]);
+}
+
+// ── query window ──────────────────────────────────────────────────
+
+fn window(start: u64, end: u64) -> QueryWindow {
+    QueryWindow { start, end }
+}
+
+/// The window follows the language's own range semantics: the start second is
+/// part of the query, the end second is where it stops.
+#[test]
+fn the_window_takes_its_start_and_stops_before_its_end() {
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![s(
+            &[("host", "a")],
+            vec![10.0, 20.0, 30.0, 40.0],
+            vec![1.0, 2.0, 3.0, 4.0],
+        )],
+    );
+
+    let clipped = window(20, 40).clip(&datasets);
+    let series = &clipped[0].metrics[0].series[0];
+    assert_eq!(series.timestamps, vec![20.0, 30.0]);
+    assert_eq!(series.values, vec![2.0, 3.0]);
+}
+
+/// Values are read by position, so a clipped series has to keep each value
+/// with the timestamp it was recorded at.
+#[test_case(0, 100  => (vec![10.0, 20.0, 30.0], vec![1.0, 2.0, 3.0]) ; "the whole series")]
+#[test_case(20, 100 => (vec![20.0, 30.0],       vec![2.0, 3.0])      ; "from the second sample")]
+#[test_case(0, 30   => (vec![10.0, 20.0],       vec![1.0, 2.0])      ; "up to the last sample")]
+#[test_case(21, 29  => (vec![],                 vec![])              ; "between two samples")]
+fn a_clipped_series_keeps_values_paired_with_their_timestamps(
+    start: u64,
+    end: u64,
+) -> (Vec<f64>, Vec<f64>) {
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![s(
+            &[("host", "a")],
+            vec![10.0, 20.0, 30.0],
+            vec![1.0, 2.0, 3.0],
+        )],
+    );
+
+    let clipped = window(start, end).clip(&datasets);
+    clipped[0].metrics[0].series.first().map_or_else(
+        || (Vec::new(), Vec::new()),
+        |series| (series.timestamps.clone(), series.values.clone()),
+    )
+}
+
+/// A series the window covers nothing of reported no data for the query, so it
+/// is not one of the series the query returns.
+#[test]
+fn a_series_the_window_misses_is_left_out() {
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![
+            s(&[("host", "a")], vec![10.0, 20.0], vec![1.0, 2.0]),
+            s(&[("host", "b")], vec![90.0, 95.0], vec![9.0, 9.5]),
+        ],
+    );
+
+    let clipped = window(0, 50).clip(&datasets);
+    let series = &clipped[0].metrics[0].series;
+    assert_eq!(series.len(), 1);
+    assert_eq!(series[0].tags.get("host").map(String::as_str), Some("a"));
+}
+
+/// Clipping selects samples; what identifies a series travels with it, or the
+/// steps that group and filter by tag would see a different series.
+#[test]
+fn clipping_carries_the_series_identity() {
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![s(&[("host", "a"), ("region", "eu")], vec![10.0], vec![1.0])],
+    );
+
+    let clipped = window(0, 50).clip(&datasets);
+    let series = &clipped[0].metrics[0].series[0];
+    assert_eq!(series.name, datasets[0].metrics[0].series[0].name);
+    assert_eq!(series.tags, datasets[0].metrics[0].series[0].tags);
+    assert_eq!(clipped[0].name, "ds");
+    assert_eq!(clipped[0].metrics[0].name, "m");
 }
