@@ -12,7 +12,7 @@ use eyre::{Result, bail, ensure, eyre};
 use miette::{SourceOffset, SourceSpan};
 use rand::RngExt as _;
 use serde::{Deserialize, Serialize};
-use tsify::Tsify;
+use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
 
 use mpl_lang::{
@@ -153,7 +153,6 @@ pub struct MetricEntry {
 
 /// A time series with named tags, timestamps, and values.
 #[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi)]
 pub struct Series {
     /// Display name.
     #[serde(default)]
@@ -230,12 +229,10 @@ impl QueryWindow {
 /// An interpreter error.
 #[derive(Debug, Clone, Deref, Serialize, Tsify)]
 #[serde(transparent)]
-#[tsify(into_wasm_abi)]
 pub struct StepError(pub String);
 
 /// Result for a single pipeline step.
 #[derive(Debug, Clone, Serialize, Tsify)]
-#[tsify(into_wasm_abi)]
 pub enum StepResult {
     /// Successful step with series data.
     Ok(Vec<Series>),
@@ -245,7 +242,6 @@ pub enum StepResult {
 
 /// Combined parse + interpret result for a single step.
 #[derive(Debug, Clone, Serialize, Tsify)]
-#[tsify(into_wasm_abi)]
 pub struct StepOutput {
     /// Display text for this step.
     pub text: String,
@@ -256,7 +252,6 @@ pub struct StepOutput {
 /// Result of running a full pipeline.
 #[derive(Debug, Clone, Deref, Serialize, Tsify)]
 #[serde(transparent)]
-#[tsify(into_wasm_abi)]
 pub struct RunOutput(pub Vec<StepOutput>);
 
 /// Playground interpreter with pre-loaded datasets.
@@ -280,14 +275,14 @@ impl Interpreter {
     }
 
     /// Parse and interpret an MPL query.
-    pub fn run(&self, code: &str) -> Result<RunOutput, String> {
+    pub fn run(&self, code: &str) -> Result<Ts<RunOutput>, String> {
         let (query, _) =
             compile(code, HashMap::new()).map_err(|e| crate::diagnostics::message(code, &e))?;
         let steps = query_steps(query);
         let windowed = self.window.map(|window| window.clip(&self.datasets));
         let results = interpret(&steps, windowed.as_ref().unwrap_or(&self.datasets));
 
-        Ok(RunOutput(
+        RunOutput(
             steps
                 .iter()
                 .zip(results)
@@ -299,7 +294,9 @@ impl Interpreter {
                     },
                 })
                 .collect(),
-        ))
+        )
+        .into_ts()
+        .map_err(|e| e.to_string())
     }
 }
 
