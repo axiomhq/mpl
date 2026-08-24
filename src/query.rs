@@ -847,6 +847,17 @@ impl ProvidedParams {
             .ok_or(ResolveError::ParamNotProvided(name.to_string()))
     }
 
+    /// Set a param by name, overwriting any existing value.
+    pub fn set_param(&mut self, name: &str, value: ParamValue) {
+        for p in &mut self.inner {
+            if p.name == name {
+                p.value = value;
+                return;
+            }
+        }
+        self.inner.push(ProvidedParam::new(name.to_string(), value));
+    }
+
     /// Resolve a `TagValue`.
     pub fn inline_params(&self, expr: Expr) -> Result<Expr, ResolveError> {
         let param = match expr {
