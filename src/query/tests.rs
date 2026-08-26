@@ -20,36 +20,43 @@ fn provided_params_parse() {
             span: SourceSpan::from(0..0),
             name: "dataset".to_string(),
             typ: ParamType::Terminal(TerminalParamType::Dataset),
+            system: false,
         },
         ParamDeclaration {
             span: SourceSpan::from(0..0),
             name: "duration".to_string(),
             typ: ParamType::Terminal(TerminalParamType::Duration),
+            system: false,
         },
         ParamDeclaration {
             span: SourceSpan::from(0..0),
             name: "string".to_string(),
             typ: ParamType::Terminal(TerminalParamType::Tag(TagType::String)),
+            system: false,
         },
         ParamDeclaration {
             span: SourceSpan::from(0..0),
             name: "int".to_string(),
             typ: ParamType::Terminal(TerminalParamType::Tag(TagType::Int)),
+            system: false,
         },
         ParamDeclaration {
             span: SourceSpan::from(0..0),
             name: "float".to_string(),
             typ: ParamType::Terminal(TerminalParamType::Tag(TagType::Float)),
+            system: false,
         },
         ParamDeclaration {
             span: SourceSpan::from(0..0),
             name: "bool".to_string(),
             typ: ParamType::Terminal(TerminalParamType::Tag(TagType::Bool)),
+            system: false,
         },
         ParamDeclaration {
             span: SourceSpan::from(0..0),
             name: "regex".to_string(),
             typ: ParamType::Terminal(TerminalParamType::Regex),
+            system: false,
         },
     ];
 
@@ -110,6 +117,7 @@ fn provided_params_parse_array() {
         span: SourceSpan::from(0..0),
         name: "hosts".to_string(),
         typ: ParamType::Terminal(TerminalParamType::Tag(TagType::Array)),
+        system: false,
     }];
 
     // Heterogeneous elements and nesting are legal; each element is coerced
@@ -140,6 +148,7 @@ fn provided_params_array_rejects_scalar_value() {
         span: SourceSpan::from(0..0),
         name: "hosts".to_string(),
         typ: ParamType::Terminal(TerminalParamType::Tag(TagType::Array)),
+        system: false,
     }];
 
     let query_params = vec![("param__hosts".to_string(), "42".to_string())];
@@ -165,11 +174,13 @@ fn provided_params_array_rejects_scalar_value() {
 }
 #[test]
 fn resolve_array_param_to_const_array() {
-    let provided_params = ProvidedParams::new(vec![ProvidedParam::new(
-        "hosts",
-        ParamValue::Array(vec![TagValue::Int(1), TagValue::Int(2)]),
-    )]);
-
+    let provided_params = ProvidedParams::new(
+        vec![ProvidedParam::new(
+            "hosts",
+            ParamValue::Array(vec![TagValue::Int(1), TagValue::Int(2)]),
+        )],
+        Vec::new(),
+    );
     let value = provided_params
         .inline_params(Expr::Param {
             span: SourceSpan::from(0..0),
@@ -177,6 +188,7 @@ fn resolve_array_param_to_const_array() {
                 span: SourceSpan::from(0..0),
                 name: "hosts".to_string(),
                 typ: ParamType::Terminal(TerminalParamType::Tag(TagType::Array)),
+                system: false,
             },
         })
         .expect("expected array param to resolve");
@@ -233,11 +245,13 @@ fn provided_params_duplicates() {
             span: SourceSpan::from(0..0),
             name: "dataset".to_string(),
             typ: ParamType::Terminal(TerminalParamType::Dataset),
+            system: false,
         },
         ParamDeclaration {
             span: SourceSpan::from(0..0),
-            name: "__interval".to_string(),
+            name: "interval".to_string(),
             typ: ParamType::Terminal(TerminalParamType::Duration),
+            system: false,
         },
     ];
 
@@ -245,8 +259,8 @@ fn provided_params_duplicates() {
         ("lol", "whatever, this should be ignored"),
         ("param__dataset", "mymetrics"),
         ("param__dataset", "`my-metrics-2`"),
-        ("param____interval", "1m"),
-        ("param____interval", "5m"),
+        ("param__interval", "1m"),
+        ("param__interval", "5m"),
     ]
     .iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -256,9 +270,43 @@ fn provided_params_duplicates() {
         Err(ParseProvidedParamsError::ParamsProvidedMoreThanOnce(list)) => {
             assert_eq!(2, list.as_slice().len());
             assert!(list.as_slice().contains(&"dataset".to_string()));
-            assert!(list.as_slice().contains(&"__interval".to_string()));
+            assert!(list.as_slice().contains(&"interval".to_string()));
         }
         res => panic!("expected duplicate params error, got {res:?}"),
+    }
+}
+
+#[test]
+fn provided_system_params() {
+    let mpl_params = vec![
+        ParamDeclaration {
+            span: SourceSpan::from(0..0),
+            name: "dataset".to_string(),
+            typ: ParamType::Terminal(TerminalParamType::Dataset),
+            system: false,
+        },
+        ParamDeclaration {
+            span: SourceSpan::from(0..0),
+            name: "__interval".to_string(),
+            typ: ParamType::Terminal(TerminalParamType::Duration),
+            system: true,
+        },
+    ];
+
+    let query_params = [
+        ("lol", "whatever, this should be ignored"),
+        ("param__dataset", "`my-metrics-2`"),
+        ("param____interval", "1m"),
+    ]
+    .iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect::<Vec<(String, String)>>();
+
+    match ProvidedParams::parse_and_validate(&mpl_params, &query_params) {
+        Err(ParseProvidedParamsError::SystemParamProvided { param_name }) => {
+            assert_eq!(param_name, "__interval");
+        }
+        res => panic!("expected system params error, got {res:?}"),
     }
 }
 
@@ -268,6 +316,7 @@ fn provided_params_declared_but_not_provided() {
         span: SourceSpan::from(0..0),
         name: "dataset".to_string(),
         typ: ParamType::Terminal(TerminalParamType::Dataset),
+        system: false,
     }];
 
     let query_params = [("lol", "whatever, this should be ignored")]
@@ -315,11 +364,13 @@ fn provided_params_parse_failure() {
             span: SourceSpan::from(0..0),
             name: "dataset".to_string(),
             typ: ParamType::Terminal(TerminalParamType::Dataset),
+            system: false,
         },
         ParamDeclaration {
             span: SourceSpan::from(0..0),
             name: "duration".to_string(),
             typ: ParamType::Terminal(TerminalParamType::Duration),
+            system: false,
         },
     ];
 
@@ -378,6 +429,7 @@ fn provided_value(typ: ParamType, src: &str) -> Result<ParamValue, ParseProvided
         span: SourceSpan::from(0..0),
         name: "p".to_string(),
         typ,
+        system: false,
     }];
     let provided = [("param__p".to_string(), src.to_string())];
     let (params, _) = ProvidedParams::parse_and_validate(&declared, &provided)?;
@@ -509,10 +561,13 @@ fn a_duration_param_below_a_second_is_rejected() {
 
 #[test]
 fn resolve_tag_value_from_provided_param() {
-    let provided_params = ProvidedParams::new(vec![ProvidedParam::new(
-        "env",
-        ParamValue::String("prod".to_string()),
-    )]);
+    let provided_params = ProvidedParams::new(
+        vec![ProvidedParam::new(
+            "env",
+            ParamValue::String("prod".to_string()),
+        )],
+        Vec::new(),
+    );
 
     let value = provided_params
         .inline_params(Expr::Param {
@@ -521,6 +576,7 @@ fn resolve_tag_value_from_provided_param() {
                 span: SourceSpan::from(0..0),
                 name: "env".to_string(),
                 typ: ParamType::Terminal(TerminalParamType::Tag(TagType::String)),
+                system: false,
             },
         })
         .expect("expected string param to resolve");
@@ -535,10 +591,13 @@ fn resolve_tag_value_from_provided_param() {
 
 #[test]
 fn resolve_tag_value_from_provided_param_interpolated() {
-    let provided_params = ProvidedParams::new(vec![ProvidedParam::new(
-        "env",
-        ParamValue::String("prod".to_string()),
-    )]);
+    let provided_params = ProvidedParams::new(
+        vec![ProvidedParam::new(
+            "env",
+            ParamValue::String("prod".to_string()),
+        )],
+        Vec::new(),
+    );
 
     let value = provided_params
         .inline_params(Expr::String(vec![
@@ -549,6 +608,7 @@ fn resolve_tag_value_from_provided_param_interpolated() {
                     span: SourceSpan::from(0..0),
                     name: "env".to_string(),
                     typ: ParamType::Terminal(TerminalParamType::Tag(TagType::String)),
+                    system: false,
                 },
             }),
             StringFragment::Text(":".to_string()),
@@ -566,7 +626,7 @@ fn resolve_tag_value_from_provided_param_interpolated() {
 
 #[test]
 fn resolve_tag_value_errors_for_missing_param() {
-    let provided_params = ProvidedParams::new(vec![]);
+    let provided_params = ProvidedParams::new(Vec::new(), Vec::new());
 
     match provided_params.inline_params(Expr::Param {
         span: SourceSpan::from(0..0),
@@ -574,6 +634,7 @@ fn resolve_tag_value_errors_for_missing_param() {
             span: SourceSpan::from(0..0),
             name: "env".to_string(),
             typ: ParamType::Terminal(TerminalParamType::Tag(TagType::String)),
+            system: false,
         },
     }) {
         Err(ResolveError::ParamNotProvided(name)) => assert_eq!(name, "env"),
@@ -586,6 +647,7 @@ fn optional_string_param(name: &str) -> ParamDeclaration {
         span: SourceSpan::from(0..0),
         name: name.to_string(),
         typ: ParamType::Optional(TerminalParamType::Tag(TagType::String)),
+        system: false,
     }
 }
 
@@ -600,7 +662,7 @@ fn tag_filter(field: &str, value: &str) -> Filter {
 
 #[test]
 fn active_filter_keeps_plain_filters() {
-    let provided = ProvidedParams::new(vec![]);
+    let provided = ProvidedParams::new(Vec::new(), Vec::new());
     let filter = tag_filter("env", "prod");
     let filter_or_ifdef = FilterOrIfDef::Filter(filter.clone());
 
@@ -609,10 +671,13 @@ fn active_filter_keeps_plain_filters() {
 
 #[test]
 fn active_filter_applies_ifdef_when_param_is_provided() {
-    let provided = ProvidedParams::new(vec![ProvidedParam {
-        name: "env".to_string(),
-        value: ParamValue::String("prod".to_string()),
-    }]);
+    let provided = ProvidedParams::new(
+        vec![ProvidedParam {
+            name: "env".to_string(),
+            value: ParamValue::String("prod".to_string()),
+        }],
+        Vec::new(),
+    );
     let filter = tag_filter("env", "prod");
     let filter_or_ifdef = FilterOrIfDef::Ifdef {
         param: optional_string_param("env"),
@@ -625,7 +690,7 @@ fn active_filter_applies_ifdef_when_param_is_provided() {
 
 #[test]
 fn active_filter_drops_ifdef_when_param_is_omitted() {
-    let provided = ProvidedParams::new(vec![]);
+    let provided = ProvidedParams::new(Vec::new(), Vec::new());
     let filter_or_ifdef = FilterOrIfDef::Ifdef {
         param: optional_string_param("env"),
         filter: tag_filter("env", "prod"),
@@ -637,7 +702,7 @@ fn active_filter_drops_ifdef_when_param_is_omitted() {
 
 #[test]
 fn becomes_else_ifdef_when_param_is_omitted() {
-    let provided = ProvidedParams::new(vec![]);
+    let provided = ProvidedParams::new(Vec::new(), Vec::new());
     let filter = tag_filter("env", "prod");
 
     let filter_or_ifdef = FilterOrIfDef::Ifdef {
@@ -650,10 +715,13 @@ fn becomes_else_ifdef_when_param_is_omitted() {
 
 #[test]
 fn active_filters_preserves_order_and_drops_inactive_ifdefs() {
-    let provided = ProvidedParams::new(vec![ProvidedParam {
-        name: "env".to_string(),
-        value: ParamValue::String("prod".to_string()),
-    }]);
+    let provided = ProvidedParams::new(
+        vec![ProvidedParam {
+            name: "env".to_string(),
+            value: ParamValue::String("prod".to_string()),
+        }],
+        Vec::new(),
+    );
     let region = tag_filter("region", "us-east-1");
     let env = tag_filter("env", "prod");
     let cluster = tag_filter("cluster", "blue");

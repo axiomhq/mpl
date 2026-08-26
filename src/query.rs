@@ -472,6 +472,8 @@ pub struct ParamDeclaration {
     pub name: String,
     /// The type of the param
     pub typ: ParamType,
+    /// This is a system parameter
+    pub system: bool,
 }
 
 impl ParamDeclaration {
@@ -548,6 +550,7 @@ impl ProvidedParam {
 #[derive(Debug, Clone, Default)]
 pub struct ProvidedParams {
     inner: Vec<ProvidedParam>,
+    system_params: Vec<ParamDeclaration>,
 }
 
 /// The error returned from `ProvidedParams::resolve`.
@@ -596,6 +599,18 @@ pub enum ParseProvidedParamsError {
     /// Too many params provided
     #[error("The number of params provided exceeds the upper limit of {0}")]
     TooManyParamsProvided(usize),
+    /// The user tried to pass in a system param
+    #[error("The system param {param_name} cannot be provided over the API")]
+    SystemParamProvided {
+        /// The name of the param
+        param_name: String,
+    },
+    /// The parameter tried to be set as a system parameter is not in fact a system parameter
+    #[error("The parameter {name} is not a system parameter")]
+    NotASystemParam {
+        /// The name of the param
+        name: String,
+    },
 }
 /// List of warning reasons
 #[derive(Debug)]
@@ -713,8 +728,11 @@ impl Warnings {
 impl ProvidedParams {
     /// Create a new `ProvidedParams` struct.
     #[must_use]
-    pub fn new(inner: Vec<ProvidedParam>) -> Self {
-        Self { inner }
+    pub fn new(inner: Vec<ProvidedParam>, system_params: Vec<ParamDeclaration>) -> Self {
+        Self {
+            inner,
+            system_params,
+        }
     }
 
     /// Parse params from a hashmap of query parameters.
@@ -767,6 +785,12 @@ impl ProvidedParams {
                 continue;
             };
 
+            if mpl_param.system {
+                return Err(ParseProvidedParamsError::SystemParamProvided {
+                    param_name: name.to_string(),
+                });
+            }
+
             let value = parser::parse_param_value(mpl_param, value).map_err(|err| {
                 ParseProvidedParamsError::ParseParam {
                     param_name: name.to_string(),
@@ -808,7 +832,8 @@ impl ProvidedParams {
             .iter()
             .filter_map(|p| {
                 // Skip optional params since they don't need to be provided.
-                if p.typ.is_optional() {
+                // Also skip system params since they cannot be provided over the API.
+                if p.typ.is_optional() || p.system {
                     None
                 } else {
                     Some(p.name.as_str())
@@ -831,7 +856,16 @@ impl ProvidedParams {
             ));
         }
 
-        Ok((ProvidedParams::new(provided_params), warnings))
+        let system_params = mpl_params
+            .iter()
+            .filter(|p| p.system)
+            .cloned()
+            .collect::<Vec<ParamDeclaration>>();
+
+        Ok((
+            ProvidedParams::new(provided_params, system_params),
+            warnings,
+        ))
     }
 
     /// Return a ref to the inner value.
@@ -845,6 +879,29 @@ impl ProvidedParams {
             .iter()
             .find(|p| p.name == name)
             .ok_or(ResolveError::ParamNotProvided(name.to_string()))
+    }
+
+    /// Set a param by name, overwriting any existing value.
+    /// returns false if the param is not a system param
+    pub fn provide_system_param(
+        &mut self,
+        name: &str,
+        value: ParamValue,
+    ) -> Result<(), ParseProvidedParamsError> {
+        if !self.system_params.iter().any(|p| p.name == name) {
+            return Err(ParseProvidedParamsError::NotASystemParam {
+                name: name.to_string(),
+            });
+        }
+        for p in &mut self.inner {
+            if p.name == name {
+                return Err(ParseProvidedParamsError::ParamsProvidedMoreThanOnce(vec![
+                    name.to_string(),
+                ]));
+            }
+        }
+        self.inner.push(ProvidedParam::new(name.to_string(), value));
+        Ok(())
     }
 
     /// Resolve a `TagValue`.

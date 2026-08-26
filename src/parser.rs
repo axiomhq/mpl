@@ -404,6 +404,7 @@ impl Parser {
                 span: p.node.span(),
                 name,
                 typ: p.ty,
+                system: false,
             });
         }
 
@@ -1203,6 +1204,7 @@ fn system_param_declarations<H: BuildHasher>(
                 span: SourceSpan::new(0.into(), 0),
                 name,
                 typ,
+                system: true,
             })
         })
         .collect()
