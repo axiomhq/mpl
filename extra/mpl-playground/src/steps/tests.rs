@@ -2361,3 +2361,90 @@ fn clipping_carries_the_series_identity() {
     assert_eq!(clipped[0].name, "ds");
     assert_eq!(clipped[0].metrics[0].name, "m");
 }
+
+// ── the window's runtime params ──────────────────────────────────
+
+/// A query service hands the engine its window as `$__start` and `$__end`, so
+/// a playground run given a window puts those two names in scope. Without it
+/// the query compiles against nothing the runtime binds, and naming them is
+/// the error it is against a service that supplies no window.
+#[test]
+fn a_window_puts_the_runtime_timestamps_in_scope() {
+    let query = r#"ds:m | where t == "${$__start}""#;
+
+    assert!(
+        mpl_lang::compile(query, window_system_params(Some(window(0, 100)))).is_ok(),
+        "a windowed run must accept a query naming $__start"
+    );
+}
+
+#[test]
+fn without_a_window_the_runtime_timestamps_are_not_in_scope() {
+    let query = r#"ds:m | where t == "${$__start}""#;
+
+    assert!(
+        mpl_lang::compile(query, window_system_params(None)).is_err(),
+        "an unwindowed run has no $__start to bind"
+    );
+}
+
+/// Both ends of the window travel together: a query may name either, so
+/// registering one and not the other would compile half the queries a service
+/// accepts.
+#[test]
+fn a_window_puts_both_ends_in_scope() {
+    let params = window_system_params(Some(window(0, 100)));
+
+    assert_eq!(params.len(), 2);
+    for name in ["__start", "__end"] {
+        assert!(params.contains_key(name), "{name} must be in scope");
+    }
+}
+
+/// The names are what the parser reserves for host registrations. Spelling one
+/// without the prefix is a `SystemParamMissingPrefix` error rather than a
+/// param the query can reach, so the prefix is part of the contract.
+#[test]
+fn the_window_params_carry_the_reserved_system_prefix() {
+    for name in window_system_params(Some(window(0, 100))).keys() {
+        assert!(
+            name.starts_with("__"),
+            "{name} must carry the reserved prefix"
+        );
+    }
+}
+
+/// The window is a pair of instants, and the type is what the compiler checks a
+/// use against — registering them as anything else would accept queries a
+/// service rejects.
+#[test]
+fn the_window_params_are_timestamps() {
+    for (name, typ) in window_system_params(Some(window(0, 100))) {
+        assert!(
+            matches!(typ, ParamType::Terminal(TerminalParamType::Timestamp)),
+            "{name} must be a Timestamp, got {typ:?}"
+        );
+    }
+}
+
+/// Putting the names in scope is the whole of it: the engine refuses to inline
+/// a timestamp into an expression, so a playground that substituted a value
+/// here would run queries a query service turns down. The step reports the
+/// param it cannot resolve, exactly as it does for one a user declares.
+#[test]
+fn a_windowed_run_does_not_resolve_the_runtime_timestamps() {
+    let query = r#"ds:m | where host == "${$__start}""#;
+    let (compiled, _) = mpl_lang::compile(query, window_system_params(Some(window(0, 100))))
+        .expect("a windowed run compiles the query");
+
+    let datasets = ds("ds", "m", vec![s(&[("host", "a")], vec![0.0], vec![1.0])]);
+    let results = interpret(&query_steps(compiled), &datasets);
+
+    let err = results[1]
+        .as_ref()
+        .expect_err("an unresolvable param must not silently match");
+    assert!(
+        err.to_string().contains("Parameterized"),
+        "expected the param error, got: {err}"
+    );
+}

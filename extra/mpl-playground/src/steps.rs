@@ -20,7 +20,8 @@ use mpl_lang::{
     linker::{AlignFunction, ComputeFunction, GroupFunction, MapFunction},
     query::{
         Aggregate, Align, As, BucketBy, Cmp, Expr, Filter, FilterOrIfDef, GroupBy, Mapping,
-        ParamDeclaration, RelativeTime, Source, StringFragment, TagExtend, TagType, TimeUnit,
+        ParamDeclaration, ParamType, RelativeTime, Source, StringFragment, TagExtend, TagType,
+        TerminalParamType, TimeUnit,
     },
     tags::TagValue,
     types::{BucketSpec, MapType, Parameterized, TagsType, TimeType},
@@ -276,8 +277,8 @@ impl Interpreter {
 
     /// Parse and interpret an MPL query.
     pub fn run(&self, code: &str) -> Result<Ts<RunOutput>, String> {
-        let (query, _) =
-            compile(code, HashMap::new()).map_err(|e| crate::diagnostics::message(code, &e))?;
+        let (query, _) = compile(code, window_system_params(self.window))
+            .map_err(|e| crate::diagnostics::message(code, &e))?;
         let steps = query_steps(query);
         let windowed = self.window.map(|window| window.clip(&self.datasets));
         let results = interpret(&steps, windowed.as_ref().unwrap_or(&self.datasets));
@@ -310,6 +311,26 @@ fn step(node: StepNode) -> PipeStep {
         canonical: node.to_string(),
         node,
     }
+}
+
+/// The params a runtime binds for the window it runs a query in.
+///
+/// A query service hands the engine its window as `$__start` and `$__end`, so a
+/// run that has one puts both names in scope and a query naming them compiles
+/// here as it does there. Their values stay unbound: the engine declines to
+/// inline a timestamp into an expression, and a playground that supplied one
+/// would run queries a service turns down.
+fn window_system_params(window: Option<QueryWindow>) -> HashMap<String, ParamType> {
+    window
+        .into_iter()
+        .flat_map(|_| ["__start", "__end"])
+        .map(|name| {
+            (
+                name.to_string(),
+                ParamType::Terminal(TerminalParamType::Timestamp),
+            )
+        })
+        .collect()
 }
 
 fn query_steps(query: Query) -> Vec<PipeStep> {
