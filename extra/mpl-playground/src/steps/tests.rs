@@ -107,6 +107,7 @@ fn source_parameterized_error() {
                     span: span(),
                     name: "ds".into(),
                     typ: ParamType::Terminal(TerminalParamType::Dataset),
+                    system: false,
                 },
             },
             metric: Metric::new("m").unwrap(),
@@ -232,6 +233,7 @@ fn filter_eq_param_interpolation_rejected() {
                     span: span(),
                     name: "p".into(),
                     typ: ParamType::Terminal(TerminalParamType::Tag(TagType::String)),
+                    system: false,
                 },
             }),
         ])),
@@ -1745,6 +1747,7 @@ fn ifdef_step_is_a_no_op() {
         span: span(),
         name: "container".into(),
         typ: ParamType::Optional(TerminalParamType::Tag(TagType::String)),
+        system: false,
     };
     let filter = Filter::Cmp {
         field: "host".into(),
@@ -1784,6 +1787,7 @@ fn ifdef_else_step_applies_else_filter_when_param_unbound() {
         span: span(),
         name: "container".into(),
         typ: ParamType::Optional(TerminalParamType::Tag(TagType::String)),
+        system: false,
     };
     // If-branch would keep host==a; else-branch keeps host==b. The param
     // is unbound in the playground, so we expect the else-branch result.
@@ -1820,6 +1824,7 @@ fn ifdef_else_step_canonical_text_includes_else_branch() {
         span: span(),
         name: "container".into(),
         typ: ParamType::Optional(TerminalParamType::Tag(TagType::String)),
+        system: false,
     };
     let filter = Filter::Cmp {
         field: "host".into(),
@@ -1856,6 +1861,7 @@ fn ifdef_step_canonical_text() {
         span: span(),
         name: "container".into(),
         typ: ParamType::Optional(TerminalParamType::Tag(TagType::String)),
+        system: false,
     };
     let filter = Filter::Cmp {
         field: "host".into(),
