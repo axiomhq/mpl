@@ -745,6 +745,16 @@ fn durations(src: &str) -> String {
     ; "in a parameter takes the variable branch"
 )]
 #[test_case(
+    "a contains 1"
+    => "FILTER_CMP(IDENT(a) FILTER_CMP_CONTAINS(contains EXPR(CONST(INTEGER(1)))))"
+    ; "contains a constant"
+)]
+#[test_case(
+    "a contains $v"
+    => "FILTER_CMP(IDENT(a) FILTER_CMP_CONTAINS(contains EXPR(VARIABLE($v))))"
+    ; "contains a parameter"
+)]
+#[test_case(
     "`a b` == 1"
     => "FILTER_CMP(IDENT(`a b`) FILTER_CMP_EQ(== EXPR(CONST(INTEGER(1)))))"
     ; "escaped tag name"

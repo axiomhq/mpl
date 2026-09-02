@@ -602,6 +602,22 @@ fn filter_in_matches() {
     assert_eq!(kept[1].values, vec![3.0]);
 }
 
+// The playground keeps every tag as a single string, so a tag never holds an array value
+// but this might change if playground supports array or `contains` gets another functionality
+#[test]
+fn filter_contains_never_matches() {
+    let datasets = ds("ds", "m", vec![s(&[("tags", "a")], vec![0.0], vec![1.0])]);
+    let filter = Filter::Cmp {
+        field: "tags".into(),
+        rhs: Cmp::Contains(Expr::Const(TagValue::String(
+            strumbra::SharedString::try_from("a").unwrap(),
+        ))),
+    };
+    let steps = vec![step(source_node("ds", "m")), step(StepNode::Filter(filter))];
+    let result = interpret(&steps, &datasets);
+    assert!(result[1].as_ref().unwrap().is_empty());
+}
+
 #[test]
 fn filter_in_mixed_type_elements() {
     // Each element is rendered to its `raw_tag` string form before comparison,

@@ -600,6 +600,9 @@ fn evaluate_cmp(tag_val: &str, rhs: &Cmp, tags: &HashMap<String, String>) -> Res
         // `in` requires an array; the parser rejects scalar right-hand sides
         // before evaluation, so a stray scalar degrades to a direct equality.
         Cmp::In(other) => Ok(eval_expr(other, tags)?.as_deref() == Some(tag_val)),
+        // `contains` searches the array the tag itself holds, and the playground
+        // keeps every tag as a single string so this is always false.
+        Cmp::Contains(_) => Ok(false),
         Cmp::RegEx(p) => {
             let re = get_param(p)?;
             Ok(re.is_match(tag_val))
@@ -673,7 +676,8 @@ fn cmp_expr(rhs: &Cmp) -> Option<&Expr> {
         | Cmp::Ge(e)
         | Cmp::Lt(e)
         | Cmp::Le(e)
-        | Cmp::In(e) => Some(e),
+        | Cmp::In(e)
+        | Cmp::Contains(e) => Some(e),
         Cmp::RegEx(_) | Cmp::RegExNot(_) | Cmp::Is(_) => None,
     }
 }

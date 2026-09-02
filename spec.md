@@ -92,6 +92,7 @@ The elements of a single filter expression are as follows:
   - `>=` for greater than or equal to
   - `<=` for less than or equal to
   - `in` for membership in an [array](#array-values-in-filters) of values
+  - `contains` for membership in the [array](#array-values-in-filters) a tag holds
 - `value` one of
   - `"this string"` - a [string](#string)
   - `42` - an [integer](#integer)
@@ -444,6 +445,16 @@ The `in` operator tests whether a tag's value is contained in an array. The expr
 
 - Arrays are heterogeneous: `in ["a", 5, true]` is legal, matching tags that equal any of the elements. Rationale: OTel attribute values include arrays of `AnyValue`, so mixed-type lists are valid comparison targets.
 - The right-hand side must be an [array](#array) literal or an array-typed [parameter](#query-parameters): `| where host in $hosts`. Any other right-hand side is a parse error.
+
+The `contains` operator also checks arrays' membership the other way round: left-hand side is tag that holds array value, and the right-hand side is the element looked for. This is the case `in` cannot state, since `in` always compares the tag itself against the array.
+
+```mpl
+| where `http.request.header.accept` contains "application/json"
+```
+
+- The expression is true if and only if the tag's value is an array holding at least one element equal to the right-hand side. Each element is compared with the same semantics as `==`.
+- The right-hand side is any [value](#filter-expression), including an array.
+- To test a tag against a list of values written in the query (array literal), use [`in`](#array-values-in-filters) instead: `| where code in [200, 201]`.
 
 # Draft / Future
 

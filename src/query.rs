@@ -161,6 +161,8 @@ pub enum Cmp {
     Le(Expr),
     /// Is the given tag value in the given list
     In(Expr),
+    /// Does the given tag value, an array, hold the given value (the other way round of `In`)
+    Contains(Expr),
     /// Matches the given regular expression
     RegEx(Parameterized<EncodableRegex>),
     /// Does not match the given regular expression

@@ -38,8 +38,8 @@ pub struct Token {
 /// The words the parser dispatches on. Consulted only inside error nodes, where
 /// there is no structure left to ask.
 const RULE_KEYWORDS: &[&str] = &[
-    "align", "and", "as", "bucket", "by", "compute", "else", "extend", "filter", "ifdef", "in",
-    "is", "map", "not", "or", "param", "sample", "set", "to", "using", "where",
+    "align", "and", "as", "bucket", "by", "compute", "contains", "else", "extend", "filter",
+    "ifdef", "in", "is", "map", "not", "or", "param", "sample", "set", "to", "using", "where",
 ];
 
 /// The constructs that carry their leading word as a plain token, written
@@ -57,6 +57,7 @@ fn opens_construct(kind: SyntaxKind) -> bool {
             | SyntaxKind::FILTER_AND
             | SyntaxKind::FILTER_CMP_IS
             | SyntaxKind::FILTER_CMP_IN
+            | SyntaxKind::FILTER_CMP_CONTAINS
             | SyntaxKind::SAMPLE
             | SyntaxKind::MAP
             | SyntaxKind::AS

@@ -691,6 +691,13 @@ pub enum FilterCmp {
         /// The right-hand side of the in comparison.
         rhs: SyntaxExpr,
     },
+    /// A contains comparison
+    Contains {
+        /// The left-hand side of the contains comparison, a tag holding an array.
+        lhs: Ident,
+        /// The right-hand side of the contains comparison, the value looked for.
+        rhs: SyntaxExpr,
+    },
     /// An is comparison
     Is {
         /// The left-hand side of the is comparison.
@@ -1400,6 +1407,12 @@ impl Parser {
                     let rhs = self.expr(c)?;
                     Ok(FilterCmp::In { lhs: lhs?, rhs })
                 }
+            }
+            SyntaxKind::FILTER_CMP_CONTAINS => {
+                let mut children = c.children();
+                let c = self.n(&mut children, &c, SyntaxKind::EXPR)?;
+                let rhs = self.expr(c)?;
+                Ok(FilterCmp::Contains { lhs: lhs?, rhs })
             }
             SyntaxKind::FILTER_CMP_IS => {
                 let mut children = c.children();

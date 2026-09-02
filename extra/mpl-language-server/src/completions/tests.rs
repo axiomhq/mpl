@@ -1598,6 +1598,9 @@ fn test_completion_kind(input: &str) -> Option<&'static str> {
 #[test_case("ds:metric | filter tag #",                    &["in"]                    ; "filter tag includes in operator")]
 #[test_case("ds:metric | where tag #",                     &["in"]                    ; "where tag includes in operator")]
 #[test_case("ds:metric | where tag in #",                  &["["]                     ; "in suggests array opener")]
+#[test_case("ds:metric | filter tag #",                    &["contains"]              ; "filter tag includes contains operator")]
+#[test_case("ds:metric | where tag #",                     &["contains"]              ; "where tag includes contains operator")]
+#[test_case("param $h: string;\nds:metric | where tag contains #", &["$h"]            ; "contains suggests value params")]
 #[test_case("ds:metric | where tag in [\"a\"] #",          &["and", "or", "not"]      ; "after closed array suggests boolean ops")]
 #[test_case("ds:metric | where tag is #",                  &["string", "int", "float", "bool", "array"] ; "is suggests all tag types")]
 #[test_case("ds:metric | where tag is string #",           &["and", "or", "not"]      ; "after is string suggests boolean ops")]
@@ -1752,6 +1755,7 @@ fn test_completion_params_contain(input: &str, expected: &[&str]) {
 
 #[test_case("param $r: Regex;\nparam $i: int;\nds:metric | filter tag < #",   &["$r"]  ; "lt excludes regex")]
 #[test_case("param $r: Regex;\nparam $f: float;\nds:metric | where tag >= #", &["$r"]  ; "gte excludes regex")]
+#[test_case("param $r: Regex;\nparam $i: int;\nds:metric | where tag contains #", &["$r"] ; "contains excludes regex")]
 #[test_case("param $d: Dataset;\nparam $s: string;\nds:metric | where tag == #", &["$d"] ; "filter excludes dataset")]
 #[test_case("param $dur: Duration;\nparam $b: bool;\nds:metric | filter tag == #", &["$dur"] ; "filter excludes duration")]
 #[test_case("param $foo: string;\nparam $bar: int;\nds:metric | filter tag == $fo#", &["$bar"] ; "partial param excludes non-matching")]

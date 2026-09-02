@@ -217,6 +217,30 @@ fn in_accepts_an_array(src: &str) {
     lower(src).unwrap_or_else(|errors| panic!("`{src}` should lower, got: {errors:?}"));
 }
 
+#[test_case("ds:m | where tags contains \"a\""               ; "a string element")]
+#[test_case("ds:m | where tags contains 200"                 ; "an int element")]
+#[test_case("ds:m | where tags contains other_tag"           ; "another tag as the element")]
+#[test_case("param $v: string;\nds:m | where tags contains $v"; "a param as the element")]
+#[test_case("ds:m | where tags contains [1, 2]"              ; "an element that is itself an array")]
+fn contains_takes_any_rhs_value(src: &str) {
+    let (query, _warnings) =
+        lower(src).unwrap_or_else(|errors| panic!("`{src}` should lower, got: {errors:?}"));
+    let crate::Query::Simple { filters, .. } = &query else {
+        panic!("expected a simple query");
+    };
+    assert!(
+        matches!(
+            filters[0].filter(),
+            Filter::Cmp {
+                rhs: Cmp::Contains(_),
+                ..
+            }
+        ),
+        "`{src}` should lower to a contains, got: {:?}",
+        filters[0]
+    );
+}
+
 /// System params are injected by the host rather than written in the query, and the `__`
 /// prefix is what keeps them from colliding with names a query may declare. A registration
 /// that omits it is a host mistake, and reporting it is what lets the host find it.
