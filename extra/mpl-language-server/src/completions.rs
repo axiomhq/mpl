@@ -1758,7 +1758,7 @@ fn suggest_filter_context(
         {
             return vec![];
         }
-        if matches!(last, "==" | "!=" | "<" | ">" | "<=" | ">=") {
+        if matches!(last, "==" | "!=" | "<" | ">" | "<=" | ">=" | "contains") {
             // The comparison RHS is an `expr`: a tag, a param, or a const. The
             // operator decides whether a regex param is also acceptable.
             let op = last;
@@ -1834,6 +1834,11 @@ fn suggest_filter_context(
                     label: "in",
                     apply: Some("in ["),
                     info: keywords::describe("in"),
+                },
+                KeywordItem {
+                    label: "contains",
+                    apply: Some("contains "),
+                    info: keywords::describe("contains"),
                 },
                 KeywordItem {
                     label: "is",

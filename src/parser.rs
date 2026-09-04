@@ -1167,6 +1167,10 @@ impl QueryParser {
                 rhs: Cmp::Ge(self.expr(rhs)?),
             },
             FilterCmp::In { lhs, rhs } => self.in_cmp(lhs, rhs)?,
+            FilterCmp::Contains { lhs, rhs } => Filter::Cmp {
+                field: lhs.into_string(),
+                rhs: Cmp::Contains(self.expr(rhs)?),
+            },
             FilterCmp::EqRe { lhs, rhs } => Filter::Cmp {
                 field: lhs.into_string(),
                 rhs: Cmp::RegEx(Parameterized::Concrete(rhs.into())),

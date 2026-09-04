@@ -374,6 +374,7 @@ impl QueryVisitor for ParamTypecheckVisitor {
         match cmp {
             Cmp::Is(_)
             | Cmp::In(Expr::Const(_) | Expr::String(_) | Expr::Tag(_) | Expr::Array(_))
+            | Cmp::Contains(Expr::Const(_) | Expr::String(_) | Expr::Tag(_) | Expr::Array(_))
             | Cmp::Eq(Expr::Const(_) | Expr::String(_) | Expr::Tag(_) | Expr::Array(_))
             | Cmp::Ne(Expr::Const(_) | Expr::String(_) | Expr::Tag(_) | Expr::Array(_))
             | Cmp::Gt(Expr::Const(_) | Expr::String(_) | Expr::Tag(_) | Expr::Array(_))
@@ -421,7 +422,8 @@ impl QueryVisitor for ParamTypecheckVisitor {
             Cmp::Gt(Expr::Param { span, param })
             | Cmp::Ge(Expr::Param { span, param })
             | Cmp::Lt(Expr::Param { span, param })
-            | Cmp::Le(Expr::Param { span, param }) => {
+            | Cmp::Le(Expr::Param { span, param })
+            | Cmp::Contains(Expr::Param { span, param }) => {
                 Self::assert_param_type(param, *span, &TAG_VALUE_PARAM_TYPES)
                     .map(|()| VisitRes::Walk)
             }

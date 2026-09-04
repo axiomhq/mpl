@@ -545,7 +545,8 @@ pub trait QueryWalker: QueryVisitor {
             | Cmp::Ge(expr)
             | Cmp::Lt(expr)
             | Cmp::Le(expr)
-            | Cmp::In(expr) => {
+            | Cmp::In(expr)
+            | Cmp::Contains(expr) => {
                 QueryWalker::walk_expr(self, expr)?;
             }
             Cmp::RegEx(parameterized) | Cmp::RegExNot(parameterized) => {

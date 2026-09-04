@@ -123,6 +123,11 @@ const KEYWORDS: &[KeywordInfo] = &[
         "Membership in an array of values",
         "<tag> in [<value>, ...]",
     ),
+    kw_syntax(
+        "contains",
+        "Check whether a tag's array value includes an element",
+        "<tag> contains <value>",
+    ),
 ];
 
 /// The documentation for `label`, or `None` when it names no keyword.

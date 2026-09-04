@@ -142,6 +142,7 @@ pub enum SyntaxKind {
     FILTER_CMP_LTE,
     FILTER_CMP_GTE,
     FILTER_CMP_IN,
+    FILTER_CMP_CONTAINS,
     FILTER_CMP_IS,
     FUNCTION_CALL,
     FUNCTION_PATH,
@@ -1023,6 +1024,12 @@ impl Parser<'_> {
                         s.expr();
                     }
                 }),
+                TokenType::Ident if tkn.text() == "contains" => {
+                    s.node(FILTER_CMP_CONTAINS, |s| {
+                        s.keyword_token("contains");
+                        s.expr();
+                    });
+                }
                 _ => {
                     s.error("expected comparison operator");
                 }

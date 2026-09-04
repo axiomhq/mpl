@@ -301,6 +301,19 @@ fn keyword_in_cmp() {
     assert_eq!(kw.kind, TokenType::Keyword);
 }
 
+// `contains` is `in` the other way round and equally word-shaped, so it styles
+// the same way.
+#[test]
+fn keyword_contains_cmp() {
+    let query = r#"ds:metric | where tag contains "a""#;
+    let tokens = collect_tokens(query);
+    let kw = tokens
+        .iter()
+        .find(|t| &query[t.span.from..t.span.to] == "contains")
+        .expect("should have contains token");
+    assert_eq!(kw.kind, TokenType::Keyword);
+}
+
 // Array literals carry no token themselves (brackets and commas stay gaps);
 // each element is tokenized on its own.
 #[test]
