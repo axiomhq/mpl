@@ -39,7 +39,15 @@ impl Display for Query {
                 directives: _,
                 params: _,
             } => {
-                writeln!(f, "{source}")?;
+                // keep a source alias before filters and aggregations, where the parser accepts it.
+                let aggregates =
+                    if let Some((Aggregate::As(alias), rest)) = aggregates.split_first() {
+                        writeln!(f, "{source} {alias}")?;
+                        rest
+                    } else {
+                        writeln!(f, "{source}")?;
+                        aggregates.as_slice()
+                    };
                 if let Some(sample) = sample {
                     writeln!(f, "| sample {sample}")?;
                 }

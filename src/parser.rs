@@ -477,6 +477,7 @@ impl QueryParser {
             node: _,
             dataset,
             metric,
+            time,
             alias,
             rules,
         }: SimpleQuery,
@@ -494,10 +495,7 @@ impl QueryParser {
                 metric: metric.into_string(),
             })?,
         };
-        let source = Source {
-            metric_id,
-            time: None,
-        };
+        let source = Source { metric_id, time };
 
         let mut aggregates = Vec::new();
         if let Some(alias) = alias {
