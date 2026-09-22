@@ -31,6 +31,24 @@ pub trait QueryVisitor {
     /// Error type for the visitor.
     type Error: std::error::Error;
 
+    /// Visit a terminal Spotlight comparison.
+    fn visit_spotlight(
+        &mut self,
+        spotlight: &mut crate::query::Spotlight,
+    ) -> Result<VisitRes, Self::Error> {
+        let _ = spotlight;
+        Ok(VisitRes::Walk)
+    }
+
+    /// Leave a terminal Spotlight comparison.
+    fn leave_spotlight(
+        &mut self,
+        spotlight: &mut crate::query::Spotlight,
+    ) -> Result<(), Self::Error> {
+        let _ = spotlight;
+        Ok(())
+    }
+
     /// Visit a query.
     fn visit(&mut self, query: &mut Query) -> Result<VisitRes, Self::Error> {
         let _ = query;
@@ -604,8 +622,20 @@ pub trait QueryWalker: QueryVisitor {
             Aggregate::GroupBy(group_by) => QueryWalker::walk_group_by(self, group_by)?,
             Aggregate::Bucket(bucket_by) => QueryWalker::walk_bucket_by(self, bucket_by)?,
             Aggregate::As(as_) => QueryWalker::walk_as(self, as_)?,
+            Aggregate::Spotlight(spotlight) => QueryWalker::walk_spotlight(self, spotlight)?,
         }
         QueryVisitor::leave_aggregate(self, aggregate)
+    }
+
+    /// Walk a terminal Spotlight comparison.
+    fn walk_spotlight(
+        &mut self,
+        spotlight: &mut crate::query::Spotlight,
+    ) -> Result<(), Self::Error> {
+        if !QueryVisitor::visit_spotlight(self, spotlight)?.should_walk() {
+            return Ok(());
+        }
+        QueryVisitor::leave_spotlight(self, spotlight)
     }
 
     /// Walk a mapping.

@@ -90,6 +90,15 @@ mod tests;
 /// `MPL` parsing error
 #[derive(thiserror::Error, Debug, Diagnostic)]
 pub enum ParseError {
+    /// Invalid terminal Spotlight operation.
+    #[error("Invalid Spotlight: {message}")]
+    InvalidSpotlight {
+        /// The violated constraint.
+        message: &'static str,
+        /// Location of the operation.
+        #[label("{message}")]
+        span: SourceSpan,
+    },
     /// AST errors
     #[error(transparent)]
     #[diagnostic(transparent)]
@@ -580,6 +589,12 @@ impl QueryParser {
             }
         }
         for SyntaxRule { node, rule } in rules {
+            if matches!(aggregates.last(), Some(Aggregate::Spotlight(_))) {
+                return Err(ParseError::InvalidSpotlight {
+                    message: "spotlight must be the last operator",
+                    span: node.span(),
+                });
+            }
             match rule {
                 // TODO: Remove pipe as
                 Rule::As(alias) => {
@@ -590,6 +605,17 @@ impl QueryParser {
                     aggregates.push(Aggregate::As(As { name }));
                 }
                 Rule::Extern(extend_parts) => extends.append(&mut self.extend(extend_parts)?),
+                Rule::Spotlight {
+                    comparison,
+                    baseline,
+                    fields,
+                    reducer,
+                    limit,
+                } => {
+                    aggregates.push(
+                        self.spotlight_to_aggr(comparison, baseline, fields, &reducer, limit)?,
+                    );
+                }
                 _ => {
                     return Err(ParseError::RuleNotSupportedHere { span: node.span() });
                 }
@@ -610,7 +636,7 @@ impl QueryParser {
     fn compute_query(
         &mut self,
         ComputeQuery {
-            node: _,
+            node,
             l,
             r,
             name,
@@ -620,6 +646,12 @@ impl QueryParser {
     ) -> Result<crate::Query> {
         let left = Box::new(self.query(l)?);
         let right = Box::new(self.query(r)?);
+        if left.spotlight().is_some() || right.spotlight().is_some() {
+            return Err(ParseError::InvalidSpotlight {
+                message: "spotlight returns a comparison, not a compute operand",
+                span: node.span(),
+            });
+        }
         let f = call_to_function(&func)?;
         let op = self
             .stdlib
@@ -666,6 +698,12 @@ impl QueryParser {
             {}
         }
         for SyntaxRule { node, rule } in rules {
+            if matches!(aggregates.last(), Some(Aggregate::Spotlight(_))) {
+                return Err(ParseError::InvalidSpotlight {
+                    message: "spotlight must be the last operator",
+                    span: node.span(),
+                });
+            }
             match rule {
                 Rule::IfDef { .. } | Rule::Sample(_) | Rule::Filter(_) => {
                     return Err(ParseError::RuleNotSupportedAfterCompute { span: node.span() });
@@ -679,6 +717,17 @@ impl QueryParser {
                     aggregates.push(Aggregate::As(As { name }));
                 }
                 Rule::Extern(extend_parts) => extends.append(&mut self.extend(extend_parts)?),
+                Rule::Spotlight {
+                    comparison,
+                    baseline,
+                    fields,
+                    reducer,
+                    limit,
+                } => {
+                    aggregates.push(
+                        self.spotlight_to_aggr(comparison, baseline, fields, &reducer, limit)?,
+                    );
+                }
                 _ => return Err(ParseError::RuleNotSupportedHere { span: node.span() }),
             }
         }
@@ -853,6 +902,59 @@ impl QueryParser {
         };
 
         Ok(param.clone())
+    }
+
+    fn spotlight_to_aggr(
+        &mut self,
+        comparison: [u64; 2],
+        baseline: [u64; 2],
+        fields: Option<Vec<Ident>>,
+        reducer: &Ident,
+        limit: u64,
+    ) -> Result<Aggregate> {
+        let error = |message| ParseError::InvalidSpotlight {
+            message,
+            span: reducer.span(),
+        };
+        let window = |[start, end]: [u64; 2]| {
+            if start >= end {
+                return Err(error("windows must have start < end"));
+            }
+            crate::time::Timerange::new(crate::time::Timestamp(start), crate::time::Timestamp(end))
+                .map_err(|_| error("windows must have start < end"))
+        };
+        let comparison = window(comparison)?;
+        let baseline = window(baseline)?;
+        if comparison.is_overlapping(&baseline) {
+            return Err(error("windows must not overlap"));
+        }
+        let function = match reducer.name() {
+            "sum" => query::SpotlightReducer::Sum,
+            "avg" => query::SpotlightReducer::Avg,
+            _ => return Err(error("reducer must be sum or avg")),
+        };
+        if !(1..=200).contains(&limit) {
+            return Err(error("limit must be between 1 and 200"));
+        }
+        let fields = fields.map(|fields| {
+            let mut fields = self.groups_to_tags(fields);
+            let mut seen = std::collections::HashSet::new();
+            fields.retain(|field| seen.insert(field.clone()));
+            fields
+        });
+        if fields
+            .as_ref()
+            .is_some_and(|fields| fields.is_empty() || fields.len() > 64)
+        {
+            return Err(error("select between 1 and 64 fields, or use *"));
+        }
+        Ok(Aggregate::Spotlight(query::Spotlight {
+            comparison,
+            baseline,
+            fields,
+            reducer: function,
+            limit: usize::try_from(limit).map_err(|_| error("invalid limit"))?,
+        }))
     }
 
     fn group_to_aggr(&mut self, groups: Vec<ast::Ident>, func: &FunctionCall) -> Result<Aggregate> {

@@ -278,6 +278,32 @@ pub enum Aggregate {
     Bucket(BucketBy),
     /// Rename the metric
     As(As),
+    /// Compare two windows and return a structured result instead of series.
+    Spotlight(Spotlight),
+}
+
+/// Reduction across observed series in each Spotlight time bin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SpotlightReducer {
+    /// Sum the observed series.
+    Sum,
+    /// Average the observed series.
+    Avg,
+}
+
+/// A terminal comparison over normalized scalar series.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Spotlight {
+    /// Selected window, with an exclusive end.
+    pub comparison: crate::time::Timerange,
+    /// Reference window, with an exclusive end.
+    pub baseline: crate::time::Timerange,
+    /// Fields to inspect; `None` discovers all remaining tags.
+    pub fields: Option<Vec<String>>,
+    /// Cross-series reduction, followed by a temporal mean.
+    pub reducer: SpotlightReducer,
+    /// Maximum ranked values per field, excluding the remainder.
+    pub limit: usize,
 }
 
 /// Extends a series with a new tag
@@ -1120,6 +1146,16 @@ pub enum Query {
 }
 
 impl Query {
+    /// Returns the terminal Spotlight operator, if present.
+    #[must_use]
+    pub fn spotlight(&self) -> Option<&Spotlight> {
+        let (Query::Simple { aggregates, .. } | Query::Compute { aggregates, .. }) = self;
+        match aggregates.last() {
+            Some(Aggregate::Spotlight(spotlight)) => Some(spotlight),
+            _ => None,
+        }
+    }
+
     /// Gets the time range for the query
     #[must_use]
     pub fn time_range(&self) -> Option<&TimeRange> {

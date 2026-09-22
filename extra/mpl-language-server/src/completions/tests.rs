@@ -1558,6 +1558,8 @@ fn test_completion_kind(input: &str) -> Option<&'static str> {
 
 // ── labels contain ──────────────────────────────────────────────
 
+#[test_case("ds:metric | #", &["spotlight"] ; "spotlight is offered as a terminal rule")]
+#[test_case("( a:b , c:d ) | compute r using / | #", &["spotlight"] ; "spotlight is offered after compute")]
 #[test_case("ds:metric | #",                      &["sample", "where", "map", "align", "group", "bucket"]   ; "pipe keywords")]
 #[test_case("ds | #",                             &["sample", "where", "map", "align", "group", "bucket"]   ; "no metric pipe keywords")]
 #[test_case("ds | filter tag == \"v\" #",          &["and", "or"]                                  ; "no metric boolean ops after string")]

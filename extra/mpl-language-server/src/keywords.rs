@@ -75,6 +75,11 @@ const KEYWORDS: &[KeywordInfo] = &[
     ),
     kw_syntax("as", "Rename the output metric", "| as <name>"),
     kw_syntax(
+        "spotlight",
+        "Compare two windows of normalized series and return a structured result. Bounds are Unix seconds; the end is exclusive.",
+        "| spotlight [start..end] against [start..end] by * using sum limit 10",
+    ),
+    kw_syntax(
         "extend",
         "Add new constant-valued tags to every series after aggregation. Each tag must be \
          net-new for the query — a series that already carries the tag causes the query to \
