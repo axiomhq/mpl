@@ -27,6 +27,18 @@ fn source_dataset(r: &CompletionResult) -> Option<&str> {
     }
 }
 
+#[test]
+fn shift_is_offered_in_source_and_compute_pipelines() {
+    for query in [
+        "ds:metric | ",
+        "ds:metric | align to 1m using avg | sh",
+        "(ds:a, ds:b) | compute delta using - | ",
+    ] {
+        let result = compute_completions(query, query.len()).expect("pipe completions");
+        assert!(result.option_labels().contains(&"shift"), "{query}");
+    }
+}
+
 // ── locate_query_context ──────────────────────────────────────────
 
 #[test]

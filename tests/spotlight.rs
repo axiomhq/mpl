@@ -55,6 +55,29 @@ fn spotlight_defaults_and_duplicate_fields() {
 }
 
 #[test]
+fn shift_can_precede_but_not_follow_spotlight() {
+    let spotlight = "spotlight [120..240] against [0..120] by * using sum";
+    let (query, _) = mpl_lang::compile(
+        &format!("test:cpu | shift -1h | {spotlight}"),
+        HashMap::new(),
+    )
+    .unwrap();
+    assert!(query.spotlight().is_some());
+    let (reparsed, _) = mpl_lang::compile(&query.to_string(), HashMap::new()).unwrap();
+    assert_eq!(
+        serde_json::to_value(query).unwrap(),
+        serde_json::to_value(reparsed).unwrap()
+    );
+    assert!(
+        mpl_lang::compile(
+            &format!("test:cpu | {spotlight} | shift -1h"),
+            HashMap::new(),
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn spotlight_rejects_invalid_queries() {
     for operation in [
         "spotlight [120..120] against [0..120] by * using sum",

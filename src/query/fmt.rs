@@ -312,6 +312,7 @@ impl Display for Aggregate {
         write!(f, "| ")?;
         match self {
             Aggregate::As(alias) => alias.fmt(f),
+            Aggregate::Shift { seconds } => write!(f, "shift {seconds}s"),
             Aggregate::Spotlight(spotlight) => {
                 write!(
                     f,

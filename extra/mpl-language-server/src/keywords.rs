@@ -75,6 +75,11 @@ const KEYWORDS: &[KeywordInfo] = &[
     ),
     kw_syntax("as", "Rename the output metric", "| as <name>"),
     kw_syntax(
+        "shift",
+        "Read data at a signed offset while preserving output timestamps. Negative offsets read earlier data; the literal duration must resolve to whole seconds.",
+        "| shift -1h",
+    ),
+    kw_syntax(
         "spotlight",
         "Compare two windows of normalized series and return a structured result. Bounds are Unix seconds; the end is exclusive.",
         "| spotlight [start..end] against [start..end] by * using sum limit 10",

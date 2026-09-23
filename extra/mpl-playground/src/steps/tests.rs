@@ -16,6 +16,12 @@ fn span() -> SourceSpan {
     SourceSpan::new(SourceOffset::from(0), 0)
 }
 
+#[test]
+fn shift_reports_that_execution_requires_an_offset_source_window() {
+    let error = apply_aggregate(&[], &Aggregate::Shift { seconds: -3600 }).unwrap_err();
+    assert!(error.to_string().contains("offset source window"));
+}
+
 fn step(node: StepNode) -> PipeStep {
     PipeStep {
         span: span(),

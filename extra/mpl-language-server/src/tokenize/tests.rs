@@ -2,6 +2,27 @@ use test_case::test_case;
 
 use super::{TokenType, collect_tokens};
 
+#[test]
+fn shift_keyword_and_signed_duration() {
+    let query = "shift:shift | shift -1h";
+    let tokens = collect_tokens(query);
+    let actual: Vec<_> = tokens
+        .into_iter()
+        .map(|token| (&query[token.span.from..token.span.to], token.kind))
+        .collect();
+    assert_eq!(
+        actual,
+        [
+            ("shift", TokenType::Variable),
+            ("shift", TokenType::Variable),
+            ("|", TokenType::Punctuation),
+            ("shift", TokenType::Keyword),
+            ("-", TokenType::Operator),
+            ("1h", TokenType::Number),
+        ]
+    );
+}
+
 // ── Variable tokens ──────────────────────────────────────────────
 
 #[test]

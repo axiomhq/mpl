@@ -278,6 +278,11 @@ pub enum Aggregate {
     Bucket(BucketBy),
     /// Rename the metric
     As(As),
+    /// Read at an offset from the output timestamps, preserving those output timestamps.
+    Shift {
+        /// Signed source offset in whole seconds; negative values read earlier data.
+        seconds: i64,
+    },
     /// Compare two windows and return a structured result instead of series.
     Spotlight(Spotlight),
 }

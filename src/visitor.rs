@@ -31,6 +31,18 @@ pub trait QueryVisitor {
     /// Error type for the visitor.
     type Error: std::error::Error;
 
+    /// Visit a signed source offset in whole seconds.
+    fn visit_shift(&mut self, seconds: &mut i64) -> Result<VisitRes, Self::Error> {
+        let _ = seconds;
+        Ok(VisitRes::Walk)
+    }
+
+    /// Leave a signed source offset in whole seconds.
+    fn leave_shift(&mut self, seconds: &mut i64) -> Result<(), Self::Error> {
+        let _ = seconds;
+        Ok(())
+    }
+
     /// Visit a terminal Spotlight comparison.
     fn visit_spotlight(
         &mut self,
@@ -622,9 +634,18 @@ pub trait QueryWalker: QueryVisitor {
             Aggregate::GroupBy(group_by) => QueryWalker::walk_group_by(self, group_by)?,
             Aggregate::Bucket(bucket_by) => QueryWalker::walk_bucket_by(self, bucket_by)?,
             Aggregate::As(as_) => QueryWalker::walk_as(self, as_)?,
+            Aggregate::Shift { seconds } => QueryWalker::walk_shift(self, seconds)?,
             Aggregate::Spotlight(spotlight) => QueryWalker::walk_spotlight(self, spotlight)?,
         }
         QueryVisitor::leave_aggregate(self, aggregate)
+    }
+
+    /// Walk a signed source offset in whole seconds.
+    fn walk_shift(&mut self, seconds: &mut i64) -> Result<(), Self::Error> {
+        if !QueryVisitor::visit_shift(self, seconds)?.should_walk() {
+            return Ok(());
+        }
+        QueryVisitor::leave_shift(self, seconds)
     }
 
     /// Walk a terminal Spotlight comparison.

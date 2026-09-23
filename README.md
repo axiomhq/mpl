@@ -23,6 +23,18 @@ We provide a playground to try out those parts.
 just playground
 ```
 
+## Shift
+
+```mpl
+metrics:cpu | shift -1h | align to 60s using last
+```
+
+Shift reads data at a signed offset while preserving output timestamps: `shift -1h`
+reads one hour earlier and displays it at the current output times. Positive offsets
+read later data, and zero leaves the source times unchanged. Offsets are literal
+durations that must resolve exactly to signed 64-bit whole seconds; overflow and
+fractional seconds are errors. The metrics service executes the shifted source read.
+
 ## Spotlight
 
 ```mpl
