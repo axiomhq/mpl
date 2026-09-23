@@ -807,6 +807,9 @@ fn apply_aggregate(series: &[Series], agg: &Aggregate) -> Result<Vec<Series>> {
         Aggregate::Shift { .. } => Err(eyre!(
             "Shift requires reading an offset source window; execute it in the metrics query service"
         )),
+        Aggregate::Spotlight(_) => Err(eyre!(
+            "Spotlight returns a structured result; execute it in the metrics query service"
+        )),
     }
 }
 

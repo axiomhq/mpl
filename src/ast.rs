@@ -786,6 +786,19 @@ pub enum Rule {
         /// Signed source offset in whole seconds.
         seconds: i64,
     },
+    /// A terminal comparison over two absolute time windows.
+    Spotlight {
+        /// Comparison start and exclusive end, in Unix seconds.
+        comparison: [u64; 2],
+        /// Baseline start and exclusive end, in Unix seconds.
+        baseline: [u64; 2],
+        /// Selected fields, or all fields.
+        fields: Option<Vec<Ident>>,
+        /// Cross-series reducer.
+        reducer: Ident,
+        /// Maximum ranked values per field.
+        limit: u64,
+    },
     /// A parsed filter rule.
     Filter(FilterOr),
     /// A parsed sample rule.
@@ -1778,6 +1791,44 @@ impl Parser {
         Ok(Rule::Shift { seconds })
     }
 
+    fn rule_spotlight(&mut self, node: &SyntaxNode) -> Result<Rule> {
+        let mut children = node.children();
+        let mut times = [0; 4];
+        for time in &mut times {
+            let n = self.n(&mut children, node, SyntaxKind::INTEGER)?;
+            let TagValue::Int(value) = self.integer_const(false, &n)? else {
+                return Err(Error("expected timestamp"));
+            };
+            *time = u64::try_from(value).map_err(|_| Error("expected positive timestamp"))?;
+        }
+        let n = self.n(&mut children, node, SyntaxKind::IDENT)?;
+        let (fields, n) = if n.kind() == SyntaxKind::TAG_LIST {
+            (
+                Some(self.tags(&n)?),
+                self.n(&mut children, node, SyntaxKind::IDENT)?,
+            )
+        } else {
+            (None, n)
+        };
+        let reducer = self.ident(n)?;
+        let limit = if let Some(n) = children.n() {
+            let TagValue::Int(value) = self.integer_const(false, &n)? else {
+                return Err(Error("expected integer limit"));
+            };
+            u64::try_from(value).map_err(|_| Error("expected positive limit"))?
+        } else {
+            10
+        };
+        self.assert_end(children);
+        Ok(Rule::Spotlight {
+            comparison: [times[0], times[1]],
+            baseline: [times[2], times[3]],
+            fields,
+            reducer,
+            limit,
+        })
+    }
+
     fn rule_align(&mut self, node: &SyntaxNode) -> Result<Rule> {
         self.assert_type(node, SyntaxKind::ALIGN)?;
         let mut children = node.children();
@@ -1978,6 +2029,7 @@ impl Parser {
             SyntaxKind::MAP => self.rule_map(&r),
             SyntaxKind::ALIGN => self.rule_align(&r),
             SyntaxKind::SHIFT => self.rule_shift(&r),
+            SyntaxKind::SPOTLIGHT => self.rule_spotlight(&r),
             SyntaxKind::GROUP => self.rule_group(&r),
             SyntaxKind::BUCKET => self.rule_bucket(&r),
             SyntaxKind::IFDEF => self.rule_ifdef(&r),

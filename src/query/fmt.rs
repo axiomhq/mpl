@@ -75,7 +75,10 @@ impl Display for Query {
                         }
                     }
                 }
-                for aggregate in aggregates {
+                for aggregate in aggregates
+                    .iter()
+                    .filter(|a| !matches!(a, Aggregate::Spotlight(_)))
+                {
                     writeln!(f, " {aggregate}")?;
                 }
                 if let Some((first, rest)) = extends.split_first() {
@@ -97,7 +100,10 @@ impl Display for Query {
             } => {
                 writeln!(f, "( {left}, {right} )")?;
                 writeln!(f, "| compute {name} using {op}")?;
-                for aggregate in aggregates {
+                for aggregate in aggregates
+                    .iter()
+                    .filter(|a| !matches!(a, Aggregate::Spotlight(_)))
+                {
                     writeln!(f, " {aggregate}")?;
                 }
                 if let Some((first, rest)) = extends.split_first() {
@@ -109,6 +115,9 @@ impl Display for Query {
             }
         }
 
+        if let Some(spotlight) = self.spotlight() {
+            writeln!(f, " {}", Aggregate::Spotlight(spotlight.clone()))?;
+        }
         Ok(())
     }
 }
@@ -304,6 +313,31 @@ impl Display for Aggregate {
         match self {
             Aggregate::As(alias) => alias.fmt(f),
             Aggregate::Shift { seconds } => write!(f, "shift {seconds}s"),
+            Aggregate::Spotlight(spotlight) => {
+                write!(
+                    f,
+                    "spotlight [{}..{}] against [{}..{}] by ",
+                    spotlight.comparison.start().as_secs(),
+                    spotlight.comparison.end().as_secs(),
+                    spotlight.baseline.start().as_secs(),
+                    spotlight.baseline.end().as_secs()
+                )?;
+                if let Some(fields) = &spotlight.fields {
+                    for (i, field) in fields.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        escape_ident(f, field)?;
+                    }
+                } else {
+                    write!(f, "*")?;
+                }
+                let reducer = match spotlight.reducer {
+                    crate::query::SpotlightReducer::Sum => "sum",
+                    crate::query::SpotlightReducer::Avg => "avg",
+                };
+                write!(f, " using {reducer} limit {}", spotlight.limit)
+            }
             Aggregate::Map(Mapping {
                 function: MapFunction::Builtin(MapType::Rate),
                 arg: None,

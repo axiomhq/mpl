@@ -187,6 +187,7 @@ pub enum SyntaxKind {
     GROUP,
     BUCKET,
     SHIFT,
+    SPOTLIGHT,
 
     /// invalid in the syntax tree but valid as a token
     INVALID,
@@ -919,6 +920,7 @@ impl Parser<'_> {
                     "group" => s.group_rule(),
                     "bucket" => s.bucket_rule(),
                     "shift" => s.shift_rule(),
+                    "spotlight" => s.spotlight_rule(),
                     "ifdef" => s.ifdef_rule(),
                     "extend" => s.extend_rule(),
                     "as" => s.as_rule(),
@@ -1159,6 +1161,32 @@ impl Parser<'_> {
                 s.node(PLUS, |s| s.eat_token_type(TokenType::Plus));
             }
             s.duration();
+        });
+    }
+
+    fn spotlight_rule(&mut self) {
+        self.node(SPOTLIGHT, |s| {
+            s.keyword_token("spotlight");
+            for window in 0..2 {
+                if window == 1 {
+                    s.keyword_token("against");
+                }
+                s.structural(TokenType::LBracket);
+                s.integer();
+                s.structural(TokenType::DotDot);
+                s.integer();
+                s.structural(TokenType::RBracket);
+            }
+            s.keyword_token("by");
+            if !s.try_structural(TokenType::Mul) {
+                s.tag_list();
+            }
+            s.eat_trivia();
+            s.keyword_token("using");
+            s.ident();
+            if s.try_keyword_token("limit") {
+                s.integer();
+            }
         });
     }
 
