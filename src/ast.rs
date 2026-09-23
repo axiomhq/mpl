@@ -4,7 +4,7 @@ use miette::{Diagnostic, MietteDiagnostic, SourceSpan};
 use rowan::{NodeOrToken, SyntaxElementChildren, SyntaxNodeChildren, SyntaxToken};
 
 use crate::{
-    query::{ParamType, TagType, TerminalParamType},
+    query::{ParamType, RelativeTime, TagType, TerminalParamType, Time, TimeRange, TimeUnit},
     syntax_tree::{self, Lang, SyntaxError, SyntaxKind, SyntaxNode, SyntaxTree},
     tags::TagValue,
 };
@@ -207,6 +207,22 @@ pub enum AstError {
     NegativeDuration {
         /// The source span of the negative duration.
         #[label("negative duration")]
+        span: SourceSpan,
+    },
+    /// The duration cannot be represented in seconds.
+    #[error("duration exceeds the supported range")]
+    #[diagnostic(code(mpl_lang::duration_overflow))]
+    DurationOverflow {
+        /// The source span of the overflowing duration.
+        #[label("duration exceeds the supported range")]
+        span: SourceSpan,
+    },
+    /// A shift offset must resolve to an exact number of seconds.
+    #[error("shift duration must be a whole number of seconds")]
+    #[diagnostic(code(mpl_lang::shift_not_second_aligned))]
+    ShiftNotSecondAligned {
+        /// The source span of the fractional offset.
+        #[label("shift duration must be a whole number of seconds")]
         span: SourceSpan,
     },
     /// The time unit is invalid.
@@ -765,6 +781,11 @@ pub struct ExtendPart {
 /// A parsed rule.
 #[derive(Debug)]
 pub enum Rule {
+    /// A parsed source offset, preserving output timestamps.
+    Shift {
+        /// Signed source offset in whole seconds.
+        seconds: i64,
+    },
     /// A parsed filter rule.
     Filter(FilterOr),
     /// A parsed sample rule.
@@ -819,7 +840,11 @@ impl Rule {
     pub(crate) fn is_aggr(&self) -> bool {
         matches!(
             self,
-            Rule::Group { .. } | Rule::Bucket { .. } | Rule::Align { .. } | Rule::Map(_)
+            Rule::Group { .. }
+                | Rule::Bucket { .. }
+                | Rule::Align { .. }
+                | Rule::Map(_)
+                | Rule::Shift { .. }
         )
     }
 }
@@ -855,6 +880,8 @@ pub struct SimpleQuery {
     pub dataset: IdentOrVariable,
     /// The metric to compute.
     pub metric: Ident,
+    /// the optional time range attached to the source.
+    pub time: Option<TimeRange>,
     /// The alias to use for the metric.
     pub alias: Option<Ident>,
     /// The rules to apply.
@@ -1645,23 +1672,23 @@ impl Parser {
                     time: i,
                     span: n.span(),
                 });
-                1
+                Some(1)
             }
             "ms" if !i.is_multiple_of(1000) => {
                 self.warnings.push(AstWarning::TimeNotSecondAligned {
                     time: i,
                     span: n.span(),
                 });
-                i / 1000
+                Some(i / 1000)
             }
-            "ms" => i / 1000,
-            "s" => i,
-            "m" => i * 60,
-            "h" => i * 60 * 60,
-            "d" => i * 60 * 60 * 24,
-            "w" => i * 60 * 60 * 24 * 7,
-            "M" => i * 60 * 60 * 24 * 30,
-            "y" => i * 60 * 60 * 24 * 365,
+            "ms" => Some(i / 1000),
+            "s" => Some(i),
+            "m" => i.checked_mul(60),
+            "h" => i.checked_mul(60 * 60),
+            "d" => i.checked_mul(60 * 60 * 24),
+            "w" => i.checked_mul(60 * 60 * 24 * 7),
+            "M" => i.checked_mul(60 * 60 * 24 * 30),
+            "y" => i.checked_mul(60 * 60 * 24 * 365),
             _ => {
                 self.errors
                     .push(AstError::InvalidTimeUnit { span: n.span() });
@@ -1669,7 +1696,11 @@ impl Parser {
                 return Err(Error("invalid time unit"));
             }
         };
-        Ok(duration)
+        duration.ok_or_else(|| {
+            self.errors
+                .push(AstError::DurationOverflow { span: node.span() });
+            Error("duration exceeds the supported range")
+        })
     }
 
     fn duration(&mut self, node: SyntaxNode) -> Result<Duration> {
@@ -1690,6 +1721,61 @@ impl Parser {
             }
         }
         Ok(tags)
+    }
+
+    fn rule_shift(&mut self, node: &SyntaxNode) -> Result<Rule> {
+        self.assert_type(node, SyntaxKind::SHIFT)?;
+        let mut children = node.children();
+        let mut duration = self.n(&mut children, node, SyntaxKind::DURATION)?;
+        let negative = duration.kind() == SyntaxKind::MINUS;
+        if matches!(duration.kind(), SyntaxKind::MINUS | SyntaxKind::PLUS) {
+            duration = self.n(&mut children, node, SyntaxKind::DURATION)?;
+        }
+        self.assert_type(&duration, SyntaxKind::DURATION)?;
+        self.assert_end(children);
+        let mut children = duration.children();
+        let integer = self.n(&mut children, &duration, SyntaxKind::INTEGER)?;
+        let literal = self.token_of_type(&integer, SyntaxKind::LX_INTEGER)?;
+        // Millisecond literals can exceed i64 before conversion to seconds.
+        let value = literal.parse::<i128>().map_err(|_| {
+            self.errors.push(AstError::DurationOverflow {
+                span: duration.span(),
+            });
+            Error("duration exceeds the supported range")
+        })?;
+        let unit = self.n(&mut children, &duration, SyntaxKind::TIME_UNIT)?;
+        let unit = self.time_unit(&unit)?;
+        self.assert_end(children);
+        let seconds = match unit.as_str() {
+            "ms" if value % 1000 != 0 => {
+                self.errors.push(AstError::ShiftNotSecondAligned {
+                    span: duration.span(),
+                });
+                return Err(Error("shift duration must be a whole number of seconds"));
+            }
+            "ms" => Some(value / 1000),
+            "s" => Some(value),
+            "m" => value.checked_mul(60),
+            "h" => value.checked_mul(60 * 60),
+            "d" => value.checked_mul(60 * 60 * 24),
+            "w" => value.checked_mul(60 * 60 * 24 * 7),
+            "M" => value.checked_mul(60 * 60 * 24 * 30),
+            "y" => value.checked_mul(60 * 60 * 24 * 365),
+            _ => {
+                self.errors.push(AstError::InvalidTimeUnit {
+                    span: duration.span(),
+                });
+                return Err(Error("invalid time unit"));
+            }
+        }
+        .and_then(|seconds| i64::try_from(if negative { -seconds } else { seconds }).ok())
+        .ok_or_else(|| {
+            self.errors.push(AstError::DurationOverflow {
+                span: duration.span(),
+            });
+            Error("duration exceeds the supported range")
+        })?;
+        Ok(Rule::Shift { seconds })
     }
 
     fn rule_align(&mut self, node: &SyntaxNode) -> Result<Rule> {
@@ -1891,6 +1977,7 @@ impl Parser {
             SyntaxKind::SAMPLE => self.rule_sample(&r),
             SyntaxKind::MAP => self.rule_map(&r),
             SyntaxKind::ALIGN => self.rule_align(&r),
+            SyntaxKind::SHIFT => self.rule_shift(&r),
             SyntaxKind::GROUP => self.rule_group(&r),
             SyntaxKind::BUCKET => self.rule_bucket(&r),
             SyntaxKind::IFDEF => self.rule_ifdef(&r),
@@ -1906,6 +1993,41 @@ impl Parser {
         }
     }
 
+    /// bare integers are Unix seconds; values with units are durations relative to now.
+    fn time(&mut self, node: &SyntaxNode) -> Result<Time> {
+        self.assert_type(node, SyntaxKind::TIME)?;
+        let mut children = node.children();
+        let duration = self.n(&mut children, node, SyntaxKind::DURATION)?;
+        self.assert_end(children);
+        if duration
+            .children()
+            .any(|c| c.kind() == SyntaxKind::TIME_UNIT)
+        {
+            Ok(Time::Relative(RelativeTime {
+                value: self.duration_const(&duration)?,
+                unit: TimeUnit::Second,
+            }))
+        } else {
+            let mut children = duration.children();
+            let integer = self.n(&mut children, &duration, SyntaxKind::INTEGER)?;
+            let TagValue::Int(value) = self.integer_const(false, &integer)? else {
+                return Err(Error("expected timestamp"));
+            };
+            self.assert_end(children);
+            Ok(Time::Timestamp(value))
+        }
+    }
+
+    fn time_range(&mut self, node: &SyntaxNode) -> Result<TimeRange> {
+        self.assert_type(node, SyntaxKind::TIME_RANGE)?;
+        let mut children = node.children();
+        let start = self.n(&mut children, node, SyntaxKind::TIME)?;
+        let start = self.time(&start)?;
+        let end = children.n().map(|n| self.time(&n)).transpose()?;
+        self.assert_end(children);
+        Ok(TimeRange { start, end })
+    }
+
     fn simple_query(&mut self, node: SyntaxNode) -> Result<SimpleQuery> {
         self.assert_type(&node, SyntaxKind::SIMPLE_QUERY)?;
         let mut children = node.children();
@@ -1917,46 +2039,38 @@ impl Parser {
             .n(&mut children, &node, SyntaxKind::IDENT)
             .and_then(|c| self.ident(c));
 
-        let Some(mut c) = children.n() else {
-            return Ok(SimpleQuery {
-                node,
-                dataset: dataset?,
-                metric: metric?,
-                alias: None,
-                rules: Vec::new(),
-            });
+        let mut c = children.n();
+        let time = if let Some(n) = &c
+            && n.kind() == SyntaxKind::TIME_RANGE
+        {
+            let time = self.time_range(n).map(Some);
+            c = children.n();
+            time
+        } else {
+            Ok(None)
         };
-        let mut alias = Ok(None);
-        if c.kind() == SyntaxKind::KEYWORD {
-            alias = self
+        let alias = if c.as_ref().is_some_and(|n| n.kind() == SyntaxKind::KEYWORD) {
+            let alias = self
                 .n(&mut children, &node, SyntaxKind::IDENT)
                 .and_then(|c| Ok(Some(self.ident(c)?)));
-            let Some(n) = children.n() else {
-                return Ok(SimpleQuery {
-                    node,
-                    dataset: dataset?,
-                    metric: metric?,
-                    alias: alias?,
-                    rules: Vec::new(),
-                });
-            };
-            c = n;
-        }
-        let mut rules = if let Ok(rule) = self.rule(&c) {
-            vec![SyntaxRule { rule, node: c }]
+            c = children.n();
+            alias
         } else {
-            Vec::new()
+            Ok(None)
         };
-        while let Some(node) = children.n() {
+        let mut rules = Vec::new();
+        while let Some(node) = c {
             if let Ok(rule) = self.rule(&node) {
                 rules.push(SyntaxRule { node, rule });
             }
+            c = children.n();
         }
 
         Ok(SimpleQuery {
             node,
             dataset: dataset?,
             metric: metric?,
+            time: time?,
             alias: alias?,
             rules,
         })

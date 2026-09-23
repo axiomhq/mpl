@@ -477,6 +477,7 @@ impl QueryParser {
             node: _,
             dataset,
             metric,
+            time,
             alias,
             rules,
         }: SimpleQuery,
@@ -494,10 +495,7 @@ impl QueryParser {
                 metric: metric.into_string(),
             })?,
         };
-        let source = Source {
-            metric_id,
-            time: None,
-        };
+        let source = Source { metric_id, time };
 
         let mut aggregates = Vec::new();
         if let Some(alias) = alias {
@@ -567,6 +565,7 @@ impl QueryParser {
         {
             match rule {
                 Rule::Map(func) => aggregates.push(self.map_to_aggr(&func)?),
+                Rule::Shift { seconds } => aggregates.push(Aggregate::Shift { seconds }),
                 Rule::Align { duration, func } => {
                     aggregates.push(self.align_to_aggr(duration, &func)?);
                 }
@@ -652,6 +651,7 @@ impl QueryParser {
                     return Err(ParseError::RuleNotSupportedAfterCompute { span: node.span() });
                 }
                 Rule::Map(func) => aggregates.push(self.map_to_aggr(&func)?),
+                Rule::Shift { seconds } => aggregates.push(Aggregate::Shift { seconds }),
                 Rule::Align { duration, func } => {
                     aggregates.push(self.align_to_aggr(duration, &func)?);
                 }

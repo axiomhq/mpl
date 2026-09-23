@@ -804,6 +804,9 @@ fn apply_aggregate(series: &[Series], agg: &Aggregate) -> Result<Vec<Series>> {
         Aggregate::GroupBy(g) => apply_group(series, g),
         Aggregate::Bucket(b) => apply_bucket(series, b),
         Aggregate::As(a) => apply_as(series, a),
+        Aggregate::Shift { .. } => Err(eyre!(
+            "Shift requires reading an offset source window; execute it in the metrics query service"
+        )),
     }
 }
 

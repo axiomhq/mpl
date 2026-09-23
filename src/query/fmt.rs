@@ -2,6 +2,7 @@ use std::fmt::Display;
 
 use crate::{
     Query,
+    lexer::{Lexer, TokenType},
     linker::MapFunction,
     query::{
         Aggregate, Align, As, BucketBy, Cmp, Expr, Filter, GroupBy, Mapping, MetricId,
@@ -11,11 +12,9 @@ use crate::{
 };
 
 fn escape_ident(f: &mut std::fmt::Formatter<'_>, ident: &str) -> std::fmt::Result {
-    let mut chars = ident.chars();
-
-    if let Some(c) = chars.next()
-        && (c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    if Lexer::new(ident)
+        .next()
+        .is_some_and(|token| token.tpe() == TokenType::Ident && token.text() == ident)
     {
         write!(f, "{ident}")
     } else {
@@ -39,7 +38,15 @@ impl Display for Query {
                 directives: _,
                 params: _,
             } => {
-                writeln!(f, "{source}")?;
+                // keep a source alias before filters and aggregations, where the parser accepts it.
+                let aggregates =
+                    if let Some((Aggregate::As(alias), rest)) = aggregates.split_first() {
+                        writeln!(f, "{source} {alias}")?;
+                        rest
+                    } else {
+                        writeln!(f, "{source}")?;
+                        aggregates.as_slice()
+                    };
                 if let Some(sample) = sample {
                     writeln!(f, "| sample {sample}")?;
                 }
@@ -228,7 +235,8 @@ impl Display for TimeUnit {
 impl Display for As {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let As { name } = self;
-        write!(f, "as {name}")
+        write!(f, "as ")?;
+        escape_ident(f, name)
     }
 }
 
@@ -294,7 +302,8 @@ impl Display for Aggregate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "| ")?;
         match self {
-            Aggregate::As(As { name }) => write!(f, "as {name}"),
+            Aggregate::As(alias) => alias.fmt(f),
+            Aggregate::Shift { seconds } => write!(f, "shift {seconds}s"),
             Aggregate::Map(Mapping {
                 function: MapFunction::Builtin(MapType::Rate),
                 arg: None,

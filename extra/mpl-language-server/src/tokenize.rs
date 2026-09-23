@@ -39,7 +39,8 @@ pub struct Token {
 /// there is no structure left to ask.
 const RULE_KEYWORDS: &[&str] = &[
     "align", "and", "as", "bucket", "by", "compute", "contains", "else", "extend", "filter",
-    "ifdef", "in", "is", "map", "not", "or", "param", "sample", "set", "to", "using", "where",
+    "ifdef", "in", "is", "map", "not", "or", "param", "sample", "set", "shift", "to", "using",
+    "where",
 ];
 
 /// The constructs that carry their leading word as a plain token, written
@@ -64,6 +65,7 @@ fn opens_construct(kind: SyntaxKind) -> bool {
             | SyntaxKind::ALIGN
             | SyntaxKind::GROUP
             | SyntaxKind::BUCKET
+            | SyntaxKind::SHIFT
             | SyntaxKind::IFDEF
             | SyntaxKind::EXTEND
     )

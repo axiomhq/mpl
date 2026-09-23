@@ -1058,6 +1058,11 @@ fn pipe_keywords(
             info: keywords::describe("bucket"),
         },
         KeywordItem {
+            label: "shift",
+            apply: Some("shift "),
+            info: keywords::describe("shift"),
+        },
+        KeywordItem {
             label: "as",
             apply: Some("as "),
             info: keywords::describe("as"),
