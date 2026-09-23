@@ -565,6 +565,7 @@ impl QueryParser {
         {
             match rule {
                 Rule::Map(func) => aggregates.push(self.map_to_aggr(&func)?),
+                Rule::Shift { seconds } => aggregates.push(Aggregate::Shift { seconds }),
                 Rule::Align { duration, func } => {
                     aggregates.push(self.align_to_aggr(duration, &func)?);
                 }
@@ -650,6 +651,7 @@ impl QueryParser {
                     return Err(ParseError::RuleNotSupportedAfterCompute { span: node.span() });
                 }
                 Rule::Map(func) => aggregates.push(self.map_to_aggr(&func)?),
+                Rule::Shift { seconds } => aggregates.push(Aggregate::Shift { seconds }),
                 Rule::Align { duration, func } => {
                     aggregates.push(self.align_to_aggr(duration, &func)?);
                 }

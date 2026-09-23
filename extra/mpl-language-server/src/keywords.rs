@@ -75,6 +75,11 @@ const KEYWORDS: &[KeywordInfo] = &[
     ),
     kw_syntax("as", "Rename the output metric", "| as <name>"),
     kw_syntax(
+        "shift",
+        "Read data at a signed offset while preserving output timestamps. Negative offsets read earlier data; the literal duration must resolve to whole seconds.",
+        "| shift -1h",
+    ),
+    kw_syntax(
         "extend",
         "Add new constant-valued tags to every series after aggregation. Each tag must be \
          net-new for the query — a series that already carries the tag causes the query to \

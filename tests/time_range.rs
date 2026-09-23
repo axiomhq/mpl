@@ -22,6 +22,8 @@ fn source_time_range_contract() {
             " as usage",
             " | align to 1s using last",
             " as usage | align to 1s using last",
+            " as `cpu.usage` | align to 1s using last",
+            " as `true` | align to 1s using last",
         ] {
             let source = format!("test:cpu{range}{suffix}");
             let (query, _) = mpl_lang::compile(&source, HashMap::new())

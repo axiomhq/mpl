@@ -186,6 +186,7 @@ pub enum SyntaxKind {
     AS,
     GROUP,
     BUCKET,
+    SHIFT,
 
     /// invalid in the syntax tree but valid as a token
     INVALID,
@@ -917,6 +918,7 @@ impl Parser<'_> {
                     "align" => s.align_rule(),
                     "group" => s.group_rule(),
                     "bucket" => s.bucket_rule(),
+                    "shift" => s.shift_rule(),
                     "ifdef" => s.ifdef_rule(),
                     "extend" => s.extend_rule(),
                     "as" => s.as_rule(),
@@ -1145,6 +1147,18 @@ impl Parser<'_> {
             }
             s.keyword("using");
             s.function_call();
+        });
+    }
+
+    fn shift_rule(&mut self) {
+        self.node(SHIFT, |s| {
+            s.keyword_token("shift");
+            if s.is_structural(TokenType::Minus) {
+                s.node(MINUS, |s| s.eat_token_type(TokenType::Minus));
+            } else if s.is_structural(TokenType::Plus) {
+                s.node(PLUS, |s| s.eat_token_type(TokenType::Plus));
+            }
+            s.duration();
         });
     }
 

@@ -145,6 +145,32 @@ We distinguish between a number of different transformations:
 3) [grouping](#grouping) - A transformation that groups the data by a set of tags, combining overlapping values.
 4) [bucketing](#bucketing) - A two-dimensional transformation that combines the time and tag dimension; this is for histograms.
 5) [renaming](#renaming) - Rename the metric within the pipeline.
+6) [shifting](#shifting) - Read data at a signed source offset while preserving output timestamps.
+
+### Shifting
+
+The `shift` operator applies a signed source offset. For an output timestamp `t`,
+`shift <offset>` reads the upstream query at `t + offset` and displays the result at
+`t`. Thus `shift -1h` reads one hour earlier; `shift +1h` reads one hour later.
+It can appear among the aggregations of a source or compute query. Multiple shifts
+compose by adding their offsets.
+
+```mpl
+// compare the current values with those from an hour earlier
+(metrics:cpu, metrics:cpu | shift -1h) | compute change using -
+
+// an explicit positive offset, or no offset
+metrics:cpu | shift +1h
+metrics:cpu | shift 0s
+```
+
+The offset is an integer duration literal with an optional `+` or `-` sign and a
+required unit: `ms`, `s`, `m`, `h`, `d`, `w`, `M`, or `y`. Months are 30 days and
+years are 365 days. An omitted sign is positive. Parameters and decimal literals
+are not supported. Milliseconds must be divisible by 1000: `-2000ms` is `-2s`,
+while `-1500ms` and `1ms` are errors. Zero is valid with any unit. The converted
+offset must fit a signed 64-bit integer; overflow is an error. Formatting emits
+the offset in seconds, for example `shift -3600s`.
 
 ### Mapping
 

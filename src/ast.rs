@@ -217,6 +217,14 @@ pub enum AstError {
         #[label("duration exceeds the supported range")]
         span: SourceSpan,
     },
+    /// A shift offset must resolve to an exact number of seconds.
+    #[error("shift duration must be a whole number of seconds")]
+    #[diagnostic(code(mpl_lang::shift_not_second_aligned))]
+    ShiftNotSecondAligned {
+        /// The source span of the fractional offset.
+        #[label("shift duration must be a whole number of seconds")]
+        span: SourceSpan,
+    },
     /// The time unit is invalid.
     #[error("invalid time unit")]
     #[diagnostic(code(mpl_lang::invalid_time_unit))]
@@ -773,6 +781,11 @@ pub struct ExtendPart {
 /// A parsed rule.
 #[derive(Debug)]
 pub enum Rule {
+    /// A parsed source offset, preserving output timestamps.
+    Shift {
+        /// Signed source offset in whole seconds.
+        seconds: i64,
+    },
     /// A parsed filter rule.
     Filter(FilterOr),
     /// A parsed sample rule.
@@ -827,7 +840,11 @@ impl Rule {
     pub(crate) fn is_aggr(&self) -> bool {
         matches!(
             self,
-            Rule::Group { .. } | Rule::Bucket { .. } | Rule::Align { .. } | Rule::Map(_)
+            Rule::Group { .. }
+                | Rule::Bucket { .. }
+                | Rule::Align { .. }
+                | Rule::Map(_)
+                | Rule::Shift { .. }
         )
     }
 }
@@ -1706,6 +1723,61 @@ impl Parser {
         Ok(tags)
     }
 
+    fn rule_shift(&mut self, node: &SyntaxNode) -> Result<Rule> {
+        self.assert_type(node, SyntaxKind::SHIFT)?;
+        let mut children = node.children();
+        let mut duration = self.n(&mut children, node, SyntaxKind::DURATION)?;
+        let negative = duration.kind() == SyntaxKind::MINUS;
+        if matches!(duration.kind(), SyntaxKind::MINUS | SyntaxKind::PLUS) {
+            duration = self.n(&mut children, node, SyntaxKind::DURATION)?;
+        }
+        self.assert_type(&duration, SyntaxKind::DURATION)?;
+        self.assert_end(children);
+        let mut children = duration.children();
+        let integer = self.n(&mut children, &duration, SyntaxKind::INTEGER)?;
+        let literal = self.token_of_type(&integer, SyntaxKind::LX_INTEGER)?;
+        // Millisecond literals can exceed i64 before conversion to seconds.
+        let value = literal.parse::<i128>().map_err(|_| {
+            self.errors.push(AstError::DurationOverflow {
+                span: duration.span(),
+            });
+            Error("duration exceeds the supported range")
+        })?;
+        let unit = self.n(&mut children, &duration, SyntaxKind::TIME_UNIT)?;
+        let unit = self.time_unit(&unit)?;
+        self.assert_end(children);
+        let seconds = match unit.as_str() {
+            "ms" if value % 1000 != 0 => {
+                self.errors.push(AstError::ShiftNotSecondAligned {
+                    span: duration.span(),
+                });
+                return Err(Error("shift duration must be a whole number of seconds"));
+            }
+            "ms" => Some(value / 1000),
+            "s" => Some(value),
+            "m" => value.checked_mul(60),
+            "h" => value.checked_mul(60 * 60),
+            "d" => value.checked_mul(60 * 60 * 24),
+            "w" => value.checked_mul(60 * 60 * 24 * 7),
+            "M" => value.checked_mul(60 * 60 * 24 * 30),
+            "y" => value.checked_mul(60 * 60 * 24 * 365),
+            _ => {
+                self.errors.push(AstError::InvalidTimeUnit {
+                    span: duration.span(),
+                });
+                return Err(Error("invalid time unit"));
+            }
+        }
+        .and_then(|seconds| i64::try_from(if negative { -seconds } else { seconds }).ok())
+        .ok_or_else(|| {
+            self.errors.push(AstError::DurationOverflow {
+                span: duration.span(),
+            });
+            Error("duration exceeds the supported range")
+        })?;
+        Ok(Rule::Shift { seconds })
+    }
+
     fn rule_align(&mut self, node: &SyntaxNode) -> Result<Rule> {
         self.assert_type(node, SyntaxKind::ALIGN)?;
         let mut children = node.children();
@@ -1905,6 +1977,7 @@ impl Parser {
             SyntaxKind::SAMPLE => self.rule_sample(&r),
             SyntaxKind::MAP => self.rule_map(&r),
             SyntaxKind::ALIGN => self.rule_align(&r),
+            SyntaxKind::SHIFT => self.rule_shift(&r),
             SyntaxKind::GROUP => self.rule_group(&r),
             SyntaxKind::BUCKET => self.rule_bucket(&r),
             SyntaxKind::IFDEF => self.rule_ifdef(&r),
