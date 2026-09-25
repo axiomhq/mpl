@@ -63,6 +63,65 @@ impl fmt::Debug for TagValue {
     }
 }
 
+impl Ord for TagValue {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match (self, other) {
+            // First the easy cases, if we have two values of the same type,
+            // compare them directly
+            (TagValue::Null, TagValue::Null) => std::cmp::Ordering::Equal,
+            (TagValue::Int(a), TagValue::Int(b)) => a.cmp(b),
+            (TagValue::Float(a), TagValue::Float(b)) => OrderedFloat(*a).cmp(&OrderedFloat(*b)),
+            (TagValue::String(a), TagValue::String(b)) => a.cmp(b),
+            (TagValue::Bool(a), TagValue::Bool(b)) => a.cmp(b),
+            (TagValue::Array(a), TagValue::Array(b)) => a.cmp(b),
+
+            // If we have two numeric values of different types,
+            // cast them to f64 for and compare
+            (TagValue::Int(i), TagValue::Float(f)) =>
+            {
+                #[allow(clippy::cast_precision_loss)]
+                OrderedFloat(*i as f64).cmp(&OrderedFloat(*f))
+            }
+            (TagValue::Float(f), TagValue::Int(i)) =>
+            {
+                #[allow(clippy::cast_precision_loss)]
+                OrderedFloat(*f).cmp(&OrderedFloat(*i as f64))
+            }
+
+            // This are now in reverse order of precedence
+            // the rule we use is 'the more complex the type is the
+            // greater the ordering'
+
+            // Everything greater than Null
+            (TagValue::Null, _) => std::cmp::Ordering::Less,
+            (_, TagValue::Null) => std::cmp::Ordering::Greater,
+
+            // The rest if larger than bool
+            (TagValue::Bool(_), _) => std::cmp::Ordering::Less,
+            (_, TagValue::Bool(_)) => std::cmp::Ordering::Greater,
+
+            // now everything else is larger than int
+            (TagValue::Int(_), _) => std::cmp::Ordering::Less,
+            (_, TagValue::Int(_)) => std::cmp::Ordering::Greater,
+
+            // now everything else is larger than float
+            (TagValue::Float(_), _) => std::cmp::Ordering::Less,
+            (_, TagValue::Float(_)) => std::cmp::Ordering::Greater,
+            // now everything else is larger than string
+            (TagValue::String(_), _) => std::cmp::Ordering::Less,
+            (_, TagValue::String(_)) => std::cmp::Ordering::Greater,
+            // string is the largest type - this is a unreachable case
+            // as the prior matches already handle this.
+            // (TagValue::String(_), _) => std::cmp::Ordering::Less,
+            // (_, TagValue::String(_)) => std::cmp::Ordering::Greater,
+        }
+    }
+}
+impl PartialOrd for TagValue {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
 impl TagValue {
     /// Tries to access the tag value as a string
     #[must_use]
