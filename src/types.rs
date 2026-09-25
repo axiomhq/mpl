@@ -11,6 +11,32 @@ use crate::{
     query::ParamDeclaration,
 };
 
+/// Deduplicates strings in a tag value and metrics
+pub trait StringDeduper {
+    /// Deduplicates a string, returning a shared string.
+    fn string(&self, s: &str) -> Result<SharedString, StrumbraError>;
+    /// Deduplicates a metric, returning a metric.
+    fn metric(&self, s: &str) -> Result<Metric, StrumbraError>;
+}
+
+impl StringDeduper for () {
+    fn string(&self, s: &str) -> Result<SharedString, StrumbraError> {
+        SharedString::try_from(s)
+    }
+    fn metric(&self, s: &str) -> Result<Metric, StrumbraError> {
+        SharedString::try_from(s).map(Metric)
+    }
+}
+
+impl<T: StringDeduper + ?Sized> StringDeduper for &T {
+    fn string(&self, s: &str) -> Result<SharedString, StrumbraError> {
+        (*self).string(s)
+    }
+    fn metric(&self, s: &str) -> Result<Metric, StrumbraError> {
+        (*self).metric(s)
+    }
+}
+
 /// A dataset identifier
 #[derive(
     Debug,
@@ -125,8 +151,21 @@ impl<T> Parameterized<T> {
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Deserialize, serde::Serialize,
 )]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "bincode", derive(bincode::Encode))]
 pub struct Metric(#[cfg_attr(feature = "bincode", bincode(with_serde))] pub SharedString);
+
+#[cfg(feature = "bincode")]
+impl<'de, Context: StringDeduper> bincode::BorrowDecode<'de, Context> for Metric {
+    fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let s = <&str>::borrow_decode(decoder)?;
+        decoder
+            .context()
+            .metric(s)
+            .map_err(|_| bincode::error::DecodeError::Other("failed to dedup metric"))
+    }
+}
 
 impl std::fmt::Display for Metric {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
