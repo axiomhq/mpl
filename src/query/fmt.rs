@@ -164,6 +164,7 @@ impl Display for Source {
         let Source {
             metric_id: MetricId { dataset, metric },
             time,
+            offset,
         } = self;
         match dataset {
             Parameterized::Concrete(dataset) => escape_ident(f, dataset)?,
@@ -176,6 +177,9 @@ impl Display for Source {
         escape_ident(f, metric)?;
         if let Some(time) = time {
             write!(f, "{time}")?;
+        }
+        if let Some(offset) = offset {
+            write!(f, " | offset {offset}")?;
         }
         Ok(())
     }

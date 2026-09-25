@@ -7,6 +7,7 @@ use crate::{
     query::{ParamType, TagType, TerminalParamType},
     syntax_tree::{self, Lang, SyntaxError, SyntaxKind, SyntaxNode, SyntaxTree},
     tags::TagValue,
+    time::Offset,
 };
 
 #[cfg(test)]
@@ -767,6 +768,8 @@ pub struct ExtendPart {
 pub enum Rule {
     /// A parsed filter rule.
     Filter(FilterOr),
+    /// A parsed offset rule.
+    Offset(Offset),
     /// A parsed sample rule.
     Sample(f64),
     /// A parsed map rule.
@@ -1509,6 +1512,15 @@ impl Parser {
         self.assert_end(children);
         Ok(Rule::Filter(f))
     }
+    // TODO(@o11y): support forward offsets in offset_rule and Offset.
+    fn rule_offset(&mut self, node: &SyntaxNode) -> Result<Rule> {
+        self.assert_type(node, SyntaxKind::OFFSET)?;
+        let mut children = node.children();
+        let duration = self.n(&mut children, node, SyntaxKind::DURATION)?;
+        self.assert_end(children);
+        Ok(Rule::Offset(Offset::secs(self.duration_const(&duration)?)))
+    }
+
     fn rule_sample(&mut self, node: &SyntaxNode) -> Result<Rule> {
         self.assert_type(node, SyntaxKind::SAMPLE)?;
         let mut children = node.children();
@@ -1888,6 +1900,7 @@ impl Parser {
 
         match r.kind() {
             SyntaxKind::FILTER => self.rule_filter(&r),
+            SyntaxKind::OFFSET => self.rule_offset(&r),
             SyntaxKind::SAMPLE => self.rule_sample(&r),
             SyntaxKind::MAP => self.rule_map(&r),
             SyntaxKind::ALIGN => self.rule_align(&r),
