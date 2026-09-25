@@ -4,6 +4,7 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
 };
 
+use bincode::error::{AllowedEnumVariants, DecodeError};
 use ordered_float::OrderedFloat;
 use strumbra::SharedString;
 
@@ -11,7 +12,7 @@ use crate::{query::TagType, types::StrumbraError};
 
 /// Value for a tag k/v pair
 #[derive(Clone, PartialEq, serde::Deserialize, serde::Serialize, Default)]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "bincode", derive(bincode::Encode))]
 #[serde(untagged)]
 pub enum TagValue {
     #[default]
@@ -28,6 +29,53 @@ pub enum TagValue {
     /// Array value
     Array(Vec<TagValue>),
 }
+/// Deduplicates strings in a tag value.
+pub trait StringDeduper: Clone {
+    /// Deduplicates a string, returning a shared string.
+    fn dedup(&self, s: &str) -> Result<SharedString, StrumbraError>;
+}
+
+impl StringDeduper for () {
+    fn dedup(&self, s: &str) -> Result<SharedString, StrumbraError> {
+        SharedString::try_from(s)
+    }
+}
+
+impl<T: StringDeduper> StringDeduper for &T {
+    fn dedup(&self, s: &str) -> Result<SharedString, StrumbraError> {
+        (*self).dedup(s)
+    }
+}
+
+#[cfg(feature = "bincode")]
+impl<'de, Context: StringDeduper> bincode::BorrowDecode<'de, Context> for TagValue {
+    fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let idx = u32::borrow_decode(decoder)?;
+        match idx {
+            0 => Ok(TagValue::Null),
+            1 => bool::borrow_decode(decoder).map(TagValue::Bool),
+            2 => i64::borrow_decode(decoder).map(TagValue::Int),
+            3 => f64::borrow_decode(decoder).map(TagValue::Float),
+            4 => {
+                let s = <&str>::borrow_decode(decoder)?;
+                decoder
+                    .context()
+                    .dedup(s)
+                    .map_err(|_| DecodeError::Other("failed to dedup string"))
+                    .map(TagValue::String)
+            }
+            5 => Vec::<TagValue>::borrow_decode(decoder).map(Self::Array),
+            found => Err(DecodeError::UnexpectedVariant {
+                type_name: "ValueExpr",
+                allowed: &AllowedEnumVariants::Range { min: 0, max: 5 },
+                found,
+            }),
+        }
+    }
+}
+
 impl TagValue {
     /// Returns the type of the tag value.
     #[must_use]
