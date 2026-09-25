@@ -60,6 +60,7 @@ itertools = { version = "0.15.0", default-features = false, features = ["use_all
 [dev-dependencies]
 test-case = "3"
 miette = { version = "7.6", features = ["fancy"] }
+proptest = "1.11.0"
 
 [features]
 default = ["bincode", "clock", "regex-perf"]

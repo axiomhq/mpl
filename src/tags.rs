@@ -13,6 +13,11 @@ use crate::{query::TagType, types::StrumbraError};
 /// Value for a tag k/v pair
 #[derive(Clone, PartialEq, serde::Deserialize, serde::Serialize, Default)]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode))]
+#[cfg_attr(test, derive(strum::EnumDiscriminants))]
+#[cfg_attr(
+    test,
+    strum_discriminants(derive(strum::VariantArray), vis(pub(crate)))
+)]
 #[serde(untagged)]
 pub enum TagValue {
     #[default]
@@ -275,5 +280,145 @@ impl TryFrom<&str> for TagValue {
     type Error = StrumbraError;
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         Ok(TagValue::String(SharedString::try_from(s)?))
+    }
+}
+
+#[cfg(all(test, feature = "bincode"))]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+    use strum::VariantArray;
+
+    /// Wire index of each variant; the exhaustive match pins the on-disk format.
+    fn wire_index(value: &TagValue) -> u32 {
+        match value {
+            TagValue::Null => 0,
+            TagValue::Bool(_) => 1,
+            TagValue::Int(_) => 2,
+            TagValue::Float(_) => 3,
+            TagValue::String(_) => 4,
+            TagValue::Array(_) => 5,
+        }
+    }
+
+    /// Position of a variant in declaration order, which is the index the derived encoder writes.
+    fn declaration_index(value: &TagValue) -> u32 {
+        let discriminant = TagValueDiscriminants::from(value);
+        let position = TagValueDiscriminants::VARIANTS
+            .iter()
+            .position(|v| *v == discriminant)
+            .expect("discriminant is a variant");
+        u32::try_from(position).expect("variant count fits")
+    }
+
+    fn last_wire_index() -> u32 {
+        u32::try_from(TagValueDiscriminants::VARIANTS.len() - 1).expect("variant count fits")
+    }
+
+    /// Payload strategy for one variant; the exhaustive match ties it to the enum definition.
+    fn variant_strategy(
+        variant: TagValueDiscriminants,
+        inner: BoxedStrategy<TagValue>,
+    ) -> BoxedStrategy<TagValue> {
+        use proptest::num::f64::{INFINITE, NEGATIVE, NORMAL, POSITIVE, SUBNORMAL, ZERO};
+        match variant {
+            TagValueDiscriminants::Null => Just(TagValue::Null).boxed(),
+            TagValueDiscriminants::Bool => any::<bool>().prop_map(TagValue::Bool).boxed(),
+            TagValueDiscriminants::Int => any::<i64>().prop_map(TagValue::Int).boxed(),
+            TagValueDiscriminants::Float => {
+                (POSITIVE | NEGATIVE | NORMAL | SUBNORMAL | ZERO | INFINITE)
+                    .prop_map(TagValue::Float)
+                    .boxed()
+            }
+            TagValueDiscriminants::String => any::<String>()
+                .prop_map(|s| TagValue::try_from(s).expect("string fits"))
+                .boxed(),
+            TagValueDiscriminants::Array => prop::collection::vec(inner, 0..8)
+                .prop_map(TagValue::Array)
+                .boxed(),
+        }
+    }
+
+    /// Uniform choice over every variant, with `inner` as the array element strategy.
+    fn any_variant(inner: &BoxedStrategy<TagValue>) -> BoxedStrategy<TagValue> {
+        proptest::strategy::Union::new(
+            TagValueDiscriminants::VARIANTS
+                .iter()
+                .map(|v| variant_strategy(*v, inner.clone())),
+        )
+        .boxed()
+    }
+
+    /// Generates every variant, nesting arrays up to four levels deep; the deepest arrays hold nulls.
+    fn tag_value() -> impl Strategy<Value = TagValue> {
+        any_variant(&Just(TagValue::Null).boxed())
+            .prop_recursive(4, 32, 8, |inner| any_variant(&inner))
+    }
+
+    #[test]
+    fn decoder_rejects_the_index_after_the_last_variant() {
+        let config = bincode::config::standard();
+        let unknown = last_wire_index() + 1;
+        let bytes = bincode::encode_to_vec(unknown, config).expect("encodes");
+        let result: Result<(TagValue, usize), DecodeError> =
+            bincode::borrow_decode_from_slice_with_context(&bytes, config, ());
+        match result {
+            Err(DecodeError::UnexpectedVariant { allowed, found, .. }) => {
+                assert_eq!(found, unknown);
+                assert_eq!(
+                    *allowed,
+                    AllowedEnumVariants::Range {
+                        min: 0,
+                        max: last_wire_index()
+                    }
+                );
+            }
+            other => panic!("expected UnexpectedVariant, got {other:?}"),
+        }
+    }
+
+    proptest! {
+        /// The pinned wire table matches declaration order, so reordering the enum is caught.
+        #[test]
+        fn prop_wire_table_matches_declaration_order(value in tag_value()) {
+            prop_assert_eq!(wire_index(&value), declaration_index(&value));
+        }
+
+        /// The derived encoder writes the pinned wire index for any payload.
+        #[test]
+        fn prop_encoder_writes_the_pinned_wire_index(value in tag_value()) {
+            let config = bincode::config::standard();
+            let bytes = bincode::encode_to_vec(&value, config)?;
+            let (idx, _): (u32, usize) = bincode::decode_from_slice(&bytes, config)?;
+            prop_assert_eq!(idx, wire_index(&value));
+        }
+
+        /// Decoding the derived encoding is the identity and consumes every byte.
+        #[test]
+        fn prop_decoder_roundtrips(value in tag_value()) {
+            let config = bincode::config::standard();
+            let bytes = bincode::encode_to_vec(&value, config)?;
+            let (decoded, read): (TagValue, usize) =
+                bincode::borrow_decode_from_slice_with_context(&bytes, config, ())?;
+            prop_assert_eq!(&decoded, &value);
+            prop_assert_eq!(read, bytes.len());
+        }
+
+        /// Every index past the last variant is rejected with the pinned range.
+        #[test]
+        fn prop_decoder_rejects_unknown_indices(unknown in (last_wire_index() + 1)..) {
+            let config = bincode::config::standard();
+            let bytes = bincode::encode_to_vec(unknown, config)?;
+            let result: Result<(TagValue, usize), DecodeError> =
+                bincode::borrow_decode_from_slice_with_context(&bytes, config, ());
+            let Err(DecodeError::UnexpectedVariant { allowed, found, .. }) = result else {
+                return Err(TestCaseError::fail("expected UnexpectedVariant"));
+            };
+            prop_assert_eq!(found, unknown);
+            prop_assert_eq!(
+                allowed,
+                &AllowedEnumVariants::Range { min: 0, max: last_wire_index() }
+            );
+        }
     }
 }
