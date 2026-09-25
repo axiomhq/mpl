@@ -24,6 +24,7 @@ use mpl_lang::{
         TerminalParamType, TimeUnit,
     },
     tags::TagValue,
+    time::{Timerange, Timestamp},
     types::{BucketSpec, MapType, Parameterized, TagsType, TimeType},
 };
 
@@ -280,8 +281,7 @@ impl Interpreter {
         let (query, _) = compile(code, window_system_params(self.window))
             .map_err(|e| crate::diagnostics::message(code, &e))?;
         let steps = query_steps(query);
-        let windowed = self.window.map(|window| window.clip(&self.datasets));
-        let results = interpret(&steps, windowed.as_ref().unwrap_or(&self.datasets));
+        let results = interpret_in_window(&steps, &self.datasets, self.window);
 
         RunOutput(
             steps
@@ -410,12 +410,20 @@ fn query_steps(query: Query) -> Vec<PipeStep> {
 
 /// Interpret a sequence of pipeline steps against in-memory datasets.
 pub fn interpret(pipe_steps: &[PipeStep], datasets: &Datasets) -> Vec<Result<Vec<Series>>> {
+    interpret_in_window(pipe_steps, datasets, None)
+}
+
+fn interpret_in_window(
+    pipe_steps: &[PipeStep],
+    datasets: &Datasets,
+    window: Option<QueryWindow>,
+) -> Vec<Result<Vec<Series>>> {
     let mut results = Vec::with_capacity(pipe_steps.len());
     let mut series: Vec<Series> = Vec::new();
 
     for step in pipe_steps {
         let outcome = match &step.node {
-            StepNode::Source(src) => eval_source(src, datasets),
+            StepNode::Source(src) => eval_source(src, datasets, window),
             StepNode::Filter(f) => apply_filter(&series, f),
             // The playground has no way to provide values for optional params,
             // so the gate never opens: the if-branch never fires. When the
@@ -548,15 +556,41 @@ fn require_tag(tags: &HashMap<String, String>, key: &str) -> Result<String> {
         .ok_or_else(|| eyre!("Missing required tag: {key}"))
 }
 
-fn eval_source(src: &Source, datasets: &Datasets) -> Result<Vec<Series>> {
+fn eval_source(
+    src: &Source,
+    datasets: &Datasets,
+    window: Option<QueryWindow>,
+) -> Result<Vec<Series>> {
     let dataset = get_param(&src.metric_id.dataset)?.to_string();
     let metric = src.metric_id.metric.to_string();
-    Ok(datasets
+    let mut series = datasets
         .iter()
         .find(|ds| ds.name == dataset)
         .and_then(|ds| ds.metrics.iter().find(|m| m.name == metric))
         .map(|m| m.series.clone())
-        .unwrap_or_default())
+        .unwrap_or_default();
+    if let Some(window) = window {
+        let mut range = Timerange::new(Timestamp(window.start), Timestamp(window.end))?;
+        if let Some(offset) = src.offset {
+            range = range.offset(offset)?;
+        }
+        let window = QueryWindow {
+            start: range.start().as_secs(),
+            end: range.end().as_secs(),
+        };
+        series = series
+            .iter()
+            .filter_map(|s| window.clip_series(s))
+            .collect();
+    }
+    if let Some(offset) = src.offset {
+        for s in &mut series {
+            for timestamp in &mut s.timestamps {
+                *timestamp += offset.as_secs() as f64;
+            }
+        }
+    }
+    Ok(series)
 }
 
 fn evaluate_cmp(tag_val: &str, rhs: &Cmp, tags: &HashMap<String, String>) -> Result<bool> {

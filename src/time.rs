@@ -472,9 +472,37 @@ impl From<Duration> for Timestamp {
     }
 }
 
+/// How far back to look. `offset -1h` stores 3600 seconds.
+// TODO(@o11y): support forward offsets; we'll need to store the direction too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Offset(u64);
+
+impl Offset {
+    /// Zero = current period
+    #[must_use]
+    pub fn secs(seconds: u64) -> Self {
+        Self(seconds)
+    }
+
+    /// Returns seconds as u64
+    #[must_use]
+    pub fn as_secs(self) -> u64 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for Offset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "-{}s", self.0)
+    }
+}
+
 /// Returned from methods of `Timerange`.
 #[derive(Debug, thiserror::Error)]
 pub enum TimerangeError {
+    /// Comparison period must be > 0
+    #[error("offset exceeds the timestamp range")]
+    OffsetOutOfRange,
     /// Returned from `Timerange::new` if end is before start.
     #[error("end is before start, start: {start}, end: {end}")]
     EndBeforeStart {
@@ -536,6 +564,17 @@ impl Timerange {
     #[must_use]
     pub fn duration(&self) -> u64 {
         self.end.0 - self.start.0
+    }
+
+    /// Look at an identical time window further back by a period of time. `10..20` -> `offset -3` -> `7..17`
+    pub fn offset(self, offset: Offset) -> Result<Self, TimerangeError> {
+        // Move one timestamp back. Fails when we go below zero
+        let offset = |t: Timestamp| {
+            t.0.checked_sub(offset.0)
+                .map(Timestamp)
+                .ok_or(TimerangeError::OffsetOutOfRange)
+        };
+        Self::new(offset(self.start)?, offset(self.end)?)
     }
 
     /// Iterate over chunks of at most `chunk_size`.

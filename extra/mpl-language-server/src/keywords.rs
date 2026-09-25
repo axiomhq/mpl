@@ -44,6 +44,11 @@ const KEYWORDS: &[KeywordInfo] = &[
         "| filter <tag> == <value>",
     ),
     kw_syntax(
+        "offset",
+        "Read time series from an earlier time. Requires a minus sign, e.g. -1h.",
+        "| offset -<duration>",
+    ),
+    kw_syntax(
         "sample",
         "Sample time series at a numeric rate",
         "| sample <rate>",

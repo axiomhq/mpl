@@ -16,7 +16,7 @@ use crate::{
     linker::{AlignFunction, ComputeFunction, GroupFunction, MapFunction},
     parser::{self, ParseParamError},
     tags::TagValue,
-    time::{Resolution, ResolutionError},
+    time::{Offset, Resolution, ResolutionError},
     types::{BucketSpec, BucketType, Dataset, Metric, Parameterized},
 };
 
@@ -92,6 +92,10 @@ pub struct Source {
     pub metric_id: MetricId,
     /// The time range
     pub time: Option<TimeRange>,
+    /// So every source for a query effectively has an offset, just that omitting it results in 0s.
+    /// `None` leaves it out of the formatted query; `Some(Offset::secs(0))` prints `offset -0s`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<Offset>,
 }
 impl Source {
     fn time(&self) -> Option<&TimeRange> {

@@ -186,6 +186,7 @@ pub enum SyntaxKind {
     AS,
     GROUP,
     BUCKET,
+    OFFSET,
 
     /// invalid in the syntax tree but valid as a token
     INVALID,
@@ -912,6 +913,7 @@ impl Parser<'_> {
                 }
                 match txt {
                     "filter" | "where" => s.filter_rule(),
+                    "offset" => s.offset_rule(),
                     "sample" => s.sample_rule(),
                     "map" => s.map_rule(),
                     "align" => s.align_rule(),
@@ -1034,6 +1036,14 @@ impl Parser<'_> {
                     s.error("expected comparison operator");
                 }
             }
+        });
+    }
+
+    fn offset_rule(&mut self) {
+        self.node(OFFSET, |s| {
+            s.keyword_token("offset");
+            s.structural(TokenType::Minus);
+            s.duration();
         });
     }
 
