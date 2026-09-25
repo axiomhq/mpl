@@ -178,6 +178,7 @@ impl TryFrom<Resolution> for NonZeroU32 {
     PartialOrd,
     Ord,
     Default,
+    Hash,
     serde::Deserialize,
     serde::Serialize,
 )]
