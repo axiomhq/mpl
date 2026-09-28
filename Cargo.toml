@@ -1,6 +1,6 @@
 [package]
 name = "mpl-lang"
-version = "0.7.1"
+version = "0.8.0"
 edition = "2024"
 authors = ["Seoyoung Lee <seoyoung@axiom.co>", "Arne Bahlo <arne@axiom.co>", "Heinz Gies <heinz@axiom.co>", "Samuel Cristobal <samu@messy.page>"]
 description = "Axioms Metrics Processing Language"
@@ -60,6 +60,7 @@ itertools = { version = "0.15.0", default-features = false, features = ["use_all
 [dev-dependencies]
 test-case = "3"
 miette = { version = "7.6", features = ["fancy"] }
+proptest = "1.11.0"
 
 [features]
 default = ["bincode", "clock", "regex-perf"]
