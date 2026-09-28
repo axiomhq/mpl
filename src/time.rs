@@ -475,6 +475,7 @@ impl From<Duration> for Timestamp {
 
 /// How far to move in time. `offset -1h` stores -3600 seconds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 pub struct Offset(i64);
 
 impl Offset {
