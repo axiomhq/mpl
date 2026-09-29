@@ -1509,7 +1509,7 @@ fn gen_duration(rng: &mut Rng) -> String {
 fn gen_rule(rng: &mut Rng) -> String {
     let ident = *rng.pick(IDENTS);
     let func = *rng.pick(FUNCS);
-    match rng.below(10) {
+    match rng.below(11) {
         0 => {
             let keyword = *rng.pick(&["where", "filter"]);
             let filter = gen_filter(rng, 2);
@@ -1584,6 +1584,10 @@ fn gen_rule(rng: &mut Rng) -> String {
                     ],
                 )
             }
+        }
+        9 => {
+            let duration = gen_duration(rng);
+            join(rng, &["offset", "-", &duration])
         }
         _ => {
             let count = rng.below(2);
@@ -1726,6 +1730,7 @@ fn generated_queries_parse_cleanly() {
         SyntaxKind::EXTEND,
         SyntaxKind::EXTEND_PART,
         SyntaxKind::DURATION,
+        SyntaxKind::OFFSET,
         SyntaxKind::TIME_UNIT,
         SyntaxKind::FUNCTION_PATH,
         SyntaxKind::EXPR,
@@ -1757,7 +1762,7 @@ const FRAGMENTS: &[&str] = &[
     "d", ":", "m", "|", "where", "filter", "a", "==", "!=", "1", "(", ")", "[", "]", "{", "}", ",",
     ";", "$v", "set", "param", "compute", "using", "\"", "${", "#/x/", "/", "as", "in", "is",
     "not", "and", "or", "5m", "1.5", "inf", "true", " ", "\n", "::", "map", "align", "to", "group",
-    "by", "bucket", "sample", "ifdef", "else", "extend", "=", "é", "🎉", "\\", "`",
+    "by", "bucket", "sample", "offset", "ifdef", "else", "extend", "=", "é", "🎉", "\\", "`",
 ];
 
 /// Property: no input, however malformed, panics or loops the parser.

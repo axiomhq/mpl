@@ -494,9 +494,10 @@ impl QueryParser {
                 metric: metric.into_string(),
             })?,
         };
-        let source = Source {
+        let mut source = Source {
             metric_id,
             time: None,
+            offset: None,
         };
 
         let mut aggregates = Vec::new();
@@ -510,6 +511,15 @@ impl QueryParser {
         let mut extends = Vec::new();
         let mut filters = Vec::new();
         let mut rules = rules.into_iter().peekable();
+        // Offset chooses the period we read BEFORE sampling or transforming the data. Each source gets exactly one offset.
+        if let Some(SyntaxRule {
+            rule: Rule::Offset(offset),
+            ..
+        }) = rules.peek()
+        {
+            source.offset = Some(*offset);
+            rules.next();
+        }
         let sample = if rules.peek().is_some_and(|r| r.is_sample())
             && let Some(SyntaxRule {
                 rule: Rule::Sample(s),
