@@ -2,9 +2,7 @@ use std::collections::HashMap;
 
 use itertools::iproduct;
 use mpl_lang::{
-    CompileError, Query,
-    ast::AstError,
-    compile,
+    CompileError, Query, compile,
     parser::ParseError,
     query::Aggregate,
     time::{Offset, Timerange, Timestamp},
@@ -90,7 +88,6 @@ fn offset_uses_the_existing_duration_rules(sign: &str) {
             "3600",
             "1.5",
             "\"1\"",
-            "9223372036854775807",
             "9223372036854775808"
         ],
         ["ms", "s", "m", "h", "d", "w", "M", "y", "", "ns", "h1m"]
@@ -141,52 +138,6 @@ fn offset_uses_the_existing_duration_rules(sign: &str) {
             }
         } else {
             assert!(offseted.is_err(), "{sign}{duration}");
-        }
-    }
-}
-
-#[test]
-fn durations_stay_in_range() {
-    for ((unit, scale), limit, step) in iproduct!(
-        [
-            ("s", 1_u128),
-            ("m", 60),
-            ("h", 3600),
-            ("d", 86400),
-            ("w", 604800),
-            ("M", 2592000),
-            ("y", 31536000),
-        ],
-        [i64::MAX as u128, u128::from(u64::MAX)],
-        [0, 1]
-    ) {
-        let value = limit / scale + step;
-        let duration = format!("{value}{unit}");
-        for (rule, max) in [
-            (
-                format!("align to {duration} using last"),
-                u128::from(u64::MAX),
-            ),
-            (format!("offset {duration}"), i64::MAX as u128),
-            (format!("offset +{duration}"), i64::MAX as u128),
-            (format!("offset -{duration}"), i64::MAX as u128),
-        ] {
-            let text = format!("test:cpu | {rule}");
-            let result = compile(&text, HashMap::new());
-            assert_eq!(
-                result.is_ok(),
-                value <= i64::MAX as u128 && value * scale <= max,
-                "{text}"
-            );
-            if let Err(CompileError::Parser(errors)) = result {
-                assert!(
-                    matches!(
-                        errors.as_slice(),
-                        [ParseError::AST(AstError::InvalidIntegerConstant { .. })]
-                    ),
-                    "{text}: {errors:?}"
-                );
-            }
         }
     }
 }

@@ -22,4 +22,4 @@ keep the same units and limits. `Offset` already stores a signed number, and `Ti
 
 ## consequences
 
-durations too large to fit return an error. offset parameters can wait.
+offsets still use literal durations. this change doesn't add support for parameters.
