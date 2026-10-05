@@ -1669,23 +1669,23 @@ impl Parser {
                     time: i,
                     span: n.span(),
                 });
-                1
+                Some(1)
             }
             "ms" if !i.is_multiple_of(1000) => {
                 self.warnings.push(AstWarning::TimeNotSecondAligned {
                     time: i,
                     span: n.span(),
                 });
-                i / 1000
+                Some(i / 1000)
             }
-            "ms" => i / 1000,
-            "s" => i,
-            "m" => i * 60,
-            "h" => i * 60 * 60,
-            "d" => i * 60 * 60 * 24,
-            "w" => i * 60 * 60 * 24 * 7,
-            "M" => i * 60 * 60 * 24 * 30,
-            "y" => i * 60 * 60 * 24 * 365,
+            "ms" => Some(i / 1000),
+            "s" => Some(i),
+            "m" => i.checked_mul(60),
+            "h" => i.checked_mul(60 * 60),
+            "d" => i.checked_mul(60 * 60 * 24),
+            "w" => i.checked_mul(60 * 60 * 24 * 7),
+            "M" => i.checked_mul(60 * 60 * 24 * 30),
+            "y" => i.checked_mul(60 * 60 * 24 * 365),
             _ => {
                 self.errors
                     .push(AstError::InvalidTimeUnit { span: n.span() });
@@ -1693,7 +1693,13 @@ impl Parser {
                 return Err(Error("invalid time unit"));
             }
         };
-        Ok(duration)
+        if let Some(duration) = duration {
+            Ok(duration)
+        } else {
+            self.errors
+                .push(AstError::InvalidIntegerConstant { span: node.span() });
+            Err(Error("invalid integer"))
+        }
     }
 
     fn duration(&mut self, node: SyntaxNode) -> Result<Duration> {
