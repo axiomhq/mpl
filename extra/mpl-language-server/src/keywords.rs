@@ -45,8 +45,8 @@ const KEYWORDS: &[KeywordInfo] = &[
     ),
     kw_syntax(
         "offset",
-        "Read time series from an earlier time. Requires a minus sign, e.g. -1h.",
-        "| offset -<duration>",
+        "Read time series from another time: -1h reads earlier, +1h or 1h reads later.",
+        "| offset <duration>",
     ),
     kw_syntax(
         "sample",
