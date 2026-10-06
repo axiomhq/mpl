@@ -98,15 +98,17 @@ fn source_loads_series() {
 }
 
 #[test_case(0; "no offset")]
-#[test_case(1; "second earlier")]
-#[test_case(3600; "hour earlier")]
-fn offset_reads_samples_on_the_query_timeline(offset: u32) {
+#[test_case(-1; "second earlier")]
+#[test_case(-3600; "hour earlier")]
+#[test_case(1; "second later")]
+#[test_case(3600; "hour later")]
+fn offset_reads_samples_on_the_query_timeline(offset: i32) {
     for width in [0, 1, 60] {
         let window = QueryWindow {
             start: 10_000,
             end: 10_000 + width,
         };
-        let first = window.start as f64 - f64::from(offset);
+        let first = window.start as f64 + f64::from(offset);
         let series = s(
             &[("host", "a")],
             vec![first - 0.25, first, first + 0.25, first + width as f64],
@@ -117,12 +119,12 @@ fn offset_reads_samples_on_the_query_timeline(offset: u32) {
                 .timestamps
                 .iter()
                 .zip(&series.values)
-                .map(|(t, v)| (*t + f64::from(offset), *v))
+                .map(|(t, v)| (*t - f64::from(offset), *v))
                 .filter(|(t, _)| !windowed || window.covers(*t))
                 .collect();
             let datasets = ds("ds", "m", vec![series.clone()]);
             let (query, _) = compile(
-                &format!("ds:m | offset -{offset}s | map * 2"),
+                &format!("ds:m | offset {offset}s | map * 2"),
                 HashMap::new(),
             )
             .unwrap();
