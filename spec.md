@@ -47,6 +47,40 @@ For example:
 `k8s-metrics-dev`:cpu_usage[2025-03-01T13:00:00Z..+1h]
 ```
 
+## Offset
+
+`offset` reads the source from an earlier time. The query keeps its time range: each value is read from that far back and
+returned at the matching time in the query range. This makes it possible to compare a metric with its own past, for
+example this week with the same time last week:
+
+```mpl
+// read the values from one hour earlier
+| offset -1h
+```
+
+With `offset -1h` and a time range of 10:00 to 11:00, the source reads 09:00 to 10:00, and the value recorded at 09:15
+is returned at 10:15.
+
+- The duration uses the [relative time](#time-range) units and must start with `-`. A negative offset moves back in
+  time, which is the opposite sign of PromQL's `offset`. Moving forward in time is not supported yet.
+- The offset operator is only valid right after the source, before `sample`, and at most once per source.
+- Each source in a [computation](#computation) has its own offset; a source without one reads the query's time range.
+  `offset` cannot follow `compute`.
+
+```mpl
+// requests per second compared with the same time one week earlier
+(
+  `k8s-metrics-dev`:http_requests_total
+  | align to 5m using prom::rate
+  | group using sum,
+  `k8s-metrics-dev`:http_requests_total
+  | offset -1w
+  | align to 5m using prom::rate
+  | group using sum
+)
+| compute week_over_week using /
+```
+
 ## Sampling
 
 Before the filter it is possible to sample the data. This can be helpful when designing more complex queries or get a
@@ -58,7 +92,7 @@ Sampling by 0.9 means that 90% of the series will be kept. The syntax is:
 | sample 0.9
 ```
 
-The sampling operator is only valid right after the source.
+The sampling operator is only valid right after the source, or after its [offset](#offset).
 
 ## Filtering
 
