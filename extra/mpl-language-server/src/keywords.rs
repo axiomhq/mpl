@@ -44,6 +44,11 @@ const KEYWORDS: &[KeywordInfo] = &[
         "| filter <tag> == <value>",
     ),
     kw_syntax(
+        "offset",
+        "Read time series from another time: -1h reads earlier, +1h or 1h reads later.",
+        "| offset <duration>",
+    ),
+    kw_syntax(
         "sample",
         "Sample time series at a numeric rate",
         "| sample <rate>",
@@ -74,11 +79,6 @@ const KEYWORDS: &[KeywordInfo] = &[
         "| compute <metric> using <function>",
     ),
     kw_syntax("as", "Rename the output metric", "| as <name>"),
-    kw_syntax(
-        "shift",
-        "Read data at a signed offset while preserving output timestamps. Negative offsets read earlier data; the literal duration must resolve to whole seconds.",
-        "| shift -1h",
-    ),
     kw_syntax(
         "spotlight",
         "Compare two windows of normalized series and return a structured result. Bounds are Unix seconds; the end is exclusive.",
@@ -181,6 +181,31 @@ mod tests {
             );
         }
         assert!(keyword_info("nonsense").is_none());
+    }
+
+    /// MetricsDB serves `SPEC` and `MPL` as the MPL reference, so every operator must appear in both.
+    #[test]
+    fn every_pipe_operator_is_in_the_served_spec() {
+        // `filter` is a deprecated alias for `where`.
+        const EXEMPT: &[&str] = &["filter"];
+        let mut missing = Vec::new();
+        for entry in KEYWORDS {
+            let usage = format!("| {}", entry.label);
+            if EXEMPT.contains(&entry.label) || !entry.syntax.is_some_and(|s| s.starts_with(&usage))
+            {
+                continue;
+            }
+            if !mpl_lang::examples::SPEC.contains(&usage) {
+                missing.push(format!("spec.md does not show `{usage}`"));
+            }
+            if !mpl_lang::examples::MPL
+                .iter()
+                .any(|(_, example)| example.contains(&usage))
+            {
+                missing.push(format!("no example in `examples::MPL` uses `{usage}`"));
+            }
+        }
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
     }
 
     #[test]

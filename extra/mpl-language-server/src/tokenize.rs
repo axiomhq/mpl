@@ -57,7 +57,7 @@ const RULE_KEYWORDS: &[&str] = &[
     "param",
     "sample",
     "set",
-    "shift",
+    "offset",
     "to",
     "using",
     "where",
@@ -88,7 +88,7 @@ fn opens_construct(kind: SyntaxKind) -> bool {
             | SyntaxKind::ALIGN
             | SyntaxKind::GROUP
             | SyntaxKind::BUCKET
-            | SyntaxKind::SHIFT
+            | SyntaxKind::OFFSET
             | SyntaxKind::SPOTLIGHT
             | SyntaxKind::IFDEF
             | SyntaxKind::EXTEND

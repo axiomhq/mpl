@@ -47,6 +47,47 @@ For example:
 `k8s-metrics-dev`:cpu_usage[2025-03-01T13:00:00Z..+1h]
 ```
 
+## Offset
+
+`offset` reads the source from another time. The query keeps its time range: each value is read from that far away
+and returned at the matching time in the query range. This makes it possible to compare a metric with its own past, for
+example this week with the same time last week:
+
+```mpl
+// read the values from one hour earlier
+| offset -1h
+
+// read the values from one hour later
+| offset +1h
+
+// same as +1h
+| offset 1h
+```
+
+With `offset -1h` and a time range of 10:00 to 11:00, the source reads 09:00 to 10:00, and the value recorded at 09:15
+is returned at 10:15. With `offset +1h`, the source reads 11:00 to 12:00, and the value recorded at 11:15 is returned
+at 10:15.
+
+- The duration uses the [relative time](#time-range) units. The sign matches the direction: `-` reads earlier, and `+`
+  or no sign reads later. This is the opposite of PromQL, where `offset 1h` reads an hour earlier.
+- The offset operator is only valid right after the source, before `sample`, and at most once per source.
+- Each source in a [computation](#computation) has its own offset; a source without one reads the query's time range.
+  `offset` cannot follow `compute`.
+
+```mpl
+// requests per second compared with the same time one week earlier
+(
+  `k8s-metrics-dev`:http_requests_total
+  | align to 5m using prom::rate
+  | group using sum,
+  `k8s-metrics-dev`:http_requests_total
+  | offset -1w
+  | align to 5m using prom::rate
+  | group using sum
+)
+| compute week_over_week using /
+```
+
 ## Sampling
 
 Before the filter it is possible to sample the data. This can be helpful when designing more complex queries or get a
@@ -58,7 +99,7 @@ Sampling by 0.9 means that 90% of the series will be kept. The syntax is:
 | sample 0.9
 ```
 
-The sampling operator is only valid right after the source.
+The sampling operator is only valid right after the source, or after its [offset](#offset).
 
 ## Filtering
 
@@ -145,32 +186,6 @@ We distinguish between a number of different transformations:
 3) [grouping](#grouping) - A transformation that groups the data by a set of tags, combining overlapping values.
 4) [bucketing](#bucketing) - A two-dimensional transformation that combines the time and tag dimension; this is for histograms.
 5) [renaming](#renaming) - Rename the metric within the pipeline.
-6) [shifting](#shifting) - Read data at a signed source offset while preserving output timestamps.
-
-### Shifting
-
-The `shift` operator applies a signed source offset. For an output timestamp `t`,
-`shift <offset>` reads the upstream query at `t + offset` and displays the result at
-`t`. Thus `shift -1h` reads one hour earlier; `shift +1h` reads one hour later.
-It can appear among the aggregations of a source or compute query. Multiple shifts
-compose by adding their offsets.
-
-```mpl
-// compare the current values with those from an hour earlier
-(metrics:cpu, metrics:cpu | shift -1h) | compute change using -
-
-// an explicit positive offset, or no offset
-metrics:cpu | shift +1h
-metrics:cpu | shift 0s
-```
-
-The offset is an integer duration literal with an optional `+` or `-` sign and a
-required unit: `ms`, `s`, `m`, `h`, `d`, `w`, `M`, or `y`. Months are 30 days and
-years are 365 days. An omitted sign is positive. Parameters and decimal literals
-are not supported. Milliseconds must be divisible by 1000: `-2000ms` is `-2s`,
-while `-1500ms` and `1ms` are errors. Zero is valid with any unit. The converted
-offset must fit a signed 64-bit integer; overflow is an error. Formatting emits
-the offset in seconds, for example `shift -3600s`.
 
 ### Mapping
 

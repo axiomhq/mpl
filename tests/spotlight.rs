@@ -55,26 +55,35 @@ fn spotlight_defaults_and_duplicate_fields() {
 }
 
 #[test]
-fn shift_can_precede_but_not_follow_spotlight() {
+fn spotlight_keeps_the_source_offset() {
     let spotlight = "spotlight [120..240] against [0..120] by * using sum";
-    let (query, _) = mpl_lang::compile(
-        &format!("test:cpu | shift -1h | {spotlight}"),
-        HashMap::new(),
-    )
-    .unwrap();
-    assert!(query.spotlight().is_some());
-    let (reparsed, _) = mpl_lang::compile(&query.to_string(), HashMap::new()).unwrap();
-    assert_eq!(
-        serde_json::to_value(query).unwrap(),
-        serde_json::to_value(reparsed).unwrap()
-    );
-    assert!(
-        mpl_lang::compile(
-            &format!("test:cpu | {spotlight} | shift -1h"),
+    for seconds in [-3600, -1, 0, 1, 3600] {
+        let (query, _) = mpl_lang::compile(
+            &format!("test:cpu | offset {seconds}s | {spotlight}"),
             HashMap::new(),
         )
-        .is_err()
-    );
+        .unwrap();
+        let mpl_lang::Query::Simple { source, .. } = &query else {
+            unreachable!()
+        };
+        assert_eq!(
+            source.offset.map(mpl_lang::time::Offset::as_secs),
+            Some(seconds)
+        );
+        assert!(query.spotlight().is_some());
+        let (reparsed, _) = mpl_lang::compile(&query.to_string(), HashMap::new()).unwrap();
+        assert_eq!(
+            serde_json::to_value(query).unwrap(),
+            serde_json::to_value(reparsed).unwrap()
+        );
+        assert!(
+            mpl_lang::compile(
+                &format!("test:cpu | {spotlight} | offset {seconds}s"),
+                HashMap::new(),
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]

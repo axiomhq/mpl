@@ -486,7 +486,6 @@ impl QueryParser {
             node: _,
             dataset,
             metric,
-            time,
             alias,
             rules,
         }: SimpleQuery,
@@ -504,7 +503,11 @@ impl QueryParser {
                 metric: metric.into_string(),
             })?,
         };
-        let source = Source { metric_id, time };
+        let mut source = Source {
+            metric_id,
+            time: None,
+            offset: None,
+        };
 
         let mut aggregates = Vec::new();
         if let Some(alias) = alias {
@@ -517,6 +520,15 @@ impl QueryParser {
         let mut extends = Vec::new();
         let mut filters = Vec::new();
         let mut rules = rules.into_iter().peekable();
+        // Offset chooses the period we read BEFORE sampling or transforming the data. Each source gets exactly one offset.
+        if let Some(SyntaxRule {
+            rule: Rule::Offset(offset),
+            ..
+        }) = rules.peek()
+        {
+            source.offset = Some(*offset);
+            rules.next();
+        }
         let sample = if rules.peek().is_some_and(|r| r.is_sample())
             && let Some(SyntaxRule {
                 rule: Rule::Sample(s),
@@ -574,7 +586,6 @@ impl QueryParser {
         {
             match rule {
                 Rule::Map(func) => aggregates.push(self.map_to_aggr(&func)?),
-                Rule::Shift { seconds } => aggregates.push(Aggregate::Shift { seconds }),
                 Rule::Align { duration, func } => {
                     aggregates.push(self.align_to_aggr(duration, &func)?);
                 }
@@ -683,7 +694,6 @@ impl QueryParser {
                     return Err(ParseError::RuleNotSupportedAfterCompute { span: node.span() });
                 }
                 Rule::Map(func) => aggregates.push(self.map_to_aggr(&func)?),
-                Rule::Shift { seconds } => aggregates.push(Aggregate::Shift { seconds }),
                 Rule::Align { duration, func } => {
                     aggregates.push(self.align_to_aggr(duration, &func)?);
                 }

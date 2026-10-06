@@ -1012,9 +1012,17 @@ fn pipe_keywords(
     span: Span,
     policy: FilterPolicy,
     allow_sample: bool,
+    allow_offset: bool,
     has_optional_params: bool,
 ) -> CompletionResult {
     let mut options = Vec::with_capacity(10);
+    if allow_offset {
+        options.push(KeywordItem {
+            label: "offset",
+            apply: Some("offset "),
+            info: keywords::describe("offset"),
+        });
+    }
     if allow_sample {
         options.push(KeywordItem {
             label: "sample",
@@ -1056,11 +1064,6 @@ fn pipe_keywords(
             label: "bucket",
             apply: Some("bucket "),
             info: keywords::describe("bucket"),
-        },
-        KeywordItem {
-            label: "shift",
-            apply: Some("shift "),
-            info: keywords::describe("shift"),
         },
         KeywordItem {
             label: "spotlight",
@@ -1139,8 +1142,16 @@ fn suggest_for_context(
     };
     let after_pipe = before[pipe_pos + 1..].trim();
 
-    // `sample` is only valid at the first pipe of a simple subquery
-    let allow_sample = policy == FilterPolicy::Include && count_pipes(before) == 1;
+    // Offset comes first; sample can follow it.
+    let allow_offset = policy == FilterPolicy::Include && count_pipes(before) == 1;
+    let allow_sample = allow_offset
+        || (policy == FilterPolicy::Include
+            && count_pipes(before) == 2
+            && SyntaxParser::new(before)
+                .parse()
+                .root
+                .descendants()
+                .any(|n| n.kind() == SyntaxKind::OFFSET));
     let has_optional_params = params.iter().any(|p| p.optional);
 
     if after_pipe.is_empty() {
@@ -1148,6 +1159,7 @@ fn suggest_for_context(
             span,
             policy,
             allow_sample,
+            allow_offset,
             has_optional_params,
         )];
     }

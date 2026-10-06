@@ -178,6 +178,7 @@ impl TryFrom<Resolution> for NonZeroU32 {
     PartialOrd,
     Ord,
     Default,
+    Hash,
     serde::Deserialize,
     serde::Serialize,
 )]
@@ -472,9 +473,37 @@ impl From<Duration> for Timestamp {
     }
 }
 
+/// How far to move in time. `offset -1h` stores -3600 seconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+pub struct Offset(i64);
+
+impl Offset {
+    /// Zero = current period
+    #[must_use]
+    pub fn secs(seconds: i64) -> Self {
+        Self(seconds)
+    }
+
+    /// Returns seconds as i64
+    #[must_use]
+    pub fn as_secs(self) -> i64 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for Offset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}s", self.0)
+    }
+}
+
 /// Returned from methods of `Timerange`.
 #[derive(Debug, thiserror::Error)]
 pub enum TimerangeError {
+    /// Moving the window would put a timestamp below zero or above `u64::MAX`.
+    #[error("offset exceeds the timestamp range")]
+    OffsetOutOfRange,
     /// Returned from `Timerange::new` if end is before start.
     #[error("end is before start, start: {start}, end: {end}")]
     EndBeforeStart {
@@ -536,6 +565,17 @@ impl Timerange {
     #[must_use]
     pub fn duration(&self) -> u64 {
         self.end.0 - self.start.0
+    }
+
+    /// Move the time window by the offset. `10..20` with `-3` becomes `7..17`.
+    pub fn offset(self, offset: Offset) -> Result<Self, TimerangeError> {
+        // Adding a negative offset moves the timestamp back.
+        let offset = |t: Timestamp| {
+            t.0.checked_add_signed(offset.0)
+                .map(Timestamp)
+                .ok_or(TimerangeError::OffsetOutOfRange)
+        };
+        Self::new(offset(self.start)?, offset(self.end)?)
     }
 
     /// Iterate over chunks of at most `chunk_size`.

@@ -27,18 +27,6 @@ fn source_dataset(r: &CompletionResult) -> Option<&str> {
     }
 }
 
-#[test]
-fn shift_is_offered_in_source_and_compute_pipelines() {
-    for query in [
-        "ds:metric | ",
-        "ds:metric | align to 1m using avg | sh",
-        "(ds:a, ds:b) | compute delta using - | ",
-    ] {
-        let result = compute_completions(query, query.len()).expect("pipe completions");
-        assert!(result.option_labels().contains(&"shift"), "{query}");
-    }
-}
-
 // ── locate_query_context ──────────────────────────────────────────
 
 #[test]
@@ -614,6 +602,67 @@ fn parse_param_decl_invalid_optional_inner_types_are_dropped() {
             params.is_empty(),
             "Option<{inner}> is not valid in ifdef filters and should not be suggested"
         );
+    }
+}
+
+#[test_case(0)]
+#[test_case(1)]
+#[test_case(2)]
+#[test_case(3)]
+fn offset_and_sample_completions_match_the_parser(context: u8) {
+    for rule in [
+        "",
+        " | offset -0s",
+        " | offset +0s",
+        " | offset 0s",
+        " | offset -1s",
+        " | offset +1s",
+        " | offset 1s",
+        " | sample 0.5",
+        " | where x == 1",
+        " | align using sum",
+        " | map abs",
+    ] {
+        let source = format!("test:cpu{rule}");
+        let (query, suffix) = match context {
+            0 => (source, ""),
+            1 => (format!("({source}"), ", test:cpu) | compute delta using -"),
+            2 => (format!("(test:cpu, {source}"), ") | compute delta using -"),
+            _ => (format!("({source}, test:cpu) | compute delta using -"), ""),
+        };
+        for gap in [" ", "\n", "\t", " // ignored | pipe\n"] {
+            for partial in ["", "offs"] {
+                let text = format!("{query}{gap}| {partial}#");
+                let completions = completions_at(&text).expect("pipe completions");
+                let offseted = format!("{query}{gap}| offset -1h{suffix}");
+                assert_eq!(
+                    completions.option_labels().contains(&"offset"),
+                    mpl_lang::compile(&offseted, HashMap::new()).is_ok(),
+                    "{text}",
+                );
+                if let Some(i) = completions
+                    .option_labels()
+                    .iter()
+                    .position(|s| *s == "offset")
+                {
+                    let apply = completions.keyword_apply_texts()[i].unwrap_or("offset");
+                    assert_eq!(apply, "offset ");
+                    let completed = format!("{query}{gap}| {apply}1h{suffix}");
+                    assert!(
+                        mpl_lang::compile(&completed, HashMap::new()).is_ok(),
+                        "{completed}"
+                    );
+                }
+                if partial.is_empty() {
+                    let sampled = format!("{query}{gap}| sample 0.5{suffix}");
+                    assert_eq!(
+                        completions.option_labels().contains(&"sample"),
+                        mpl_lang::compile(&sampled, HashMap::new()).is_ok(),
+                        "{text}",
+                    );
+                }
+            }
+        }
     }
 }
 

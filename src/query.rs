@@ -16,7 +16,7 @@ use crate::{
     linker::{AlignFunction, ComputeFunction, GroupFunction, MapFunction},
     parser::{self, ParseParamError},
     tags::TagValue,
-    time::{Resolution, ResolutionError},
+    time::{Offset, Resolution, ResolutionError},
     types::{BucketSpec, BucketType, Dataset, Metric, Parameterized},
 };
 
@@ -92,6 +92,10 @@ pub struct Source {
     pub metric_id: MetricId,
     /// The time range
     pub time: Option<TimeRange>,
+    /// So every source for a query effectively has an offset, just that omitting it results in 0s.
+    /// `None` leaves it out of the formatted query; `Some(Offset::secs(0))` prints `offset 0s`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<Offset>,
 }
 impl Source {
     fn time(&self) -> Option<&TimeRange> {
@@ -278,11 +282,6 @@ pub enum Aggregate {
     Bucket(BucketBy),
     /// Rename the metric
     As(As),
-    /// Read at an offset from the output timestamps, preserving those output timestamps.
-    Shift {
-        /// Signed source offset in whole seconds; negative values read earlier data.
-        seconds: i64,
-    },
     /// Compare two windows and return a structured result instead of series.
     Spotlight(Spotlight),
 }
@@ -1187,21 +1186,18 @@ impl Query {
 
 impl RelativeTime {
     /// Converts a relative time to a `Duration`
-    ///
-    /// NOTE: durations outside the supported range return an error; unit conversion must not overflow or clamp the value.
     pub fn to_duration(&self) -> Result<Duration, TimeError> {
         let v = i64::try_from(self.value).map_err(TimeError::InvalidDuration)?;
-        match self.unit {
-            TimeUnit::Millisecond => Duration::try_milliseconds(v),
-            TimeUnit::Second => Duration::try_seconds(v),
-            TimeUnit::Minute => Duration::try_minutes(v),
-            TimeUnit::Hour => Duration::try_hours(v),
-            TimeUnit::Day => Duration::try_days(v),
-            TimeUnit::Week => Duration::try_weeks(v),
-            TimeUnit::Month => v.checked_mul(30).and_then(Duration::try_days),
-            TimeUnit::Year => v.checked_mul(365).and_then(Duration::try_days),
-        }
-        .ok_or(TimeError::DurationOutOfRange)
+        Ok(match self.unit {
+            TimeUnit::Millisecond => Duration::milliseconds(v),
+            TimeUnit::Second => Duration::seconds(v),
+            TimeUnit::Minute => Duration::minutes(v),
+            TimeUnit::Hour => Duration::hours(v),
+            TimeUnit::Day => Duration::days(v),
+            TimeUnit::Week => Duration::weeks(v),
+            TimeUnit::Month => Duration::days(v.saturating_mul(30)),
+            TimeUnit::Year => Duration::days(v.saturating_mul(365)),
+        })
     }
 
     /// Converts a relative time to a `Resolution`
@@ -1230,20 +1226,12 @@ pub enum TimeError {
         "Invalid duration {0}, could not be converted to Duration as it exceeds the maximum i64"
     )]
     InvalidDuration(TryFromIntError),
-    /// The duration exceeds the supported range after unit conversion.
-    #[error("Duration exceeds the supported range")]
-    DurationOutOfRange,
-    /// Applying a relative duration would exceed the supported date range.
-    #[error("Relative time exceeds the supported date range")]
-    DateOutOfRange,
 }
 #[cfg(feature = "clock")]
 impl Time {
     fn to_datetime(&self) -> Result<DateTime<Utc>, TimeError> {
         Ok(match self {
-            Time::Relative(t) => Utc::now()
-                .checked_sub_signed(t.to_duration()?)
-                .ok_or(TimeError::DateOutOfRange)?,
+            Time::Relative(t) => Utc::now() - t.to_duration()?,
             Time::Timestamp(ts) => {
                 DateTime::<Utc>::from_timestamp(*ts, 0).ok_or(TimeError::InvalidTimestamp(*ts))?
             }

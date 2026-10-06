@@ -16,12 +16,6 @@ fn span() -> SourceSpan {
     SourceSpan::new(SourceOffset::from(0), 0)
 }
 
-#[test]
-fn shift_reports_that_execution_requires_an_offset_source_window() {
-    let error = apply_aggregate(&[], &Aggregate::Shift { seconds: -3600 }).unwrap_err();
-    assert!(error.to_string().contains("offset source window"));
-}
-
 fn step(node: StepNode) -> PipeStep {
     PipeStep {
         span: span(),
@@ -37,6 +31,7 @@ fn source_node(ds: &str, metric: &str) -> StepNode {
             metric: Metric::new(metric).unwrap(),
         },
         time: None,
+        offset: None,
     })
 }
 
@@ -102,6 +97,65 @@ fn source_loads_series() {
     assert!(result[0].is_ok());
 }
 
+#[test_case(0; "no offset")]
+#[test_case(-1; "second earlier")]
+#[test_case(-3600; "hour earlier")]
+#[test_case(1; "second later")]
+#[test_case(3600; "hour later")]
+fn offset_reads_samples_on_the_query_timeline(offset: i32) {
+    for width in [0, 1, 60] {
+        let window = QueryWindow {
+            start: 10_000,
+            end: 10_000 + width,
+        };
+        let first = window.start as f64 + f64::from(offset);
+        let series = s(
+            &[("host", "a")],
+            vec![first - 0.25, first, first + 0.25, first + width as f64],
+            vec![1.0, 2.0, 3.0, 4.0],
+        );
+        for windowed in [false, true] {
+            let expected: Vec<_> = series
+                .timestamps
+                .iter()
+                .zip(&series.values)
+                .map(|(t, v)| (*t - f64::from(offset), *v))
+                .filter(|(t, _)| !windowed || window.covers(*t))
+                .collect();
+            let datasets = ds("ds", "m", vec![series.clone()]);
+            let (query, _) = compile(
+                &format!("ds:m | offset {offset}s | map * 2"),
+                HashMap::new(),
+            )
+            .unwrap();
+            let results =
+                interpret_in_window(&query_steps(query), &datasets, windowed.then_some(window));
+            for (i, result) in results.iter().enumerate() {
+                let output = result.as_ref().unwrap();
+                assert_eq!(output.len(), usize::from(!expected.is_empty()));
+                if let Some(output) = output.first() {
+                    assert_eq!(&output.name, &series.name);
+                    assert_eq!(&output.tags, &series.tags);
+                    let points: Vec<_> = output
+                        .timestamps
+                        .iter()
+                        .copied()
+                        .zip(output.values.iter().copied())
+                        .collect();
+                    let expected: Vec<_> = expected
+                        .iter()
+                        .map(|(t, v)| (*t, *v * if i == 0 { 1.0 } else { 2.0 }))
+                        .collect();
+                    assert_eq!(
+                        points, expected,
+                        "{window:?}, offset {offset}, windowed {windowed}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn source_parameterized_error() {
     let datasets: Datasets = vec![];
@@ -119,6 +173,7 @@ fn source_parameterized_error() {
             metric: Metric::new("m").unwrap(),
         },
         time: None,
+        offset: None,
     });
     let result = interpret(&[step(node)], &datasets);
     assert!(

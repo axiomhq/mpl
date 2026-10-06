@@ -454,7 +454,7 @@ pub mod examples {
     pub const SPEC: &str = include_str!("../spec.md");
 
     /// MPL examples used in tests and documentation
-    pub const MPL: [(&str, &str); 19] = [
+    pub const MPL: [(&str, &str); 21] = [
         example!("align-rate"),
         example!("as"),
         // example!("enrich"),
@@ -469,9 +469,11 @@ pub mod examples {
         example!("map-gt"),
         example!("map-mul"),
         // example!("nested-enrich"),
+        example!("offset"),
         example!("parser-error"),
         example!("rate"),
         // example!("replace_labels"),
+        example!("sample"),
         example!("set"),
         example!("slo"),
         example!("slo-histogram"),
