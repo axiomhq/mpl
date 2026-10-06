@@ -49,20 +49,27 @@ For example:
 
 ## Offset
 
-`offset` reads the source from an earlier time. The query keeps its time range: each value is read from that far back and
-returned at the matching time in the query range. This makes it possible to compare a metric with its own past, for
+`offset` reads the source from another time. The query keeps its time range: each value is read from that far away
+and returned at the matching time in the query range. This makes it possible to compare a metric with its own past, for
 example this week with the same time last week:
 
 ```mpl
 // read the values from one hour earlier
 | offset -1h
+
+// read the values from one hour later
+| offset +1h
+
+// same as +1h
+| offset 1h
 ```
 
 With `offset -1h` and a time range of 10:00 to 11:00, the source reads 09:00 to 10:00, and the value recorded at 09:15
-is returned at 10:15.
+is returned at 10:15. With `offset +1h`, the source reads 11:00 to 12:00, and the value recorded at 11:15 is returned
+at 10:15.
 
-- The duration uses the [relative time](#time-range) units and must start with `-`. A negative offset moves back in
-  time, which is the opposite sign of PromQL's `offset`. Moving forward in time is not supported yet.
+- The duration uses the [relative time](#time-range) units. The sign matches the direction: `-` reads earlier, and `+`
+  or no sign reads later. This is the opposite of PromQL, where `offset 1h` reads an hour earlier.
 - The offset operator is only valid right after the source, before `sample`, and at most once per source.
 - Each source in a [computation](#computation) has its own offset; a source without one reads the query's time range.
   `offset` cannot follow `compute`.
