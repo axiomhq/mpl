@@ -613,7 +613,11 @@ fn offset_and_sample_completions_match_the_parser(context: u8) {
     for rule in [
         "",
         " | offset -0s",
+        " | offset +0s",
+        " | offset 0s",
         " | offset -1s",
+        " | offset +1s",
+        " | offset 1s",
         " | sample 0.5",
         " | where x == 1",
         " | align using sum",
@@ -642,6 +646,7 @@ fn offset_and_sample_completions_match_the_parser(context: u8) {
                     .position(|s| *s == "offset")
                 {
                     let apply = completions.keyword_apply_texts()[i].unwrap_or("offset");
+                    assert_eq!(apply, "offset ");
                     let completed = format!("{query}{gap}| {apply}1h{suffix}");
                     assert!(
                         mpl_lang::compile(&completed, HashMap::new()).is_ok(),

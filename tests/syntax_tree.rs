@@ -1587,7 +1587,8 @@ fn gen_rule(rng: &mut Rng) -> String {
         }
         9 => {
             let duration = gen_duration(rng);
-            join(rng, &["offset", "-", &duration])
+            let sign = *rng.pick(&["", "+", "-"]);
+            join(rng, &["offset", sign, &duration])
         }
         _ => {
             let count = rng.below(2);
