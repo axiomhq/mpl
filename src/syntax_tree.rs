@@ -1042,7 +1042,11 @@ impl Parser<'_> {
     fn offset_rule(&mut self) {
         self.node(OFFSET, |s| {
             s.keyword_token("offset");
-            s.structural(TokenType::Minus);
+            if s.is_structural(TokenType::Plus) {
+                s.node(PLUS, |s| s.eat_token_type(TokenType::Plus));
+            } else if s.is_structural(TokenType::Minus) {
+                s.node(MINUS, |s| s.eat_token_type(TokenType::Minus));
+            }
             s.duration();
         });
     }

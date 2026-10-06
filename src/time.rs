@@ -494,12 +494,7 @@ impl Offset {
 
 impl std::fmt::Display for Offset {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.0 == 0 {
-            // Queries only support backward offsets for now, so even zero needs a minus.
-            f.write_str("-0s")
-        } else {
-            write!(f, "{}s", self.0)
-        }
+        write!(f, "{}s", self.0)
     }
 }
 

@@ -1512,14 +1512,19 @@ impl Parser {
         self.assert_end(children);
         Ok(Rule::Filter(f))
     }
-    // TODO(@o11y): support forward offsets in offset_rule and rule_offset.
     fn rule_offset(&mut self, node: &SyntaxNode) -> Result<Rule> {
         self.assert_type(node, SyntaxKind::OFFSET)?;
         let mut children = node.children();
-        let duration = self.n(&mut children, node, SyntaxKind::DURATION)?;
+        let child = self.n(&mut children, node, SyntaxKind::DURATION)?;
+        let (neg, duration) = match child.kind() {
+            SyntaxKind::MINUS => (true, self.n(&mut children, node, SyntaxKind::DURATION)?), // negative; read the duration next.
+            SyntaxKind::PLUS => (false, self.n(&mut children, node, SyntaxKind::DURATION)?), // positive; read the duration next.
+            _ => (false, child), // no sign: positive, and this child is already the duration.
+        };
         self.assert_end(children);
         if let Ok(seconds) = i64::try_from(self.duration_const(&duration)?) {
-            Ok(Rule::Offset(Offset::secs(-seconds)))
+            let seconds = if neg { -seconds } else { seconds };
+            Ok(Rule::Offset(Offset::secs(seconds)))
         } else {
             self.errors.push(AstError::InvalidIntegerConstant {
                 span: duration.span(),
@@ -1664,23 +1669,23 @@ impl Parser {
                     time: i,
                     span: n.span(),
                 });
-                1
+                Some(1)
             }
             "ms" if !i.is_multiple_of(1000) => {
                 self.warnings.push(AstWarning::TimeNotSecondAligned {
                     time: i,
                     span: n.span(),
                 });
-                i / 1000
+                Some(i / 1000)
             }
-            "ms" => i / 1000,
-            "s" => i,
-            "m" => i * 60,
-            "h" => i * 60 * 60,
-            "d" => i * 60 * 60 * 24,
-            "w" => i * 60 * 60 * 24 * 7,
-            "M" => i * 60 * 60 * 24 * 30,
-            "y" => i * 60 * 60 * 24 * 365,
+            "ms" => Some(i / 1000),
+            "s" => Some(i),
+            "m" => i.checked_mul(60),
+            "h" => i.checked_mul(60 * 60),
+            "d" => i.checked_mul(60 * 60 * 24),
+            "w" => i.checked_mul(60 * 60 * 24 * 7),
+            "M" => i.checked_mul(60 * 60 * 24 * 30),
+            "y" => i.checked_mul(60 * 60 * 24 * 365),
             _ => {
                 self.errors
                     .push(AstError::InvalidTimeUnit { span: n.span() });
@@ -1688,7 +1693,13 @@ impl Parser {
                 return Err(Error("invalid time unit"));
             }
         };
-        Ok(duration)
+        if let Some(duration) = duration {
+            Ok(duration)
+        } else {
+            self.errors
+                .push(AstError::InvalidIntegerConstant { span: node.span() });
+            Err(Error("invalid integer"))
+        }
     }
 
     fn duration(&mut self, node: SyntaxNode) -> Result<Duration> {

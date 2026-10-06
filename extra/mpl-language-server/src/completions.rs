@@ -1019,7 +1019,7 @@ fn pipe_keywords(
     if allow_offset {
         options.push(KeywordItem {
             label: "offset",
-            apply: Some("offset -"),
+            apply: Some("offset "),
             info: keywords::describe("offset"),
         });
     }
