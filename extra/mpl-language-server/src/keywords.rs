@@ -178,6 +178,31 @@ mod tests {
         assert!(keyword_info("nonsense").is_none());
     }
 
+    /// MetricsDB serves `SPEC` and `MPL` as the MPL reference, so every operator must appear in both.
+    #[test]
+    fn every_pipe_operator_is_in_the_served_spec() {
+        // `filter` is a deprecated alias for `where`.
+        const EXEMPT: &[&str] = &["filter"];
+        let mut missing = Vec::new();
+        for entry in KEYWORDS {
+            let usage = format!("| {}", entry.label);
+            if EXEMPT.contains(&entry.label) || !entry.syntax.is_some_and(|s| s.starts_with(&usage))
+            {
+                continue;
+            }
+            if !mpl_lang::examples::SPEC.contains(&usage) {
+                missing.push(format!("spec.md does not show `{usage}`"));
+            }
+            if !mpl_lang::examples::MPL
+                .iter()
+                .any(|(_, example)| example.contains(&usage))
+            {
+                missing.push(format!("no example in `examples::MPL` uses `{usage}`"));
+            }
+        }
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+    }
+
     #[test]
     fn descriptions_are_present() {
         for entry in KEYWORDS {

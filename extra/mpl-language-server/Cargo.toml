@@ -32,5 +32,6 @@ examples = ["mpl-lang/examples"]
 lsp-bin = ["dep:eyre", "dep:lsp-server", "dep:lsp-types", "dep:serde_json"]
 
 [dev-dependencies]
+mpl-lang = { path = "../..", default-features = false, features = ["examples"] }
 test-case = "3"
 regex = "1"
