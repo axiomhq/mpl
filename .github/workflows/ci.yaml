@@ -84,6 +84,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
+        with:
+          node-version: "22.23.4"
       - run: npm ci
         working-directory: packages/mpl-codemirror
       - run: npm test
@@ -97,6 +99,8 @@ jobs:
           target: wasm32-unknown-unknown
       - run: cargo install --locked wasm-pack
       - uses: actions/setup-node@v6
+        with:
+          node-version: "22.23.4"
       - name: Build wasm
         # --no-opt: wasm-pack's bundled wasm-opt crashes, and even system wasm-opt
         # increases gzipped size (our wasm-release profile already optimizes well).
@@ -120,6 +124,8 @@ jobs:
           target: wasm32-unknown-unknown
       - run: cargo install --locked wasm-pack
       - uses: actions/setup-node@v6
+        with:
+          node-version: "22.23.4"
       - name: Build wasm (playground)
         # --no-opt: wasm-pack's bundled wasm-opt crashes, and even system wasm-opt
         # increases gzipped size (our wasm-release profile already optimizes well).
@@ -147,7 +153,7 @@ jobs:
       - run: cargo install --locked wasm-pack
       - uses: actions/setup-node@v6
         with:
-          node-version: "24"
+          node-version: "24.22.1"
       - name: Build WASM (release flags)
         run: ./packages/build-mpl-wasm.sh
       - name: Apply release rename to packages/mpl/package.json
