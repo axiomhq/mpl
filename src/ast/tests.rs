@@ -312,8 +312,16 @@ fn an_escape_outside_the_alphabet_is_flagged(escape: char) {
 /// accepting the other's escape.
 #[test]
 fn the_two_alphabets_differ_where_their_delimiters_do() {
-    assert_eq!(string_unknown_escapes('$'), [], r"a string flagged \$");
-    assert_eq!(ident_unknown_escapes('`'), [], r"an identifier flagged \`");
+    assert_eq!(
+        string_unknown_escapes('$'),
+        Vec::<char>::new(),
+        r"a string flagged \$"
+    );
+    assert_eq!(
+        ident_unknown_escapes('`'),
+        Vec::<char>::new(),
+        r"an identifier flagged \`"
+    );
     assert_eq!(string_unknown_escapes('`'), ['`']);
     assert_eq!(ident_unknown_escapes('$'), ['$']);
 }
@@ -326,10 +334,14 @@ fn the_two_alphabets_differ_where_their_delimiters_do() {
 #[test_case('f' ; "form feed")]
 #[test_case('\\' ; "backslash")]
 fn a_shared_escape_is_silent(escape: char) {
-    assert_eq!(string_unknown_escapes(escape), [], "flagged in a string");
+    assert_eq!(
+        string_unknown_escapes(escape),
+        Vec::<char>::new(),
+        "flagged in a string"
+    );
     assert_eq!(
         ident_unknown_escapes(escape),
-        [],
+        Vec::<char>::new(),
         "flagged in an identifier"
     );
 }
