@@ -13,6 +13,7 @@ pub static STDLIB: LazyLock<Module> = LazyLock::new(|| {
     mapping_functions.insert(FunctionId::new("max"), MapType::Max.into());
     mapping_functions.insert(FunctionId::new("min"), MapType::Min.into());
     mapping_functions.insert(FunctionId::new("abs"), MapType::Abs.into());
+    mapping_functions.insert(FunctionId::new("timestamp"), MapType::Timestamp.into());
     // eval functions
     mapping_functions.insert(FunctionId::new("+"), MapType::Add.into());
     mapping_functions.insert(FunctionId::new("-"), MapType::Sub.into());
