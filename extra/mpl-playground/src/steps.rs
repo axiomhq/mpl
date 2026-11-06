@@ -980,6 +980,12 @@ fn apply_map(series: &[Series], mapping: &Mapping) -> Result<Vec<Series>> {
                     let a = require_arg(arg, "Max")?;
                     s.values.iter().map(|&x| x.max(a)).collect()
                 }
+                MapType::Timestamp => s
+                    .values
+                    .iter()
+                    .zip(&s.timestamps)
+                    .map(|(&x, &t)| if x.is_nan() { f64::NAN } else { t })
+                    .collect(),
                 MapType::InterpolateLinear => {
                     let mut v = s.values.clone();
                     for i in 0..v.len() {
