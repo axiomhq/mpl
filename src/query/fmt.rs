@@ -413,7 +413,8 @@ impl Display for Mapping {
                         | MapType::IsEq
                         | MapType::IsNe
                         | MapType::IsGe
-                        | MapType::IsLe,
+                        | MapType::IsLe
+                        | MapType::Timestamp,
                     ),
                 arg,
             } => {

@@ -357,6 +357,8 @@ pub enum MapType {
     IsLe,
     /// Linear interpolation
     InterpolateLinear,
+    /// Timestamp
+    Timestamp,
 }
 
 impl FunctionTrait for MapType {
@@ -416,6 +418,7 @@ impl FunctionTrait for MapType {
             MapType::InterpolateLinear => {
                 "Performs linear interpolation between two datapoints filling unset values with the interpolated value"
             }
+            MapType::Timestamp => "Replaces the value with its timestamp of recording",
         }
     }
     fn args(&self) -> Vec<Arg> {
@@ -443,7 +446,8 @@ impl FunctionTrait for MapType {
             | MapType::Rate
             | MapType::FillPrev
             | MapType::Increase
-            | MapType::InterpolateLinear => {
+            | MapType::InterpolateLinear
+            | MapType::Timestamp => {
                 vec![]
             }
         }
@@ -477,6 +481,7 @@ impl std::fmt::Display for MapType {
             MapType::IsGe => write!(f, "Is::ge"),
             MapType::IsLe => write!(f, "Is::le"),
             MapType::InterpolateLinear => write!(f, "linear"),
+            MapType::Timestamp => write!(f, "timestamp"),
         }
     }
 }

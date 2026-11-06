@@ -601,6 +601,30 @@ fn interpolate_linear() {
 }
 
 #[test]
+fn map_timestamp() {
+    let datasets = ds(
+        "ds",
+        "m",
+        vec![s(
+            &[("host", "a")],
+            vec![0.0, 60.0, 120.0],
+            vec![10.0, f64::NAN, 30.0],
+        )],
+    );
+    let steps = vec![
+        step(source_node("ds", "m")),
+        step(map_agg(MapType::Timestamp, None)),
+    ];
+    let result = interpret(&steps, &datasets);
+    let out = &result[1].as_ref().unwrap()[0];
+    assert_eq!(out.values[0], 0.0);
+    assert!(out.values[1].is_nan(), "unset points stay unset");
+    assert_eq!(out.values[2], 120.0);
+    assert_eq!(out.timestamps, vec![0.0, 60.0, 120.0]);
+    assert_eq!(out.tags.get("host").map(String::as_str), Some("a"));
+}
+
+#[test]
 fn filter_is_types() {
     let datasets = ds(
         "ds",
