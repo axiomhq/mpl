@@ -38,13 +38,14 @@
     "@codemirror/state": "^6",
     "@codemirror/view": "^6",
     "typescript": "^5.5.0",
+    "vite": "^8.3.8",
     "vitest": "^4.1.11"
   },
   "peerDependencies": {
+    "@axiomhq/mpl": "*",
     "@codemirror/autocomplete": "^6",
     "@codemirror/lint": "^6",
     "@codemirror/state": "^6",
-    "@codemirror/view": "^6",
-    "@axiomhq/mpl": "*"
+    "@codemirror/view": "^6"
   }
 }
