@@ -79,7 +79,7 @@ impl Rem for Resolution {
     type Output = u64;
 
     fn rem(self, rhs: Self) -> Self::Output {
-        self.0.get() % rhs.0.get()
+        self.0.get() % rhs.0
     }
 }
 
@@ -87,7 +87,7 @@ impl Div for Resolution {
     type Output = u64;
 
     fn div(self, rhs: Self) -> u64 {
-        self.0.get() / rhs.0.get()
+        self.0.get() / rhs.0
     }
 }
 
@@ -95,7 +95,7 @@ impl Div<Resolution> for Timestamp {
     type Output = Timestamp;
 
     fn div(self, rhs: Resolution) -> Timestamp {
-        Timestamp(self.0 / rhs.0.get())
+        Timestamp(self.0 / rhs.0)
     }
 }
 
@@ -237,7 +237,7 @@ impl Rem<Resolution> for Timestamp {
     type Output = Timestamp;
 
     fn rem(self, rhs: Resolution) -> Self::Output {
-        Timestamp(self.0 % rhs.0.get())
+        Timestamp(self.0 % rhs.0)
     }
 }
 
